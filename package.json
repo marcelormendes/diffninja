@@ -48,7 +48,7 @@
     "rust",
     "go"
   ],
-  "author": "Tanishq Kancharla",
+  "author": "marcelormendes",
   "license": "MIT",
   "dependencies": {
     "incur": "^0.4.26",
