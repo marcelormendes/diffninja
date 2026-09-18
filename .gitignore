@@ -3,3 +3,9 @@ dist/
 *.tsbuildinfo
 .DS_Store
 *.log
+.env
+.env.*
+!.env.example
+review.html
+review.html.json
+reviews/

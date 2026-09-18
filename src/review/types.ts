@@ -9,6 +9,7 @@ export interface ReviewUnit {
   oldStart: number;
   newStart: number;
   special?: string;
+  callFlow?: string[];
 }
 export interface Judgment {
   risk: number; // 0..3, probability-weighted rubric index

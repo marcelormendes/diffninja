@@ -1,7 +1,8 @@
 {
-  "name": "calldiff",
-  "version": "0.6.0",
-  "description": "Diff call stacks across git commits for agentic code review (23 languages)",
+  "name": "prismr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Focused local PR reviews with calldiff and Jev",
   "type": "module",
   "exports": {
     ".": {
@@ -10,6 +11,7 @@
     }
   },
   "bin": {
+    "prismr": "dist/review/cli.js",
     "calldiff": "dist/cli.js"
   },
   "files": [
@@ -18,8 +20,8 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "dev": "tsx src/cli.ts",
-    "start": "node dist/cli.js",
+    "dev": "tsx src/review/cli.ts",
+    "start": "node dist/review/cli.js",
     "lint": "oxlint",
     "test": "vitest run"
   },
@@ -28,12 +30,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tanishqkancharla/calldiff.git"
+    "url": "git+https://github.com/marcelormendes/prismr.git"
   },
   "bugs": {
-    "url": "https://github.com/tanishqkancharla/calldiff/issues"
+    "url": "https://github.com/marcelormendes/prismr/issues"
   },
-  "homepage": "https://github.com/tanishqkancharla/calldiff#readme",
+  "homepage": "https://github.com/marcelormendes/prismr#readme",
   "keywords": [
     "callgraph",
     "diff",
