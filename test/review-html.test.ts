@@ -22,14 +22,14 @@ describe("review HTML", () => {
     expect(html).toContain('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
   });
 
-  test("attention and uncertainty start open without discarding lower-ranked diffs", () => {
+  test("every hunk starts open so the full diff is visible", () => {
     const statuses = ["attention", "uncertain", "low", "passed"] as const;
     const html = renderReview(report(statuses.map(item)));
     const cards = [...html.matchAll(/<details\b([^>]*)>([\s\S]*?)<\/details>/g)].filter(match => match[2].includes("after_"));
     expect(cards).toHaveLength(4);
     for (const [index, status] of statuses.entries()) {
       expect(cards[index][2]).toContain(`after_${status}`);
-      expect(/\bopen\b/.test(cards[index][1])).toBe(index < 2);
+      expect(/\bopen\b/.test(cards[index][1])).toBe(true);
     }
   });
 

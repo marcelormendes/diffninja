@@ -60,8 +60,8 @@ const STATUS_NOTE = {
 const STATUS_EXPANDED = {
   attention: true,
   uncertain: true,
-  low: false,
-  passed: false,
+  low: true,
+  passed: true,
 } satisfies Record<ReviewStatus, boolean>;
 
 function countStatuses(items: readonly ReviewItem[]) {
@@ -236,7 +236,7 @@ function renderItemBody(item: ReviewItem): string {
     '<div class="body">',
     `<p class="note">${escapeHtml(STATUS_NOTE[item.status])}</p>`,
     `<ul class="facts">${facts.join("")}</ul>`,
-    `<div class="bar" role="img" aria-label="Priority ${escapeHtml(formatInteger(item.priority))} of 100"><span class="bar-fill" style="width:${priority}%"></span></div>`,
+    `<div class="bar" role="img" aria-label="Priority ${escapeHtml(formatInteger(item.priority))} of 100"><span class="bar-fill bar-fill-${item.status}" style="width:${priority}%"></span></div>`,
     reasons,
     renderJudgment(item),
     renderItemFlow(item.callFlow),
@@ -351,7 +351,7 @@ function renderExtras(report: ReviewReport): string {
     "<details>",
     `<summary>Legend and how ranking works (${STATUS_ORDER.length} statuses)</summary>`,
     `<ul class="legend">${legend}</ul>`,
-    '<p class="estimate">Priority runs 0 to 100 and orders the page. Attention and uncertain hunks open by default; low and auto-passed hunks stay collapsed but can be opened here or from the jump list.</p>',
+    '<p class="estimate">Priority runs 0 to 100 and orders the page. Every hunk opens expanded so the full diff is visible; collapse any card to focus.</p>',
     "</details>",
     "<details>",
     `<summary>Call flow (${report.callFlow.length} entries)</summary>`,
@@ -423,6 +423,9 @@ const STYLES = `
   --warn-ink: #8a5410;
   --warn-bg: #fdf3e2;
   --warn-line: #e8c894;
+  --alarm: #c22e2e;
+  --alarm-bg: #fdecec;
+  --alarm-line: #f0b3b3;
   --add: #14615c;
   --add-bg: #e9f3f1;
   --del: #a2432a;
@@ -449,6 +452,9 @@ const STYLES = `
     --warn-ink: #e0b372;
     --warn-bg: #2e2418;
     --warn-line: #6b4f26;
+    --alarm: #ff8a8a;
+    --alarm-bg: #331f1e;
+    --alarm-line: #7a3a36;
     --add: #7fd0c6;
     --add-bg: #152a29;
     --del: #f0a48b;
@@ -530,7 +536,7 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
 .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; }
 .stat dt { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); }
 .stat dd { margin: 2px 0 0; font-family: var(--mono); font-size: 20px; font-weight: 600; }
-.stat-attention dd { color: var(--accent); }
+.stat-attention dd { color: var(--alarm); }
 .stat-uncertain dd { color: var(--warn-ink); }
 .stat-low dd { color: var(--ink-soft); }
 .stat-passed dd { color: var(--teal); }
@@ -564,7 +570,7 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
 .toc-rank { font-family: var(--mono); font-weight: 700; color: var(--ink-soft); }
 .toc-path { min-width: 0; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toc-status { flex: 0 0 auto; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
-.toc-attention .toc-status { color: var(--accent); }
+.toc-attention .toc-status { color: var(--alarm); font-weight: 700; }
 .toc-uncertain .toc-status { color: var(--warn-ink); }
 .toc-passed .toc-status { color: var(--teal); }
 .cards { margin: 0; }
@@ -576,7 +582,12 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
   margin: 0 0 12px;
   overflow: hidden;
 }
-.card-attention { border-left-color: var(--accent); }
+.card-attention {
+  border-left-color: var(--alarm);
+  box-shadow: 0 0 0 1px var(--alarm-line);
+}
+.card-attention > summary { background: var(--alarm-bg); }
+.card-attention > summary:hover { background: var(--alarm-bg); }
 .card-uncertain { border-left-color: var(--warn); }
 .card-low { border-left-color: var(--line-strong); }
 .card-passed { border-left-color: var(--teal); }
@@ -621,7 +632,7 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
   text-transform: uppercase;
   white-space: nowrap;
 }
-.pill-attention { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-line); }
+.pill-attention { background: var(--alarm-bg); color: var(--alarm); border-color: var(--alarm); }
 .pill-uncertain { background: var(--warn-bg); color: var(--warn-ink); border-color: var(--warn-line); }
 .pill-low { background: var(--sunken); color: var(--ink-soft); border-color: var(--line-strong); }
 .pill-passed { background: var(--teal-bg); color: var(--teal); border-color: var(--teal-line); }
@@ -636,6 +647,11 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
 .facts .v { min-width: 0; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
 .bar { height: 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--sunken); overflow: hidden; margin: 0 0 12px; }
 .bar-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), var(--accent)); }
+.bar-fill-attention { background: var(--alarm); }
+.bar-fill-uncertain { background: var(--warn); }
+.bar-fill-low { background: var(--line-strong); }
+.bar-fill-passed { background: var(--teal); }
+.card-attention .chip { border-color: var(--alarm-line); background: var(--alarm-bg); }
 .section-h { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); margin: 0 0 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; padding: 0; list-style: none; }
 .chip {
