@@ -1,5 +1,5 @@
 /**
- * Hunk routing and ranking for a Prismr review run.
+ * Hunk routing and ranking for a diffninja review run.
  *
  * Every input unit comes back as exactly one ReviewItem. A unit is judged by
  * the model only when the deterministic checks cannot settle it:

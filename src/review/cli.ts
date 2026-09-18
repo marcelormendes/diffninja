@@ -11,11 +11,11 @@ import { reviewUnits } from "./pipeline.js";
 import { renderReview } from "./html.js";
 import type { ReviewReport } from "./types.js";
 
-const help = `Prismr. Focused local PR review.
+const help = `diffninja. Focused local PR review.
 
-  prismr --diff change.patch [--mock] [--out review.html]
-  git diff main...HEAD | prismr --stdin [--mock]
-  prismr --repo /path/to/repo --from main --to HEAD [--mock]
+  diffninja --diff change.patch [--mock] [--out review.html]
+  git diff main...HEAD | diffninja --stdin [--mock]
+  diffninja --repo /path/to/repo --from main --to HEAD [--mock]
 
 Options:
   --diff PATH    Read a unified diff file.
@@ -93,4 +93,4 @@ async function main(): Promise<void> {
   console.log(`JSON: ${jsonOutput}`);
 }
 
-main().catch(error => { console.error(`Prismr: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });
+main().catch(error => { console.error(`diffninja: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });

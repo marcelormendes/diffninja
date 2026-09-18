@@ -7,9 +7,9 @@ import { describe, it, expect } from "vitest";
 const cli = resolve("src/review/cli.ts");
 const patch = resolve("examples/review/checkout.patch");
 
-describe("Prismr command", () => {
+describe("diffninja command", () => {
   it("includes changed calldiff call paths for a git range", () => {
-    const dir = mkdtempSync(join(tmpdir(), "prismr-git-"));
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-git-"));
     try {
       execFileSync("git", ["init", "-b", "main"], { cwd: dir });
       writeFileSync(join(dir, "checkout.ts"), "export function checkout() { authorize(); charge(); }\nfunction authorize() {}\nfunction charge() {}\n");
@@ -27,7 +27,7 @@ describe("Prismr command", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   it("reviews the realistic patch through file and stdin inputs", () => {
-    const dir = mkdtempSync(join(tmpdir(), "prismr-cli-"));
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-cli-"));
     try {
       const out = join(dir, "report.html");
       execFileSync(process.execPath, ["--import", "tsx", cli, "--diff", patch, "--mock", "--out", out]);
@@ -35,7 +35,7 @@ describe("Prismr command", () => {
       expect(fileReport.items).toHaveLength(5);
       expect(fileReport.mode).toBe("mock");
       expect(fileReport.items.some((item: { status: string }) => item.status === "passed")).toBe(true);
-      expect(readFileSync(out, "utf8")).toContain("Prismr");
+      expect(readFileSync(out, "utf8")).toContain("diffninja");
       execFileSync(process.execPath, ["--import", "tsx", cli, "--stdin", "--mock", "--out", out], { input: readFileSync(patch) });
       const stdinReport = JSON.parse(readFileSync(out + ".json", "utf8"));
       expect(stdinReport.items).toEqual(fileReport.items);

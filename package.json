@@ -1,5 +1,5 @@
 {
-  "name": "prismr",
+  "name": "diffninja",
   "version": "0.1.0",
   "private": true,
   "description": "Focused local PR reviews with calldiff and Jev",
@@ -11,7 +11,7 @@
     }
   },
   "bin": {
-    "prismr": "dist/review/cli.js",
+    "diffninja": "dist/review/cli.js",
     "calldiff": "dist/cli.js"
   },
   "files": [
@@ -30,12 +30,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marcelormendes/prismr.git"
+    "url": "git+https://github.com/marcelormendes/diffninja.git"
   },
   "bugs": {
-    "url": "https://github.com/marcelormendes/prismr/issues"
+    "url": "https://github.com/marcelormendes/diffninja/issues"
   },
-  "homepage": "https://github.com/marcelormendes/prismr#readme",
+  "homepage": "https://github.com/marcelormendes/diffninja#readme",
   "keywords": [
     "callgraph",
     "diff",
