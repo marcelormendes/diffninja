@@ -3,9 +3,15 @@
 Focused PR reviews. Jev reads the diff behind the scenes; you review only what
 matters.
 
-Paste a diff (or point at a git range) and diffninja returns a ranked HTML
-report: risky hunks first with reasons, trivial ones auto-passed in one line.
-No more reading every line to find the three that count.
+Paste a diff (or point at a git range) and diffninja returns a ranked report:
+risky hunks first with reasons, trivial ones auto-passed in one line. No more
+reading every line to find the three that count.
+
+Two front ends share one engine:
+
+- `diffninja` — the CLI. Writes an HTML report plus a JSON twin.
+- `diffninja-mcp` — a stdio MCP server exposing one tool, `review_diff`, for
+  coding agents. Writes no report files; the report is the tool result.
 
 ## How it works
 
@@ -19,13 +25,31 @@ No more reading every line to find the three that count.
    and sorted into attention / uncertain / low / passed. Uncertain calls fail
    closed to human review instead of degrading into a pass.
 
-## Install
+Both front ends return the same `ReviewReport`: `items` (per-hunk status,
+priority, reasons, judgment), `callFlow`, `warnings`, `modelCalls`, `mode`,
+`source`, `createdAt`, `title`.
+
+## Local build first
+
+This checkout is not published by this work: the package is `private` and both
+`diffninja` and `diffninja-mcp` are absent from the npm registry as of this
+writing, so the setup below builds the checkout and points clients at the
+absolute path of the built entry point. The `bin` entries in `package.json`
+(`diffninja`, `diffninja-mcp`, `calldiff`) describe what an install would
+expose; until a release exists, use `node /absolute/path/to/diffninja/dist/...`
+instead of a bare command. If the package does get published, a client entry
+can shell out to the installed binary the same way.
 
 ```bash
-npm install -g diffninja
+git clone https://github.com/marcelormendes/diffninja.git
+cd diffninja
+npm install
+npm run build   # tsc -> dist/
 ```
 
-## Usage
+Node `>=22.18` is required.
+
+## CLI usage
 
 ```bash
 # review a diff file
@@ -44,10 +68,236 @@ diffninja --diff change.patch --out review.html
 diffninja --diff change.patch --mock
 ```
 
+Replace `diffninja` with `node dist/review/cli.js` when running from an
+unpublished checkout. The CLI writes `review.html` in the current directory
+(or the `--out` path) plus a `.json` twin beside it, both mode `600`.
+
 Live mode needs `TYPESAFE_API_KEY` in the environment (get one at
 https://console.typesafe.ai). Reports contain source code, keep them private.
 diffninja never approves, blocks, or merges anything. A human still owns the
 decision.
+
+## MCP server: the `review_diff` tool
+
+MCP is the recommended way to hand diff review to a coding agent. The server
+speaks MCP over stdio and exposes exactly one tool. Point the client at the
+built entry point, absolute path required:
+
+```bash
+node /absolute/path/to/diffninja/dist/review/mcp-cli.js
+```
+
+The process takes no arguments. It reads and writes only JSON-RPC on
+stdin/stdout, so the client must launch it directly — anything else writing to
+its stdout corrupts the stream. It never writes report files; the report comes
+back as the tool result. Use the CLI when you want HTML on disk.
+
+### Why MCP rather than a skill or a hybrid
+
+| | Skill (agent shells out to `diffninja`) | MCP server (`review_diff`) |
+|---|---|---|
+| Discovery | Client has to know the CLI exists; the tool surface is prose in a skill file | Client lists `review_diff` from the server at connect time |
+| Arguments | Agent assembles flags by hand; nothing validates them before the process starts | Validated against the strict tool schema before any review runs |
+| Result | Free-form stdout plus an HTML report in the working directory and its JSON twin, which the agent must find and parse | One typed call; `structuredContent` is the `ReviewReport` object |
+| Version drift | Skill text and CLI flags can diverge silently | One versioned interface; a wrong argument fails loudly |
+| Setup cost | Works with any client that has a shell | Needs client MCP support (or an MCP adapter — no such adapter ships here) |
+| Side effects | Writes `review.html` (or `--out`) plus the JSON twin | No report files; git ranges may populate calldiff's grammar cache |
+
+Git-range call-flow analysis inherits calldiff's on-demand npm grammar
+installation into `CALLDIFF_GRAMMAR_CACHE` (default `~/.cache/calldiff/grammars`).
+This can write cache files and access npm even with `mock: true`; the tool
+therefore advertises `readOnlyHint: false`, although it does not edit repository
+source. For strictly offline reviews, supply inline diff text or preinstall
+the required grammars. Mock always disables TypeSafe calls.
+
+A hybrid (skill for review conventions, MCP for the call) only helps if you
+want agent-side playbooks on top of the tool; it is not needed to run reviews.
+The skill path remains viable, but it is the weaker contract.
+
+Mid-workflow, ask your assistant: “Use diffninja to review my current changes,
+then inspect the highest-priority hunks.” It can collect `git diff` (or
+`git diff --cached`) and call `review_diff` with the text, or send an explicit
+commit range. The MCP tool is discovered automatically after connection; no
+`/super-review` skill installation is required. A slash skill would offer a
+memorable explicit trigger, but its installation and shell permissions vary
+by client.
+
+The CLI already writes structured JSON, so a CLI-backed skill would need
+little new executable code. MCP adds the SDK, a stdio entry point, and schema
+validation, but calls the same shared report service and existing pipeline
+directly. A hybrid adds skill distribution and instruction maintenance on top
+of that. The MCP binary and CLI ship in the same npm package/version; there
+is no separately versioned skill whose flag examples can go stale.
+
+### Set up: Claude Code
+
+Project scope, committed as `.mcp.json` at the repo root:
+
+```json
+{
+  "mcpServers": {
+    "diffninja": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"],
+      "env": { "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}" }
+    }
+  }
+}
+```
+
+Claude Code expands `${VAR}` in an `env` value, so the entry references the key
+from the environment that launched it rather than containing one. Drop the
+`env` block for mock-only use. To add it to local or user scope instead:
+
+```bash
+claude mcp add --transport stdio diffninja \
+  -- node /absolute/path/to/diffninja/dist/review/mcp-cli.js
+```
+
+Check it with `claude mcp list` or `/mcp`, then approve the project server on
+first use. Everything after `--` is the server command. Live reviews need
+`TYPESAFE_API_KEY` exported in the shell that starts Claude Code.
+
+### Set up: Codex
+
+`~/.codex/config.toml` (or `.codex/config.toml` in a trusted project):
+
+```toml
+[mcp_servers.diffninja]
+command = "node"
+args = ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"]
+env_vars = ["TYPESAFE_API_KEY"]   # forwarded from your shell; omit for mock-only
+```
+
+`env_vars` forwards a variable that is already set in the local environment, so
+the key stays out of the file. Or add it with the CLI:
+
+```bash
+codex mcp add diffninja -- node /absolute/path/to/diffninja/dist/review/mcp-cli.js
+codex mcp list      # verify
+```
+
+The CLI form writes the same table without the forward, so add `env_vars` to
+the entry (or edit the file) before running a live review; a mock-only setup
+needs neither.
+
+`/mcp` inside the TUI lists the connected server.
+
+### Set up: OMP
+
+OMP reads MCP servers natively. Project file `.omp/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "diffninja": {
+      "command": "node",
+      "args": ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"],
+      "env": { "TYPESAFE_API_KEY": "TYPESAFE_API_KEY" }
+    }
+  }
+}
+```
+
+`type` defaults to `stdio`, and an `env` value that names an environment
+variable is resolved from the launching environment, so the key is referenced
+rather than stored; drop the `env` block for mock-only. The same entry works in
+the user file `~/.omp/agent/mcp.json`, or `~/.omp/profiles/<name>/agent/
+mcp.json` under a named profile. OMP also discovers Claude Code, Codex and
+Gemini CLI configs, so a server configured for those clients appears
+automatically. Manage it in-session with `/mcp add`, `/mcp list`,
+`/mcp test diffninja`, and `/mcp reload` after editing JSON — OMP has no `mcp`
+shell subcommand. Details, including the env-resolution rules and the
+per-server fields, are in the OMP MCP configuration guide:
+<https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md>. The
+JSON schema for editor validation is
+`https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json`.
+
+### Set up: pi
+
+pi's core has no built-in MCP client; MCP support comes from the
+`pi-mcp-extension` package:
+
+```bash
+pi install npm:pi-mcp-extension
+```
+
+Add the server to `~/.pi/agent/mcp.json` (global) or `.pi/mcp.json` (project,
+overrides global per server):
+
+```json
+{
+  "mcpServers": {
+    "diffninja": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"],
+      "lifecycle": "lazy"
+    }
+  }
+}
+```
+
+The extension adds a `transport` field and a `lifecycle` (`lazy` starts the
+server on `/mcp:start diffninja`, `eager` at session start), and it prefixes
+the tool as `mcp_diffninja_review_diff`. Live reviews need `TYPESAFE_API_KEY`
+in the environment that launches pi. The extension is a third-party package,
+not part of pi itself: <https://pi.dev/packages/pi-mcp-extension>. A pi-derived
+harness that reads a `.pi` config root still needs it; OMP's own loader does
+not read `.pi` paths. Without the extension — or in a harness with no MCP
+client at all — use the CLI, or wire a generic MCP adapter you configure
+yourself.
+
+### `review_diff` arguments
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `diff` | string | Inline unified diff text. Empty string is valid and yields an empty review. |
+| `repo` | string | Absolute path to the git repository. Only valid together with `from` and `to`. |
+| `from` | string | Base ref or commit for a range review. |
+| `to` | string | Head ref or commit for a range review. Endpoints are compared directly, not the merge base. |
+| `mock` | boolean | Offline fixture judgments for this call only. Not a real Jev review. |
+
+Rules enforced by the schema and the tool:
+
+- Provide **exactly one** input: `diff`, or `from` **and** `to` together.
+- `repo` is accepted only for a range review and must be an absolute path.
+- Live mode (no `mock`) requires `TYPESAFE_API_KEY` in the server process
+  environment. There is no API key argument.
+- Range reviews use the bundled `calldiff` engine for call flows; inline diffs
+  report patch-only warnings instead, since full files are unavailable.
+
+Returns a tool result whose `structuredContent` **is** the `ReviewReport`, with
+`content` carrying the same report as JSON text. Failures (ambiguous input, a
+missing repo, a live call with no key) come back as a tool error with
+`isError: true` and no partial report.
+
+### Call examples
+
+```json
+{ "diff": "--- a/checkout.ts\n+++ b/checkout.ts\n@@ -1 +1 @@\n-old()\n+new()\n" }
+```
+
+```json
+{ "repo": "/absolute/path/to/repo", "from": "main", "to": "HEAD", "mock": true }
+```
+
+```json
+{ "repo": "/absolute/path/to/repo", "from": "HEAD~1", "to": "HEAD" }
+```
+
+The last one is live: it sends the changed hunks and matching call flows to
+TypeSafe and needs `TYPESAFE_API_KEY`. In every mode the report carries
+`source` (`MCP inline diff`, the diff path, `Standard input`, or the ref pair)
+and `mode` (`live` or `mock`). Mock judgments are placeholders from fixtures —
+they do not mean a hunk is safe.
+
+Client configuration above follows the official docs: Claude Code
+(<https://code.claude.com/docs/en/mcp>), Codex
+(<https://developers.openai.com/codex/mcp>), OMP
+(<https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md>), and pi
+(<https://pi.dev/packages/pi-mcp-extension>).
 
 ## Also bundled: calldiff
 
@@ -64,3 +314,7 @@ npm run lint    # oxlint
 npm test        # vitest run
 npm run dev -- --diff examples/review/checkout.patch --mock
 ```
+
+For development, launch from the checkout so Node can resolve `tsx`:
+`node --import tsx src/review/mcp-cli.ts`. Client setups running from another
+directory should use the built absolute path above.

@@ -3,13 +3,8 @@ import { parseArgs } from "node:util";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { runDiff } from "../run.js";
-import type { DiffNode } from "../types.js";
-import { parseDiff, gitDiff } from "./input.js";
-import type { GitDiffInput } from "./input.js";
-import { reviewUnits } from "./pipeline.js";
+import { reviewDiff } from "./service.js";
 import { renderReview } from "./html.js";
-import type { ReviewReport } from "./types.js";
 
 const help = `diffninja. Focused local PR review.
 
@@ -32,10 +27,6 @@ Set TYPESAFE_API_KEY from https://console.typesafe.ai.
 Reports contain source code. Keep them private. No merge approval is given.
 `;
 
-function touches(node: DiffNode, file: string): boolean {
-  return node.file === file || node.children.some(child => touches(child, file));
-}
-
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: {
     diff: { type: "string" }, stdin: { type: "boolean" }, from: { type: "string" }, to: { type: "string" },
@@ -45,14 +36,11 @@ async function main(): Promise<void> {
   const range = values.from !== undefined || values.to !== undefined;
   if (Number(values.diff !== undefined) + Number(!!values.stdin) + Number(range) !== 1) throw new Error("Choose exactly one input: --diff, --stdin, or --from with --to. Use --help.");
   if (range && (!values.from || !values.to)) throw new Error("Git range requires both --from and --to.");
-  const warnings: string[] = [];
-  let text: string, source: string;
-  let snapshots: GitDiffInput | undefined;
-  const cwd = resolve(values.repo ?? process.cwd());
+  let input: Parameters<typeof reviewDiff>[0];
   if (range) {
-    snapshots = gitDiff(cwd, values.from!, values.to!);
-    text = snapshots.diff; source = `${values.from} → ${values.to} (${snapshots.from.slice(0, 8)} → ${snapshots.to.slice(0, 8)})`;
+    input = { repo: resolve(values.repo ?? process.cwd()), from: values.from!, to: values.to! };
   } else {
+    let text: string;
     if (values.stdin) {
       process.stdin.setEncoding("utf8");
       const chunks: string[] = [];
@@ -61,24 +49,9 @@ async function main(): Promise<void> {
     } else {
       text = await readFile(values.diff!, "utf8");
     }
-    source = values.stdin ? "Standard input" : values.diff!;
-    warnings.push("Patch-only review. Full files and repository call flows are unavailable.");
+    input = { diff: text, source: values.stdin ? "Standard input" : values.diff! };
   }
-  const units = parseDiff(text);
-  const callFlow: string[] = [];
-  if (snapshots && units.length) {
-    try {
-      const flow = runDiff({ cwd, from: snapshots.from, to: snapshots.to, maxDepth: 4, color: false, locs: true });
-      callFlow.push(...flow.trees.map(tree => tree.ascii));
-      for (const unit of units) unit.callFlow = flow.trees.filter(tree => touches(tree.tree, unit.file)).map(tree => tree.ascii);
-      warnings.push("Call flows are syntactic, not a type checker. Dynamic calls and parse failures may be absent. An empty flow is not evidence of safety.");
-    } catch {
-      warnings.push("Call-flow analysis failed. Review is based on the diff only. Inspect repository context manually.");
-    }
-  }
-  const result = await reviewUnits(units, { mock: values.mock });
-  const report: ReviewReport = { title: "Focused PR review", source, mode: values.mock ? "mock" : "live", createdAt: new Date().toISOString(),
-    ...result, callFlow, warnings: [...warnings, ...result.warnings] };
+  const report = await reviewDiff(input, { mock: values.mock });
   const output = resolve(values.out ?? "review.html");
   const jsonOutput = output + ".json";
   if (values.diff && [output, jsonOutput].includes(resolve(values.diff))) throw new Error("Output must not overwrite the input diff.");
