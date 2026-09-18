@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { execFile } from "node:child_process";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,6 +21,7 @@ Options:
   --repo PATH    Repository for git range. Defaults to current directory.
   --out PATH     HTML output. JSON is written next to it. Default: review.html
   --mock         Explicit offline demo. Not a real Jev review.
+  --open         Open the HTML report in the default browser when done.
   --help         Show this help.
 
 Live mode sends changed hunks and relevant call flows to TypeSafe.
@@ -30,7 +32,7 @@ Reports contain source code. Keep them private. No merge approval is given.
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: {
     diff: { type: "string" }, stdin: { type: "boolean" }, from: { type: "string" }, to: { type: "string" },
-    repo: { type: "string" }, out: { type: "string" }, mock: { type: "boolean" }, help: { type: "boolean" },
+    repo: { type: "string" }, out: { type: "string" }, mock: { type: "boolean" }, open: { type: "boolean" }, help: { type: "boolean" },
   }, strict: true, allowPositionals: false });
   if (values.help) { console.log(help); return; }
   const range = values.from !== undefined || values.to !== undefined;
@@ -64,6 +66,22 @@ async function main(): Promise<void> {
   console.log(`${values.mock ? "MOCK DEMO. No live judgments." : "Live Jev review."} API calls: ${report.modelCalls}`);
   console.log(pathToFileURL(output).href);
   console.log(`JSON: ${jsonOutput}`);
+  if (values.open) {
+    await openInBrowser(pathToFileURL(output).href);
+  }
+}
+
+/** Open a URL in the default browser. Best effort: logs instead of throwing. */
+function openInBrowser(url: string): Promise<void> {
+  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  return new Promise((resolve) => {
+    execFile(opener, [url], (error) => {
+      if (error) {
+        console.error(`diffninja: could not open the browser (${error.message})`);
+      }
+      resolve();
+    });
+  });
 }
 
 main().catch(error => { console.error(`diffninja: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });

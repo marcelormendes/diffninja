@@ -66,6 +66,9 @@ diffninja --diff change.patch --out review.html
 
 # offline demo, no API calls
 diffninja --diff change.patch --mock
+
+# open the report in the browser when done
+diffninja --diff change.patch --open
 ```
 
 Replace `diffninja` with `node dist/review/cli.js` when running from an
