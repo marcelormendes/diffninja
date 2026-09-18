@@ -3,9 +3,9 @@
 Focused PR reviews. Jev reads the diff behind the scenes; you review only what
 matters.
 
-Paste a diff (or point at a git range) and diffninja returns a ranked report:
-risky hunks first with reasons, trivial ones auto-passed in one line. No more
-reading every line to find the three that count.
+Paste a diff (or point at a git range) and diffninja returns a navigable PR-style
+report: full diffs, line numbers, and color cues for where to start. Assessment
+details stay in the JSON sidecar, not in the review interface.
 
 Two front ends share one engine:
 
@@ -18,9 +18,9 @@ Two front ends share one engine:
 1. **Deterministic checks first.** No-op hunks, blank-only doc changes, and
    oversized hunks are settled in code without calling any model. Oversized
    hunks go to manual review, never truncated, never auto-passed.
-2. **One Jev call per hunk.** TypeSafe's Jev (a System One model) answers
-   small typed questions about each hunk: risk score, bug likelihood, change
-   category. No text generation, no parsing.
+2. **One Jev judgment per hunk.** TypeSafe's Jev answers four typed questions
+   about impact scope, visible bug likelihood, change category and missing
+   context together. No generated prose.
 3. **Ranked in code.** Answers are combined with weights into a 0-100 priority
    and sorted into attention / uncertain / low / passed. Uncertain calls fail
    closed to human review instead of degrading into a pass.
@@ -79,6 +79,34 @@ Live mode needs `TYPESAFE_API_KEY` in the environment (get one at
 https://console.typesafe.ai). Reports contain source code, keep them private.
 diffninja never approves, blocks, or merges anything. A human still owns the
 decision.
+
+### Navigating the report
+
+The HTML is one self-contained file: open it directly with `file://` or `--open`.
+It makes no external requests and has no frontend dependencies. All hunks start
+expanded; full diffs and native folding remain available with JavaScript disabled.
+Light/dark colors follow your system preference.
+
+- **Expand all / Collapse all** affect the currently visible hunks.
+- **Status chips** show or hide attention, uncertain, low and passed hunks without
+  changing their expanded state. Colors appear on hunk headers, left borders and
+  navigation dots; no scores or assessment commentary appear in the HTML.
+- **Focus** or a numbered badge isolates a hunk full-width. Use the **Report**
+  breadcrumb or **Escape** to return to your previous folds and scroll position.
+- **j/k** or **ArrowDown/ArrowUp** move the visible cursor; **Enter** toggles its
+  hunk; **f** focuses it. Focused buttons and links retain native Enter behavior.
+- **Jump to a hunk** opens its target; on small screens the jump list is a toolbar
+  dropdown. Without JavaScript the ordinary anchor links remain visible.
+
+A single note distinguishes mock and live output. Reasons, judgments, warnings,
+priorities and request counts remain in the JSON twin; mock data is only a
+navigation preview, not a code assessment.
+
+The live adapter pins `jev-1.13.0`, retries transient failures up to twice, and uses
+a 10-second attempt timeout inside a 30-second per-hunk budget. `modelCalls`
+counts all attempted HTTP requests, including retries; failed judgments stay
+`uncertain`. See [the Jev audit](docs/JEV_AUDIT.md) for sources, policy choices,
+pricing and the limits of offline verification.
 
 ## MCP server: the `review_diff` tool
 
@@ -316,6 +344,7 @@ npm run build   # tsc -> dist/
 npm run lint    # oxlint
 npm test        # vitest run
 npm run dev -- --diff examples/review/checkout.patch --mock
+npm test -- test/review-*.test.ts  # review contracts without the forked engine suite
 ```
 
 For development, launch from the checkout so Node can resolve `tsx`:

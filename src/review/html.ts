@@ -3,13 +3,32 @@ import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
 /**
  * Render a review report as one self-contained HTML document.
  *
- * The page is static: no scripts, no external stylesheets, no fonts and no
- * network access. All ranking and prose is baked in, so the file can be opened
- * from disk in any browser. Every string that came from a diff, a path or a
- * model is HTML-escaped before it reaches the output.
+ * The page is a plain diff review: file header, hunks with line numbers and
+ * green/red lines. Ranking decides the order of the hunks and nothing else;
+ * severity reaches the reviewer only as color (hunk header tint, left border,
+ * jump-nav dot). Reasons, judgments, priority scores and model metadata stay in
+ * the JSON sidecar and never reach the HTML.
+ *
+ * Everything is server-rendered, so the report is readable with JavaScript
+ * disabled. The single inline script is progressive enhancement: expand and
+ * collapse, status filters that keep their fold state, focus mode, and a
+ * keyboard cursor. No report string is placed in the script; it reads labels
+ * from the DOM. Every string from a diff, path or report field is HTML-escaped.
  */
 export function renderReview(report: ReviewReport): string {
   const counts = countStatuses(report.items);
+  const body =
+    report.items.length === 0
+      ? '<p class="empty">No hunks were reviewed in this diff.</p>'
+      : [
+          '<div class="toolbar" id="toolbar">',
+          renderControls(counts),
+          renderBreadcrumb(),
+          renderNav(report.items),
+          "</div>",
+          '<p class="empty" id="filter-empty" hidden>No hunks match the selected statuses.</p>',
+          renderItems(report.items),
+        ].join("\n");
   return [
     "<!doctype html>",
     '<html lang="en">',
@@ -22,13 +41,12 @@ export function renderReview(report: ReviewReport): string {
     "</head>",
     "<body>",
     '<div class="wrap">',
-    renderHeader(report, counts),
-    renderScopeNote(),
-    renderNav(report.items),
-    renderItems(report.items),
+    renderHeader(report),
+    body,
     renderExtras(report),
     renderFooter(report),
     "</div>",
+    `<script>${SCRIPT}</script>`,
     "</body>",
     "</html>",
     "",
@@ -45,24 +63,18 @@ const STATUS_ORDER: readonly ReviewStatus[] = [
 const STATUS_LABEL = {
   attention: "Attention",
   uncertain: "Uncertain",
-  low: "Low priority",
-  passed: "Auto-passed",
+  low: "Low",
+  passed: "Passed",
 } satisfies Record<ReviewStatus, string>;
 
-const STATUS_NOTE = {
-  attention: "Signals flagged this hunk. Read it before merging.",
-  uncertain: "The judgment was not confident. This needs a human read.",
-  low: "Nothing notable was found, but no human has read this hunk either.",
-  passed:
-    "Deterministic pass: only unchanged lines or safe blank-only text changes.",
+/** A compact legend is the only explanation of the severity colors. */
+const STATUS_HINT = {
+  attention: "read first",
+  uncertain: "needs a human read",
+  low: "nothing notable found",
+  passed: "unchanged or blank-only",
 } satisfies Record<ReviewStatus, string>;
 
-const STATUS_EXPANDED = {
-  attention: true,
-  uncertain: true,
-  low: true,
-  passed: true,
-} satisfies Record<ReviewStatus, boolean>;
 
 function countStatuses(items: readonly ReviewItem[]) {
   const counts = {
@@ -77,82 +89,68 @@ function countStatuses(items: readonly ReviewItem[]) {
   return counts;
 }
 
-function renderHeader(
-  report: ReviewReport,
-  counts: Record<ReviewStatus, number>,
-): string {
+function renderHeader(report: ReviewReport): string {
   const files = new Set(report.items.map((item) => item.file)).size;
   const added = sum(report.items.map((item) => item.added));
   const removed = sum(report.items.map((item) => item.removed));
-  const isMock = report.mode === "mock";
-
-  const modeBadge =
+  const scope =
+    report.items.length === 0
+      ? ""
+      : `${report.items.length} hunks in ${files} files, +${formatInteger(added)} / -${formatInteger(removed)} lines, generated ${report.createdAt}`;
+  const mode =
     report.mode === "mock"
-      ? '<span class="badge badge-mock">Mock mode, not a review</span>'
-      : '<span class="badge badge-live">Live model review</span>';
-  const stats = [
-    statCell("Hunks", String(report.items.length), ""),
-    statCell("Files", String(files), ""),
-    statCell("Attention", String(counts.attention), "attention"),
-    statCell("Uncertain", String(counts.uncertain), "uncertain"),
-    statCell("Low priority", String(counts.low), "low"),
-    statCell("Auto-passed", String(counts.passed), "passed"),
-    statCell("Lines", `+${added} / -${removed}`, ""),
-    statCell("API calls", formatInteger(report.modelCalls), ""),
-  ];
+      ? "Mock data — navigation preview only, not a code assessment."
+      : "Live data — review changes before merging.";
 
   return [
     '<header class="masthead">',
     '<p class="brand"><span class="brand-mark" aria-hidden="true"></span>diffninja</p>',
     `<h1>${escapeHtml(report.title || "Untitled diff")}</h1>`,
-    `<p class="meta">Ranked hunk review of <span class="mono">${escapeHtml(report.source)}</span></p>`,
-    `<p class="meta">Generated ${escapeHtml(report.createdAt)}</p>`,
-    `<div class="badges">${modeBadge}<span class="badge">${report.items.length} hunks ranked</span><span class="badge">${formatInteger(report.modelCalls)} API calls</span></div>`,
-    isMock ? renderMockBanner() : "",
-    `<dl class="stats">${stats.join("")}</dl>`,
-    report.warnings.length > 0 ? renderWarnings(report.warnings) : "",
+    `<p class="meta">Files changed · <span class="mono">${escapeHtml(report.source)}</span></p>`,
+    scope === "" ? "" : `<p class="meta">${escapeHtml(scope)}</p>`,
+    `<p class="mode-note">${mode}</p>`,
+    renderLegend(),
     "</header>",
   ]
     .filter((part) => part !== "")
     .join("\n");
 }
 
-function statCell(
-  label: string,
-  value: string,
-  status: ReviewStatus | "",
-): string {
-  const modifier = status === "" ? "" : ` stat-${status}`;
-  return `<div class="stat${modifier}"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
+/** One color line, no jargon. Counting is left to the filter chips. */
+function renderLegend(): string {
+  const keys = STATUS_ORDER.map(
+    (status) =>
+      `<span class="key"><span class="dot dot-${status}" aria-hidden="true"></span>${escapeHtml(`${STATUS_LABEL[status]}: ${STATUS_HINT[status]}`)}</span>`,
+  ).join("");
+  return `<p class="legend">${keys}</p>`;
 }
 
-function renderMockBanner(): string {
+
+function renderControls(counts: Record<ReviewStatus, number>): string {
+  const chips = STATUS_ORDER.map(
+    (status) =>
+      `<button type="button" class="pill pill-${status}" data-filter="${status}" data-count="${counts[status]}" aria-pressed="true">` +
+      `<span class="dot dot-${status}" aria-hidden="true"></span>${escapeHtml(STATUS_LABEL[status])}` +
+      `<span class="pill-n mono">${counts[status]}</span></button>`,
+  ).join("");
   return [
-    '<div class="banner banner-mock" role="note">',
-    "<h2>Mock mode: no model saw this diff</h2>",
-    "<p><strong>No API call was made.</strong> diffninja produced every judgment below from local placeholder logic so it can run without an API key. These scores are not an assessment of the change.</p>",
+    '<div class="controls enhanced" role="group" aria-label="Report controls">',
+    '<button type="button" data-action="expand">Expand all</button>',
+    '<button type="button" data-action="collapse">Collapse all</button>',
+    `<div class="filters" role="group" aria-label="Show or hide hunks by status">${chips}</div>`,
+    '<span class="keyboard-help">j/k or arrows move · Enter folds · f focuses · Esc returns</span>',
     "</div>",
   ].join("\n");
 }
 
-function renderWarnings(warnings: readonly string[]): string {
-  const items = warnings
-    .map((warning) => `<li>${escapeHtml(warning)}</li>`)
-    .join("\n");
+function renderBreadcrumb(): string {
   return [
-    '<div class="banner banner-warn" role="note">',
-    "<h2>Warnings from this run</h2>",
-    `<ul class="warn-list">${items}</ul>`,
-    "</div>",
-  ].join("\n");
-}
-
-function renderScopeNote(): string {
-  return [
-    '<div class="banner banner-scope" role="note">',
-    "<h2>Not a merge approval</h2>",
-    '<p>diffninja ranks hunks so a reviewer knows where to start. It does not approve, block or merge anything. A low or auto-passed rank means no signal was found, not that the code is correct. A human still owns the decision.</p>',
-    "</div>",
+    '<nav id="breadcrumb" aria-label="Focus breadcrumb" hidden>',
+    '<button type="button" data-action="back">Report</button>',
+    '<span class="crumb-sep" aria-hidden="true">/</span>',
+    '<span class="crumb-rank mono" id="focus-rank"></span>',
+    '<span class="crumb-path mono" id="focus-path"></span>',
+    "</nav>",
   ].join("\n");
 }
 
@@ -163,48 +161,45 @@ function renderNav(items: readonly ReviewItem[]): string {
   const links = items
     .map((item, index) => {
       const rank = index + 1;
+      const status = escapeHtml(item.status);
       return [
-        `<li><a class="toc-link toc-${item.status}" href="#item-${rank}">`,
-        `<span class="toc-rank">#${rank}</span>`,
+        "<li>",
+        `<a class="toc-link" href="#item-${rank}">`,
+        `<span class="toc-rank mono">#${rank}</span>`,
+        `<span class="dot dot-${status}" aria-hidden="true"></span>`,
         `<span class="toc-path mono">${escapeHtml(item.file)}</span>`,
-        `<span class="toc-status">${escapeHtml(STATUS_LABEL[item.status])}</span>`,
+        `<span class="sr">${escapeHtml(STATUS_LABEL[item.status])}</span>`,
         "</a></li>",
       ].join("");
     })
     .join("\n");
   return [
-    '<nav class="toc" aria-label="Ranked hunks">',
-    '<h2>Jump to a hunk</h2>',
-    `<ul class="toc-list">${links}</ul>`,
+    '<nav class="toc" aria-label="Jump to a hunk">',
+    '<button type="button" class="jump-toggle enhanced" aria-expanded="false" aria-controls="jump-links">Jump to a hunk</button>',
+    `<ul class="toc-list" id="jump-links">${links}</ul>`,
     "</nav>",
   ].join("\n");
 }
 
 function renderItems(items: readonly ReviewItem[]): string {
-  if (items.length === 0) {
-    return '<p class="empty">No hunks were reviewed in this diff.</p>';
-  }
   const cards = items
     .map((item, index) => renderItem(item, index + 1))
     .join("\n");
-  return `<section class="cards" aria-label="Ranked hunks">${cards}</section>`;
+  return `<section class="cards" aria-label="Hunks">${cards}</section>`;
 }
 
+/** Plain file header row: rank focus button, path, line growth. */
 function renderItem(item: ReviewItem, rank: number): string {
-  const open = STATUS_EXPANDED[item.status] ? " open" : "";
-  const status = STATUS_LABEL[item.status];
-  const special = item.special
-    ? `<span class="pill pill-special">Manual review: ${escapeHtml(item.special)}</span>`
-    : "";
-
+  const status = escapeHtml(item.status);
   return [
-    `<details class="card card-${item.status}" id="item-${rank}"${open}>`,
+    `<details class="card card-${status}" data-status="${status}" id="item-${rank}" open>`,
     "<summary>",
-    `<span class="rank">#${rank}</span>`,
-    `<span class="path" title="${escapeHtml(item.file)}">${escapeHtml(item.file)}</span>`,
-    `<span class="pill pill-${item.status}">${escapeHtml(status)}</span>`,
-    special,
-    `<span class="lines">+${formatInteger(item.added)} <span class="del">-${formatInteger(item.removed)}</span> lines</span>`,
+    `<span class="rank fallback-rank mono">#${rank}</span>`,
+    `<button type="button" class="rank enhanced mono" data-focus aria-label="Focus hunk ${rank}">#${rank}</button>`,
+    `<span class="path mono">${escapeHtml(item.file)}</span>`,
+    `<span class="sr">${escapeHtml(STATUS_LABEL[item.status])}</span>`,
+    `<span class="growth mono"><span class="plus">+${formatInteger(item.added)}</span> <span class="minus">-${formatInteger(item.removed)}</span></span>`,
+    `<button type="button" class="focus-button enhanced" data-focus aria-label="Focus hunk ${rank}">Focus</button>`,
     "</summary>",
     renderItemBody(item),
     "</details>",
@@ -212,152 +207,111 @@ function renderItem(item: ReviewItem, rank: number): string {
 }
 
 function renderItemBody(item: ReviewItem): string {
-  const priority = Number.isFinite(item.priority)
-    ? Math.min(100, Math.max(0, Math.round(item.priority)))
-    : 0;
-  const facts = [
-    `<li><span class="k">File</span><span class="v">${escapeHtml(item.file)}</span></li>`,
-    item.header
-      ? `<li><span class="k">Hunk</span><span class="v">${escapeHtml(item.header)}</span></li>`
-      : "",
-    `<li><span class="k">Lines</span><span class="v">${formatInteger(item.oldStart)} in the old file, ${formatInteger(item.newStart)} in the new file</span></li>`,
-    `<li><span class="k">Priority</span><span class="v">${formatInteger(item.priority)} / 100</span></li>`,
-  ].filter((fact) => fact !== "");
-
-  const reasons =
-    item.reasons.length > 0
-      ? [
-          '<h3 class="section-h">Reasons</h3>',
-          `<ul class="chips">${item.reasons.map((reason) => `<li class="chip">${escapeHtml(reason)}</li>`).join("")}</ul>`,
-        ].join("\n")
-      : '<p class="muted">No reasons were recorded for this hunk.</p>';
-
+  const special =
+    item.special === undefined || item.special === ""
+      ? ""
+      : `<p class="note">Manual review: ${escapeHtml(item.special)}</p>`;
   return [
     '<div class="body">',
-    `<p class="note">${escapeHtml(STATUS_NOTE[item.status])}</p>`,
-    `<ul class="facts">${facts.join("")}</ul>`,
-    `<div class="bar" role="img" aria-label="Priority ${escapeHtml(formatInteger(item.priority))} of 100"><span class="bar-fill bar-fill-${item.status}" style="width:${priority}%"></span></div>`,
-    reasons,
-    renderJudgment(item),
-    renderItemFlow(item.callFlow),
+    special,
     renderDiff(item.diff),
     "</div>",
-  ].join("\n");
-}
-
-/** Per-hunk call-flow context, when the diff produced any. */
-function renderItemFlow(callFlow: readonly string[] | undefined): string {
-  if (!callFlow || callFlow.length === 0) {
-    return "";
-  }
-  const entries = callFlow
-    .map((entry) => `<li>${escapeHtml(entry)}</li>`)
+  ]
+    .filter((part) => part !== "")
     .join("\n");
-  return [
-    '<section class="item-flow">',
-    '<h3 class="section-h">Call flow for this hunk</h3>',
-    `<ol class="flow">${entries}</ol>`,
-    "</section>",
-  ].join("\n");
 }
 
-function renderJudgment(item: ReviewItem): string {
-  const judgment = item.judgment;
-  if (!judgment) {
-    return '<p class="muted">No model judgment was recorded for this hunk.</p>';
+/** How one rendered diff line is shaped, once it has been classified. */
+interface DiffRow {
+  readonly kind: "hunk" | "add" | "del" | "context" | "meta" | "note";
+  readonly text: string;
+  readonly oldNo: number | null;
+  readonly newNo: number | null;
+}
+
+/**
+ * Split a stored hunk into rows with gutter numbers.
+ *
+ * Classification is positional: the first line of a parsed hunk is the `@@`
+ * header and every later line starts with its diff marker. A deletion of a
+ * line whose text begins with `--` therefore stays a deletion instead of
+ * looking like a `--- file` header. Only a file-metadata unit, which stores
+ * `diff --git` / `---` / `+++` lines, is classified by prefix.
+ */
+function diffRows(diff: string): DiffRow[] {
+  const text = diff.endsWith("\n") ? diff.slice(0, -1) : diff;
+  if (text === "") {
+    return [];
   }
-  const confidence = Number.isFinite(judgment.confidence)
-    ? `${Math.round(Math.min(1, Math.max(0, judgment.confidence)) * 100)}%`
-    : "n/a";
-  const cells = [
-    judgmentCell("Risk", formatRubricScore(judgment.risk)),
-    judgmentCell("Bug likelihood", `${Math.round(judgment.bug * 100)}%`),
-    judgmentCell("Needs context", `${Math.round(judgment.needsHuman * 100)}%`),
-    judgmentCell("Confidence", confidence),
-    judgmentCell("Category", judgment.category || "unclassified"),
+  const raw = text.split("\n");
+  const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(raw[0]);
+  if (!header) {
+    return raw.map((line) => ({
+      kind: "meta" as const,
+      text: line,
+      oldNo: null,
+      newNo: null,
+    }));
+  }
+  let oldNo = Number(header[1]);
+  let newNo = Number(header[3]);
+  const rows: DiffRow[] = [
+    { kind: "hunk", text: raw[0], oldNo: null, newNo: null },
   ];
-  return [
-    '<section class="judgment">',
-    '<h3 class="section-h">Model estimates</h3>',
-    `<ul class="jv-grid">${cells.join("")}</ul>`,
-    '<p class="estimate">Risk is a probability-weighted score from 0 to 3. Bug likelihood and missing-context likelihood are estimated probabilities. Confidence reflects the score and category distributions. None of these values proves a bug or proves safety.</p>',
-    "</section>",
-  ].join("\n");
-}
-
-function judgmentCell(label: string, value: string): string {
-  return `<li class="jv"><span class="k">${escapeHtml(label)}</span><span class="v">${escapeHtml(value)}</span></li>`;
+  for (let i = 1; i < raw.length; i++) {
+    const line = raw[i];
+    if (line.startsWith("\\")) {
+      // "\ No newline at end of file" belongs to the line above, so no numbers.
+      rows.push({ kind: "note", text: line, oldNo: null, newNo: null });
+    } else if (line.startsWith("+")) {
+      rows.push({ kind: "add", text: line, oldNo: null, newNo });
+      newNo += 1;
+    } else if (line.startsWith("-")) {
+      rows.push({ kind: "del", text: line, oldNo, newNo: null });
+      oldNo += 1;
+    } else {
+      rows.push({ kind: "context", text: line, oldNo, newNo });
+      oldNo += 1;
+      newNo += 1;
+    }
+  }
+  return rows;
 }
 
 function renderDiff(diff: string): string {
-  const text = diff.endsWith("\n") ? diff.slice(0, -1) : diff;
-  if (text === "") {
-    return '<p class="muted">No diff text was captured for this hunk.</p>';
+  const rows = diffRows(diff);
+  if (rows.length === 0) {
+    return '<p class="note">No diff text was captured for this hunk.</p>';
   }
-  const lines = text
-    .split("\n")
+  // Joined without whitespace: the gutter and code spans are grid items, so the
+  // rows must not be separated by text nodes.
+  const body = rows
     .map(
-      (line) =>
-        `<span class="dl dl-${classifyDiffLine(line)}">${escapeHtml(line)}</span>`,
+      (row) =>
+        `<span class="ln ln-${row.kind}">` +
+        `<span class="old-no" aria-hidden="true">${row.oldNo === null ? "" : String(row.oldNo)}</span>` +
+        `<span class="new-no" aria-hidden="true">${row.newNo === null ? "" : String(row.newNo)}</span>` +
+        `<span class="code">${escapeHtml(row.text)}</span>` +
+        "</span>",
     )
-    .join("\n");
+    .join("");
   return [
     '<div class="diff-wrap">',
-    `<pre class="diff">${lines}</pre>`,
+    `<pre class="diff">${body}</pre>`,
     "</div>",
   ].join("\n");
 }
 
-function classifyDiffLine(line: string): string {
-  if (
-    line.startsWith("diff --git ") ||
-    line.startsWith("index ") ||
-    line.startsWith("new file mode ") ||
-    line.startsWith("deleted file mode ") ||
-    line.startsWith("similarity index ") ||
-    line.startsWith("rename ") ||
-    line.startsWith("Binary files ") ||
-    line.startsWith("--- ") ||
-    line.startsWith("+++ ")
-  ) {
-    return "meta";
-  }
-  if (line.startsWith("@@")) {
-    return "hunk";
-  }
-  if (line.startsWith("+")) {
-    return "add";
-  }
-  if (line.startsWith("-")) {
-    return "del";
-  }
-  return "context";
-}
-
 function renderExtras(report: ReviewReport): string {
-  const flow =
-    report.callFlow.length > 0
-      ? report.callFlow
-          .map((entry) => `<li>${escapeHtml(entry)}</li>`)
-          .join("\n")
-      : '<li class="muted">No call-flow context was captured for this diff.</li>';
-  const legend = STATUS_ORDER.map(
-    (status) =>
-      `<li><span class="pill pill-${status}">${escapeHtml(STATUS_LABEL[status])}</span> <span class="muted">${escapeHtml(STATUS_NOTE[status])}</span></li>`,
-  ).join("\n");
-
+  if (report.callFlow.length === 0) return "";
+  const flow = report.callFlow
+    .map((entry) => `<li>${escapeHtml(entry)}</li>`)
+    .join("\n");
   return [
-    '<section class="extras">',
-    "<details>",
-    `<summary>Legend and how ranking works (${STATUS_ORDER.length} statuses)</summary>`,
-    `<ul class="legend">${legend}</ul>`,
-    '<p class="estimate">Priority runs 0 to 100 and orders the page. Every hunk opens expanded so the full diff is visible; collapse any card to focus.</p>',
-    "</details>",
-    "<details>",
+    '<section class="extras"><details>',
     `<summary>Call flow (${report.callFlow.length} entries)</summary>`,
     `<ol class="flow">${flow}</ol>`,
-    "</details>",
-    "</section>",
+    "</details></section>",
   ].join("\n");
 }
 
@@ -365,100 +319,254 @@ function renderFooter(report: ReviewReport): string {
   return [
     '<footer class="foot">',
     `<p>Source: <span class="mono">${escapeHtml(report.source)}</span></p>`,
-    `<p>Generated by diffninja at ${escapeHtml(report.createdAt)} in ${escapeHtml(report.mode)} mode using ${formatInteger(report.modelCalls)} API calls.</p>`,
-    "<p>This page is a static file: it runs no scripts and makes no network requests. Every diff line is escaped text.</p>",
-    "<p>Not a merge approval. A human reviewer remains responsible for the change.</p>",
+    "<p>Offline report · All changes remain readable without JavaScript · Not a merge approval.</p>",
     "</footer>",
   ].join("\n");
 }
 
-function sum(values: readonly number[]): number {
-  let total = 0;
-  for (const value of values) {
-    if (Number.isFinite(value)) {
-      total += value;
+// One toolbar script. No report string is interpolated into it: it reads the
+// labels it needs from the escaped DOM, so a crafted path or diff cannot reach
+// the inline script.
+const SCRIPT = `
+(function () {
+  'use strict';
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.card'));
+  if (!cards.length) return;
+  var filters = Array.prototype.slice.call(document.querySelectorAll('[data-filter]'));
+  var toolbar = document.getElementById('toolbar');
+  var breadcrumb = document.getElementById('breadcrumb');
+  var focusRank = document.getElementById('focus-rank');
+  var focusPath = document.getElementById('focus-path');
+  var jump = document.querySelector('.jump-toggle');
+  var empty = document.getElementById('filter-empty');
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc-link'));
+  var cursor = 0;
+  var focusIndex = -1;
+  var focusWasOpen = true;
+  var returnControl = null;
+  var returnScroll = 0;
+
+  function statusesOn() {
+    return filters.filter(function (chip) {
+      return chip.getAttribute('aria-pressed') === 'true';
+    }).map(function (chip) { return chip.getAttribute('data-filter'); });
+  }
+
+  function visible() {
+    var list = [];
+    cards.forEach(function (card, index) { if (!card.hidden) list.push(index); });
+    return list;
+  }
+
+  function setCursor(index, move) {
+    if (index < 0 || index >= cards.length) return;
+    cursor = index;
+    cards.forEach(function (card, at) { card.classList.toggle('cursor', at === index); });
+    if (!move) return;
+    var card = cards[index];
+    var summary = card.querySelector('summary');
+    if (summary) summary.focus({ preventScroll: true });
+    card.scrollIntoView({ block: 'start' });
+  }
+
+  function apply() {
+    var on = statusesOn();
+    cards.forEach(function (card, index) {
+      card.hidden = focusIndex >= 0 ? index !== focusIndex : on.indexOf(card.getAttribute('data-status')) < 0;
+    });
+    links.forEach(function (link) {
+      var target = document.getElementById(link.hash.slice(1));
+      var item = link.parentElement;
+      if (target && item) item.hidden = target.hidden;
+    });
+    filters.forEach(function (chip) { chip.disabled = focusIndex >= 0; });
+    document.body.classList.toggle('focus-mode', focusIndex >= 0);
+    breadcrumb.hidden = focusIndex < 0;
+    var shown = visible();
+    if (empty) empty.hidden = shown.length > 0;
+    if (!cards[cursor] || cards[cursor].hidden) {
+      if (shown.length) setCursor(shown[0], false);
     }
   }
-  return total;
-}
 
-function formatInteger(value: number): string {
-  return Number.isFinite(value) ? String(Math.round(value)) : "n/a";
-}
-
-function formatRubricScore(value: number): string {
-  if (!Number.isFinite(value)) {
-    return "n/a";
+  function enterFocus(index, control) {
+    if (index < 0 || index >= cards.length || focusIndex >= 0) return;
+    var card = cards[index];
+    focusIndex = index;
+    focusWasOpen = card.open;
+    returnControl = control && control.focus ? control : null;
+    returnScroll = window.scrollY;
+    card.open = true;
+    focusRank.textContent = '#' + (index + 1);
+    var path = card.querySelector('.path');
+    focusPath.textContent = path ? path.textContent : '';
+    apply();
+    setCursor(index, true);
   }
-  return `${Math.round(value * 10) / 10} / 3`;
-}
 
-/** Escape text for HTML element and attribute contexts. */
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
+  function exitFocus() {
+    if (focusIndex < 0) return;
+    var index = focusIndex;
+    var card = cards[index];
+    var control = returnControl;
+    card.open = focusWasOpen;
+    focusIndex = -1;
+    returnControl = null;
+    apply();
+    setCursor(index, false);
+    window.scrollTo(0, returnScroll);
+    if (control && control.isConnected) control.focus({ preventScroll: true });
+    else {
+      var summary = card.querySelector('summary');
+      if (summary) summary.focus({ preventScroll: true });
+    }
+  }
+
+  function setJump(open) {
+    if (jump) jump.setAttribute('aria-expanded', String(open));
+    if (toolbar) toolbar.setAttribute('data-jump', open ? 'open' : 'closed');
+  }
+
+  document.addEventListener('click', function (event) {
+    if (!event.target.closest) return;
+    var button = event.target.closest('button');
+    var card = event.target.closest('.card');
+    var at = card ? cards.indexOf(card) : -1;
+    if (at >= 0) setCursor(at, false);
+    if (button && button.hasAttribute('data-focus')) {
+      event.preventDefault();
+      if (at === focusIndex) exitFocus();
+      else enterFocus(at, button);
+      return;
+    }
+    if (button && button.getAttribute('data-action') === 'back') { exitFocus(); return; }
+    if (button && button.getAttribute('data-filter')) {
+      button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
+      apply();
+      return;
+    }
+    var action = button && button.getAttribute('data-action');
+    if (action === 'expand' || action === 'collapse') {
+      visible().forEach(function (index) { cards[index].open = action === 'expand'; });
+      return;
+    }
+    if (button && button === jump) { setJump(jump.getAttribute('aria-expanded') !== 'true'); return; }
+    var link = event.target.closest('.toc-link');
+    if (link) {
+      event.preventDefault();
+      var target = document.getElementById(link.hash.slice(1));
+      if (!target) return;
+      target.open = true;
+      setJump(false);
+      setCursor(cards.indexOf(target), true);
+      history.replaceState(null, '', link.hash);
+    }
+  });
+
+  document.addEventListener('focusin', function (event) {
+    if (!event.target.closest) return;
+    var card = event.target.closest('.card');
+    if (card) setCursor(cards.indexOf(card), false);
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (!event.target.closest) return;
+    if (event.key === 'Escape') {
+      if (focusIndex >= 0) { event.preventDefault(); exitFocus(); }
+      return;
+    }
+    if (event.target.closest('input, textarea, select, [contenteditable]')) return;
+    var list = visible();
+    if (!list.length) return;
+    // j/k and the arrow keys both move the review cursor, per the toolbar hint.
+    var step = 0;
+    if (!event.shiftKey && (event.key === 'j' || event.key === 'ArrowDown')) step = 1;
+    else if (!event.shiftKey && (event.key === 'k' || event.key === 'ArrowUp')) step = -1;
+    if (step !== 0) {
+      event.preventDefault();
+      var at = list.indexOf(cursor);
+      var next = at < 0 ? list[0] : list[Math.max(0, Math.min(list.length - 1, at + step))];
+      setCursor(next, true);
+      return;
+    }
+    if (event.key === 'Enter') {
+      // A focused control keeps its own native activation.
+      if (event.target.closest('summary, button, a')) return;
+      if (!cards[cursor]) return;
+      event.preventDefault();
+      cards[cursor].open = !cards[cursor].open;
+      return;
+    }
+    if (event.key === 'f' && focusIndex < 0 && cards[cursor]) {
+      event.preventDefault();
+      enterFocus(cursor, cards[cursor].querySelector('[data-focus]'));
+    }
+  });
+
+  function measureToolbar() {
+    if (!toolbar) return;
+    document.documentElement.style.setProperty('--toolbar-height', toolbar.offsetHeight + 'px');
+  }
+
+  document.documentElement.classList.add('js');
+  apply();
+  setCursor(cursor, false);
+  var initial = location.hash ? document.getElementById(location.hash.slice(1)) : null;
+  var initialAt = initial ? cards.indexOf(initial) : -1;
+  if (initialAt >= 0) setCursor(initialAt, true);
+  measureToolbar();
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureToolbar).observe(toolbar);
+  window.addEventListener('resize', measureToolbar);
+}());
+`;
 
 const STYLES = `
 :root {
   color-scheme: light dark;
-  --bg: #f6f1ea;
-  --panel: #fffdf9;
-  --sunken: #f9f5ef;
-  --ink: #2b2521;
-  --ink-soft: #6b5f56;
-  --line: #e6dbcf;
-  --line-strong: #d8c9b8;
-  --accent: #c05a1d;
-  --accent-bg: #fdf0e6;
-  --accent-line: #e5b593;
-  --teal: #12615d;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --sunken: #f6f8fa;
+  --ink: #1f2328;
+  --ink-soft: #59636e;
+  --line: #d1d9e0;
+  --line-strong: #afb8c1;
+  --accent: #59636e;
+  --teal: #4d8d86;
   --teal-bg: #e8f2f1;
-  --teal-line: #a8ccc9;
   --warn: #a2701f;
-  --warn-ink: #8a5410;
   --warn-bg: #fdf3e2;
-  --warn-line: #e8c894;
   --alarm: #c22e2e;
   --alarm-bg: #fdecec;
-  --alarm-line: #f0b3b3;
-  --add: #14615c;
-  --add-bg: #e9f3f1;
-  --del: #a2432a;
-  --del-bg: #fbeee9;
+  --add: #116329;
+  --add-bg: #dafbe1;
+  --del: #82071e;
+  --del-bg: #ffebe9;
+  --cursor: #2f6fae;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1c1917;
-    --panel: #242120;
-    --sunken: #1f1c1b;
-    --ink: #f2ece5;
-    --ink-soft: #b3a69b;
-    --line: #3a3330;
-    --line-strong: #4d443e;
-    --accent: #f09355;
-    --accent-bg: #32251d;
-    --accent-line: #6d4529;
+    --bg: #0d1117;
+    --panel: #0d1117;
+    --sunken: #161b22;
+    --ink: #e6edf3;
+    --ink-soft: #9198a1;
+    --line: #30363d;
+    --line-strong: #6e7681;
+    --accent: #9198a1;
     --teal: #6cc5bd;
     --teal-bg: #182827;
-    --teal-line: #2f5c58;
     --warn: #e0b372;
-    --warn-ink: #e0b372;
     --warn-bg: #2e2418;
-    --warn-line: #6b4f26;
     --alarm: #ff8a8a;
     --alarm-bg: #331f1e;
-    --alarm-line: #7a3a36;
-    --add: #7fd0c6;
-    --add-bg: #152a29;
-    --del: #f0a48b;
-    --del-bg: #2f1f1a;
+    --add: #aff5b4;
+    --add-bg: #123821;
+    --del: #ffdcd7;
+    --del-bg: #3f1b22;
+    --cursor: #7aa7d8;
   }
 }
 *, *::before, *::after { box-sizing: border-box; }
@@ -469,17 +577,21 @@ body {
   color: var(--ink);
   font: 400 16px/1.55 var(--sans);
 }
-.wrap { max-width: 1060px; margin: 0 auto; padding: 26px 20px 64px; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 26px 20px 64px; }
 h1, h2, h3 { margin: 0; line-height: 1.25; }
 p { margin: 0; }
 a { color: var(--teal); }
 .mono, code { font-family: var(--mono); }
 .muted { color: var(--ink-soft); }
+.sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 .masthead {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding-bottom: 18px;
+  gap: 10px;
+  padding-bottom: 16px;
   border-bottom: 2px solid var(--line-strong);
 }
 .brand {
@@ -500,57 +612,50 @@ a { color: var(--teal); }
 }
 h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere; }
 .meta { font-size: 13.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
-.badges { display: flex; flex-wrap: wrap; gap: 6px; }
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  padding: 3px 10px;
+.mode-note { font-size: 12.5px; color: var(--ink-soft); }
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  background: var(--sunken);
   color: var(--ink-soft);
 }
-.badge-mock { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
-.badge-live { background: var(--teal-bg); border-color: var(--teal-line); color: var(--teal); }
-.banner {
-  border: 1px solid var(--line-strong);
-  border-left-width: 5px;
-  border-radius: 12px;
-  padding: 12px 14px;
-  background: var(--sunken);
-  font-size: 14px;
+.key { display: inline-flex; align-items: center; gap: 6px; }
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  background: var(--line-strong);
 }
-.banner h2 { font-size: 12.5px; letter-spacing: 0.12em; text-transform: uppercase; }
-.banner p { margin-top: 6px; }
-.banner-mock { background: var(--accent-bg); border-color: var(--accent-line); border-left-color: var(--accent); }
-.banner-warn { background: var(--warn-bg); border-color: var(--warn-line); }
-.banner-scope { background: var(--panel); border-left-color: var(--teal); }
-.warn-list { margin: 6px 0 0; padding-left: 20px; }
-.warn-list li { overflow-wrap: anywhere; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin: 0; }
-.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; }
-.stat dt { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); }
-.stat dd { margin: 2px 0 0; font-family: var(--mono); font-size: 20px; font-weight: 600; }
-.stat-attention dd { color: var(--alarm); }
-.stat-uncertain dd { color: var(--warn-ink); }
-.stat-low dd { color: var(--ink-soft); }
-.stat-passed dd { color: var(--teal); }
-.toc {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  background: var(--bg);
-  border-bottom: 1px solid var(--line);
-  padding: 12px 0;
-  margin-bottom: 8px;
+.dot-attention { background: var(--alarm); }
+.dot-uncertain { background: var(--warn); }
+.dot-low { background: var(--line-strong); }
+.dot-passed { background: var(--teal); }
+.toolbar {
+  position: sticky; top: 0; z-index: 5; background: var(--bg);
+  border-bottom: 1px solid var(--line); padding: 10px 0; margin-bottom: 14px;
 }
-.toc h2 { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 8px; }
-.toc-list { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; }
+[hidden], .enhanced { display: none !important; }
+.js .enhanced { display: inline-flex !important; }
+.js .fallback-rank { display: none; }
+.js .jump-toggle { display: none !important; }
+.controls, .filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.controls { width: 100%; }
+button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:hover { border-color: var(--teal); }
+button:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
+button:disabled { cursor: default; opacity: .65; }
+.pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 11px; font-size: 12px; }
+.pill-n { font-size: 11px; color: var(--ink-soft); }
+[data-filter][aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+.keyboard-help { font-size: 12px; color: var(--ink-soft); }
+#breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 6px; overflow-wrap: anywhere; }
+.crumb-sep { color: var(--ink-soft); }
+.crumb-path { overflow-wrap: anywhere; }
+.toc { padding-top: 10px; }
+.toc-list { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; max-height: 22vh; overflow-y: auto; }
 .toc-list > li { min-width: 0; max-width: 100%; }
 .toc-link {
   display: flex;
@@ -566,28 +671,24 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
   background: var(--panel);
   font-size: 12.5px;
 }
-.toc-link:hover, .toc-link:focus-visible { border-color: var(--teal); color: var(--teal); }
-.toc-rank { font-family: var(--mono); font-weight: 700; color: var(--ink-soft); }
+.toc-link:hover, .toc-link:focus-visible { border-color: var(--cursor); }
+.toc-rank { font-weight: 700; color: var(--ink-soft); }
 .toc-path { min-width: 0; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toc-status { flex: 0 0 auto; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
-.toc-attention .toc-status { color: var(--alarm); font-weight: 700; }
-.toc-uncertain .toc-status { color: var(--warn-ink); }
-.toc-passed .toc-status { color: var(--teal); }
+.js .card.cursor { outline: 2px solid var(--cursor); outline-offset: 3px; }
+.card { scroll-margin-top: calc(var(--toolbar-height, 0px) + 14px); }
+.focus-mode .wrap { max-width: none; }
+.focus-mode .masthead, .focus-mode .extras, .focus-mode .foot { display: none; }
+.focus-mode .controls, .focus-mode .toc { display: none !important; }
 .cards { margin: 0; }
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
   border-left: 5px solid var(--line-strong);
-  border-radius: 14px;
+  border-radius: 6px;
   margin: 0 0 12px;
   overflow: hidden;
 }
-.card-attention {
-  border-left-color: var(--alarm);
-  box-shadow: 0 0 0 1px var(--alarm-line);
-}
-.card-attention > summary { background: var(--alarm-bg); }
-.card-attention > summary:hover { background: var(--alarm-bg); }
+.card-attention { border-left-color: var(--alarm); }
 .card-uncertain { border-left-color: var(--warn); }
 .card-low { border-left-color: var(--line-strong); }
 .card-passed { border-left-color: var(--teal); }
@@ -598,7 +699,8 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  padding: 12px 14px;
+  padding: 10px 14px;
+  background: var(--sunken);
 }
 .card > summary::-webkit-details-marker { display: none; }
 .card > summary::after {
@@ -609,90 +711,64 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
   transition: transform 0.15s ease;
 }
 .card[open] > summary::after { transform: rotate(90deg); }
-.card > summary:hover { background: var(--sunken); }
-.card > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
+.card > summary:hover { filter: brightness(0.98); }
+.card > summary:focus-visible { outline: 2px solid var(--cursor); outline-offset: -2px; }
 .rank {
-  font-family: var(--mono);
   font-size: 12px;
   font-weight: 700;
   color: var(--ink-soft);
-  background: var(--sunken);
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 2px 7px;
 }
-.path { flex: 1 1 220px; min-width: 0; font-family: var(--mono); font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
-.pill {
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 2px 9px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.pill-attention { background: var(--alarm-bg); color: var(--alarm); border-color: var(--alarm); }
-.pill-uncertain { background: var(--warn-bg); color: var(--warn-ink); border-color: var(--warn-line); }
-.pill-low { background: var(--sunken); color: var(--ink-soft); border-color: var(--line-strong); }
-.pill-passed { background: var(--teal-bg); color: var(--teal); border-color: var(--teal-line); }
-.pill-special { background: var(--del-bg); color: var(--del); border-color: var(--del); max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-.lines { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
-.lines .del { color: var(--del); }
-.body { border-top: 1px solid var(--line); padding: 0 14px 14px; }
-.note { margin: 12px 0; font-size: 13.5px; color: var(--ink-soft); }
-.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 16px; margin: 0 0 12px; padding: 0; list-style: none; }
-.facts li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
-.facts .k { flex: 0 0 auto; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); }
-.facts .v { min-width: 0; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
-.bar { height: 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--sunken); overflow: hidden; margin: 0 0 12px; }
-.bar-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), var(--accent)); }
-.bar-fill-attention { background: var(--alarm); }
-.bar-fill-uncertain { background: var(--warn); }
-.bar-fill-low { background: var(--line-strong); }
-.bar-fill-passed { background: var(--teal); }
-.card-attention .chip { border-color: var(--alarm-line); background: var(--alarm-bg); }
-.section-h { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); margin: 0 0 8px; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; padding: 0; list-style: none; }
-.chip {
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: var(--sunken);
-  padding: 3px 10px;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.judgment { margin: 0 0 12px; }
-.item-flow { margin: 0 0 12px; }
-.jv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
-.jv { background: var(--sunken); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
-.jv .k { display: block; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); }
-.jv .v { font-family: var(--mono); font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
-.estimate { margin-top: 8px; font-size: 12px; color: var(--ink-soft); }
+.path { flex: 1 1 240px; min-width: 0; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.growth { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
+.growth .plus { color: var(--add); }
+.growth .minus { color: var(--del); }
+.focus-button { font-size: 12px; padding: 3px 8px; }
+.body { border-top: 1px solid var(--line); padding: 0 0 2px; }
+.note { margin: 12px 14px; font-size: 13px; color: var(--ink-soft); overflow-wrap: anywhere; }
 .diff-wrap {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--sunken);
+  border-top: 1px solid var(--line);
+  background: var(--panel);
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
 pre.diff {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(min-content, 1fr);
   margin: 0;
-  padding: 10px 0;
+  padding: 6px 0;
   min-width: max-content;
   font-family: var(--mono);
   font-size: 12.5px;
-  line-height: 1.55;
+  line-height: 1.6;
   tab-size: 4;
   white-space: pre;
 }
-.dl { display: block; padding: 0 14px; }
-.dl-context { color: var(--ink); }
-.dl-add { background: var(--add-bg); color: var(--add); }
-.dl-del { background: var(--del-bg); color: var(--del); }
-.dl-hunk { background: var(--teal-bg); color: var(--teal); font-weight: 600; }
-.dl-meta { color: var(--ink-soft); }
-.empty { padding: 20px 0; color: var(--ink-soft); }
+.ln { display: contents; }
+.old-no, .new-no {
+  text-align: right;
+  padding: 0 8px 0 10px;
+  color: var(--ink-soft);
+  background: var(--sunken);
+  border-right: 1px solid var(--line);
+  user-select: none;
+}
+.code { padding: 0 14px; }
+.ln-add > .code { color: var(--add); }
+.ln-del > .code { color: var(--del); }
+.ln-add > .code, .ln-add > .old-no, .ln-add > .new-no { background: var(--add-bg); }
+.ln-del > .code, .ln-del > .old-no, .ln-del > .new-no { background: var(--del-bg); }
+.ln-hunk > .code { color: var(--ink-soft); font-weight: 600; }
+.ln-hunk > span { background: var(--sunken); }
+.card-attention .ln-hunk > span { background: var(--alarm-bg); }
+.card-uncertain .ln-hunk > span { background: var(--warn-bg); }
+.card-passed .ln-hunk > span { background: var(--teal-bg); }
+.ln-meta > .code { color: var(--ink-soft); }
+.ln-note > .code { color: var(--ink-soft); font-style: italic; }
+.empty { padding: 18px 0; color: var(--ink-soft); }
 .extras { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
 .extras details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 .extras summary {
@@ -714,9 +790,7 @@ pre.diff {
   transition: transform 0.15s ease;
 }
 .extras details[open] summary::after { transform: rotate(90deg); }
-.extras > details > p, .legend, .flow { margin: 0; padding: 0 14px 14px; }
-.legend { list-style: none; display: flex; flex-direction: column; gap: 8px; }
-.legend li { overflow-wrap: anywhere; }
+.flow { margin: 0; padding: 0 14px 14px; }
 .flow { list-style: none; }
 .flow li { font-family: var(--mono); font-size: 12.5px; padding: 6px 0; border-top: 1px dashed var(--line); overflow-wrap: anywhere; }
 .flow li:first-child { border-top: 0; }
@@ -724,12 +798,41 @@ pre.diff {
 .foot p { margin: 4px 0; overflow-wrap: anywhere; }
 @media (max-width: 680px) {
   .wrap { padding: 18px 13px 48px; }
-  .toc { position: static; padding: 10px 0; }
+  .js .jump-toggle { display: inline-flex !important; }
+  .js .toc-list { display: none; }
+  .js .toolbar[data-jump="open"] .toc-list { display: flex; }
+  .toc-list { margin-top: 8px; max-height: 40vh; overflow-y: auto; }
+  .toc-list > li { width: 100%; }
+  .keyboard-help { display: none; }
   .toc-link { width: 100%; }
   .toc-path { max-width: none; flex: 1 1 auto; }
-  .facts { grid-template-columns: 1fr; }
-  .stat dd { font-size: 17px; }
-  .card > summary { gap: 8px; padding: 11px 12px; }
-  .body { padding: 0 12px 12px; }
+  .card > summary { gap: 8px; padding: 10px 12px; }
+  .growth { flex: 0 0 auto; }
+  pre.diff { font-size: 12px; }
+  .code { padding: 0 12px; }
 }
 `;
+
+function sum(values: readonly number[]): number {
+  let total = 0;
+  for (const value of values) {
+    if (Number.isFinite(value)) {
+      total += value;
+    }
+  }
+  return total;
+}
+
+function formatInteger(value: number): string {
+  return Number.isFinite(value) ? String(Math.round(value)) : "n/a";
+}
+
+/** Escape text for HTML element and attribute contexts. */
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
