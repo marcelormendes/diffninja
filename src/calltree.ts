@@ -5,7 +5,7 @@ import {
   type FunctionIndex,
 } from "./extract.js";
 import { pickLoc } from "./loc.js";
-import type { CallNode, CallStep, FunctionInfo } from "./types.js";
+import type { CallNode, CallStep, FunctionInfo, SourceLoc } from "./types.js";
 
 /** Normalize user-facing paths for entry matching (`\` → `/`, strip `./`). */
 export function normalizeEntryPath(entry: string): string {
@@ -172,6 +172,21 @@ function expandSteps(
   });
 }
 
+/** Definition location for a resolved call, or nothing when unresolved. */
+function definitionLoc(info: FunctionInfo | undefined): SourceLoc | undefined {
+  if (!info || info.line == null) return undefined;
+  const loc: SourceLoc = { file: info.file, line: info.line };
+  // Only a multi-line definition carries an end: a single line says so once.
+  if (info.endLine != null && info.endLine !== info.line) loc.endLine = info.endLine;
+  return loc;
+}
+
+/** Attach the resolved definition to a node without an empty spread. */
+function withDefinition(node: CallNode, definition: SourceLoc | undefined): CallNode {
+  if (definition) node.definition = definition;
+  return node;
+}
+
 function expandCall(
   key: string,
   index: FunctionIndex,
@@ -187,6 +202,7 @@ function expandCall(
 ): CallNode {
   const info = infoOverride ?? resolveCall(key, index, callSite, owner);
   const label = displayCallLabel(key, index, info);
+  const definition = definitionLoc(info);
 
   // Recursion is per definition, not per name: two same-named functions in
   // different files calling each other is not a cycle.
@@ -199,11 +215,11 @@ function expandCall(
       : pickLoc(callSite);
 
   if (depth >= maxDepth) {
-    return { key, label, kind: "call", ...loc, children: [] };
+    return withDefinition({ key, label, kind: "call", ...loc, children: [] }, definition);
   }
 
   if (!info && !inlineChildren?.length) {
-    return { key, label, kind: "call", ...loc, children: [] };
+    return withDefinition({ key, label, kind: "call", ...loc, children: [] }, definition);
   }
 
   if (info && visiting.has(token)) {
@@ -211,13 +227,13 @@ function expandCall(
     const callSiteChildren = inlineChildren?.length
       ? expandSteps(inlineChildren, index, depth + 1, maxDepth, visiting, owner)
       : [];
-    return {
+    return withDefinition({
       key,
       label: `${label} ⇄`,
       kind: "call",
       ...loc,
       children: callSiteChildren,
-    };
+    }, definition);
   }
 
   if (info) visiting.add(token);
@@ -229,13 +245,13 @@ function expandCall(
     : [];
   if (info) visiting.delete(token);
 
-  return {
+  return withDefinition({
     key,
     label,
     kind: "call",
     ...loc,
     children: [...bodyChildren, ...callSiteChildren],
-  };
+  }, definition);
 }
 
 /**

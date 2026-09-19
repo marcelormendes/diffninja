@@ -6,6 +6,7 @@
  */
 
 import type { DiffNode, DiffTreeResult } from "../types.js";
+import type { DefinitionDetail } from "./source.js";
 import type { CallFlowFile, CallFlowNode, CallFlowStatus, ReviewItem, ReviewUnit } from "./types.js";
 
 /**
@@ -17,7 +18,20 @@ export const CALL_FLOW_MAX_ROOTS = 8;
 /** Edges below a root. The engine already stops expanding at the same depth. */
 export const CALL_FLOW_MAX_DEPTH = 4;
 export const CALL_FLOW_MAX_CHILDREN = 8;
+/**
+ * Extra children allowed per node beyond {@link CALL_FLOW_MAX_CHILDREN} when the
+ * callee is defined in another file. Without it a wide call graph drops exactly
+ * the calls a reader cannot see in the file under review.
+ */
+export const CALL_FLOW_MAX_CROSS_FILE_CHILDREN = 8;
 export const CALL_FLOW_MAX_NODES = 160;
+
+/**
+ * Definition source and prose for one node, supplied by the review service so
+ * this module stays a pure function of the engine result plus that lookup. It is
+ * only called for nodes that survive the bounds.
+ */
+export type CallFlowNodeDetail = (node: DiffNode) => DefinitionDetail;
 
 /**
  * Files with actual text hunks. Units parsed from `diff --git` metadata (mode,
@@ -49,12 +63,13 @@ export function reportOrderedTextHunkFiles(
 }
 
 /**
- * Whether tree `node` is defined in `file` or calls into it anywhere below.
- * True means the tree is worth attaching to that file: a caller several frames
- * up is exactly the reach the report has to make visible.
+ * Whether tree `node` is defined in `file`, calls into it anywhere below, or is
+ * a call the engine resolved to a definition in it. A caller several frames up
+ * is exactly the reach the report has to make visible, and a callee defined in
+ * `file` is a call this file's reader cannot see at all.
  */
 export function treeTouchesFile(node: DiffNode, file: string): boolean {
-  if (node.file === file) return true;
+  if (node.file === file || node.definition?.file === file) return true;
   return node.children.some(child => treeTouchesFile(child, file));
 }
 
@@ -77,7 +92,7 @@ function relevantNodes(root: DiffNode, file: string): Map<DiffNode, boolean> {
     for (const child of node.children) {
       if (visit(child)) childHit = true;
     }
-    const hit = node.file === file || childHit;
+    const hit = node.file === file || node.definition?.file === file || childHit;
     relevant.set(node, hit);
     return hit;
   };
@@ -126,7 +141,9 @@ function childPriority(
  * Children to serialize under `node`, in source order.
  *
  * Retain caller and callee context across files. When the breadth bound cuts
- * children, paths reaching this file and changed branches win the budget.
+ * children, paths reaching this file and changed branches win the budget, and a
+ * callee defined in another file gets a second allowance on top of the regular
+ * one: that call is the reach the reader cannot see in this file at all.
  * Survivors keep source order; scoping must not silently hide downstream calls.
  */
 function visibleChildren(
@@ -141,7 +158,19 @@ function visibleChildren(
     (left, right) => childPriority(left, view, derived) - childPriority(right, view, derived),
   );
   const kept = new Set(ranked.slice(0, CALL_FLOW_MAX_CHILDREN));
-  budget.truncated = true;
+  const callerFile = node.definition?.file ?? node.file;
+  let extra = 0;
+  for (const child of ranked.slice(CALL_FLOW_MAX_CHILDREN)) {
+    if (extra >= CALL_FLOW_MAX_CROSS_FILE_CHILDREN) break;
+    const calleeFile = child.definition?.file;
+    if (calleeFile === undefined || calleeFile === callerFile) continue;
+    kept.add(child);
+    extra += 1;
+  }
+  // Only a call that actually left the report is a truncation: the extra
+  // allowance can cover a wide node completely, and claiming a cut that never
+  // happened would make the flag mean nothing.
+  if (kept.size < candidates.length) budget.truncated = true;
   return candidates.filter(child => kept.has(child));
 }
 
@@ -151,6 +180,7 @@ function serializeNode(
   view: FileView,
   derived: Map<DiffNode, CallFlowStatus>,
   budget: SerializeBudget,
+  detail?: CallFlowNodeDetail,
 ): CallFlowNode | null {
   if (budget.remaining <= 0) {
     budget.truncated = true;
@@ -169,7 +199,7 @@ function serializeNode(
     );
     const serializedChildren = new Map<DiffNode, CallFlowNode>();
     for (const child of ranked) {
-      const childNode = serializeNode(child, depth + 1, view, derived, budget);
+      const childNode = serializeNode(child, depth + 1, view, derived, budget, detail);
       if (childNode === null) break;
       serializedChildren.set(child, childNode);
     }
@@ -188,10 +218,18 @@ function serializeNode(
   };
   if (node.file !== undefined) serialized.file = node.file;
   if (node.line !== undefined) serialized.line = node.line;
+  if (node.endLine !== undefined) serialized.endLine = node.endLine;
+  const resolved = detail?.(node);
+  if (resolved?.description !== undefined) serialized.description = resolved.description;
+  if (resolved?.source !== undefined) serialized.source = resolved.source;
   return serialized;
 }
 
-function buildCallFlowFile(file: string, trees: readonly DiffTreeResult[]): CallFlowFile {
+function buildCallFlowFile(
+  file: string,
+  trees: readonly DiffTreeResult[],
+  detail?: CallFlowNodeDetail,
+): CallFlowFile {
   const budget: SerializeBudget = { remaining: CALL_FLOW_MAX_NODES, truncated: false };
   const roots: CallFlowNode[] = [];
   const seen = new Set<string>();
@@ -209,7 +247,7 @@ function buildCallFlowFile(file: string, trees: readonly DiffTreeResult[]): Call
     const derived = new Map<DiffNode, CallFlowStatus>();
     deriveStatuses(tree.tree, derived);
     const view: FileView = { relevant: relevantNodes(tree.tree, file) };
-    const root = serializeNode(tree.tree, 0, view, derived, budget);
+    const root = serializeNode(tree.tree, 0, view, derived, budget, detail);
     if (root === null) break;
     roots.push(root);
   }
@@ -219,15 +257,17 @@ function buildCallFlowFile(file: string, trees: readonly DiffTreeResult[]): Call
 /**
  * One bounded entry per file with actual text hunks that at least one tree
  * reaches, in the order given. Files no tree reaches are omitted rather than
- * reported as an empty tree.
+ * reported as an empty tree. `detail` adds definition source and prose; without
+ * it the trees carry structure only.
  */
 export function buildCallFlows(
   files: readonly string[],
   trees: readonly DiffTreeResult[],
+  detail?: CallFlowNodeDetail,
 ): CallFlowFile[] {
   const entries: CallFlowFile[] = [];
   for (const file of files) {
-    const entry = buildCallFlowFile(file, trees);
+    const entry = buildCallFlowFile(file, trees, detail);
     if (entry.trees.length > 0) entries.push(entry);
   }
   return entries;

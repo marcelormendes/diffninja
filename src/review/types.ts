@@ -5,13 +5,44 @@ export type ReviewStatus = "attention" | "uncertain" | "low" | "passed";
  * descendants changed, which is what makes a same-signature caller visible.
  */
 export type CallFlowStatus = "same" | "added" | "removed" | "changed";
+/**
+ * Actual resolved definition of a node, read from the snapshot it lived in.
+ * `text` is the definition's own source, never the call site's.
+ */
+export interface CallFlowSource {
+  file: string;
+  line: number;
+  endLine: number;
+  /**
+   * Opaque, printable provenance for the snapshot the text came from: the short
+   * commit of the `to` side, or of the `from` side for a removed node.
+   */
+  ref: string;
+  /**
+   * Definition source lines `line`..`endLine`, verbatim and complete. Nothing
+   * is trimmed: the report has to be readable without the repository, so a
+   * function is carried whole or not at all.
+   */
+  text: string;
+}
 /** One call in a report call-flow tree: root = definition, children = call sites. */
 export interface CallFlowNode {
   key: string;
   label: string;
   status: CallFlowStatus;
+  /** File containing the call site (the root's own definition file at depth 0). */
   file?: string;
   line?: number;
+  /** End line of a call site spanning several lines. */
+  endLine?: number;
+  /**
+   * Verbatim first prose line of the definition's attached leading comment, or
+   * of its Python docstring. Absent when the definition has neither, or when its
+   * source could not be read. Never generated.
+   */
+  description?: string;
+  /** Absent when the call has no indexed definition, or its source is unreadable. */
+  source?: CallFlowSource;
   children: CallFlowNode[];
 }
 /** Bounded call-flow trees that touch one changed file. */

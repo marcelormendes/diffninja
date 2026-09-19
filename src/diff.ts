@@ -11,18 +11,22 @@ export function diffTrees(before: CallNode, after: CallNode): DiffNode {
 
 function diffNode(before: CallNode | null, after: CallNode | null): DiffNode {
   if (before && after) {
-    return {
+    const node: DiffNode = {
       key: after.key,
       label: after.label,
       kind: after.kind ?? before.kind,
       ...pickLoc(after.file ? after : before),
+      // The definition is the one `after` resolved: a call whose callee lost its
+      // indexed definition reports no definition rather than a stale before one.
       status: "same",
       children: diffChildren(before.children, after.children),
     };
+    if (after.definition) node.definition = after.definition;
+    return node;
   }
 
   if (after) {
-    return {
+    const node: DiffNode = {
       key: after.key,
       label: after.label,
       kind: after.kind,
@@ -30,10 +34,12 @@ function diffNode(before: CallNode | null, after: CallNode | null): DiffNode {
       status: "added",
       children: after.children.map(markTree("added")),
     };
+    if (after.definition) node.definition = after.definition;
+    return node;
   }
 
   if (before) {
-    return {
+    const node: DiffNode = {
       key: before.key,
       label: before.label,
       kind: before.kind,
@@ -41,6 +47,8 @@ function diffNode(before: CallNode | null, after: CallNode | null): DiffNode {
       status: "removed",
       children: before.children.map(markTree("removed")),
     };
+    if (before.definition) node.definition = before.definition;
+    return node;
   }
 
   throw new Error("diffNode called with no trees");
@@ -48,7 +56,7 @@ function diffNode(before: CallNode | null, after: CallNode | null): DiffNode {
 
 function markTree(status: "added" | "removed") {
   return function mark(node: CallNode): DiffNode {
-    return {
+    const marked: DiffNode = {
       key: node.key,
       label: node.label,
       kind: node.kind,
@@ -56,6 +64,8 @@ function markTree(status: "added" | "removed") {
       status,
       children: node.children.map(mark),
     };
+    if (node.definition) marked.definition = node.definition;
+    return marked;
   };
 }
 

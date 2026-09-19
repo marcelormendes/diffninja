@@ -104,7 +104,12 @@ describe("review HTML", () => {
           title: ATTACK, source: ATTACK, createdAt: ATTACK, warnings: [ATTACK], callFlow: [ATTACK],
           callFlowAvailability: "available",
           callFlows: [{ file: ATTACK, truncated: false, trees: [
-            { key: ATTACK, label: ATTACK, file: ATTACK, line: 1, status: "added", children: [] },
+            {
+              key: ATTACK, label: ATTACK, file: ATTACK, line: 1, endLine: 2, status: "added",
+              description: ATTACK,
+              source: { file: ATTACK, line: 1, endLine: 2, ref: ATTACK, text: ATTACK },
+              children: [],
+            },
           ] }],
         },
       ),
@@ -233,7 +238,7 @@ describe("review HTML", () => {
     expect(html).toContain('data-filter="uncertain" data-count="0"');
     expect(html).toContain('data-filter="low" data-count="1"');
     expect(html).toContain('data-filter="passed" data-count="0"');
-    expect([...html.matchAll(/aria-pressed="true"/g)]).toHaveLength(4);
+    expect([...html.matchAll(/data-filter="\w+" data-count="\d+" aria-pressed="true"/g)]).toHaveLength(4);
     for (const status of ["attention", "uncertain", "low", "passed"]) {
       const chip = new RegExp(
         `<button[^>]*data-filter="${status}"[^>]*>(<span class="dot dot-${status}" aria-hidden="true"></span>)`,

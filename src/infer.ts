@@ -216,7 +216,11 @@ export function diffEntry(
       label: beforeTree.label,
       children: [],
     });
-    return { ...diff, status: "removed" };
+    // The after side is a stub with no definition; the removed root is still a
+    // definition in the before snapshot, so keep it for source lookups.
+    diff.status = "removed";
+    if (beforeTree.definition) diff.definition = beforeTree.definition;
+    return diff;
   }
 
   const diff = diffTrees(beforeTree, afterTree);
@@ -257,7 +261,10 @@ export function diffPinnedEntry(
       label: beforeTree.label,
       children: [],
     });
-    return { ...diff, status: "removed" };
+    // Same as diffEntry: a removed root keeps the definition it had in `before`.
+    diff.status = "removed";
+    if (beforeTree.definition) diff.definition = beforeTree.definition;
+    return diff;
   }
 
   const diff = diffTrees(beforeTree, afterTree);

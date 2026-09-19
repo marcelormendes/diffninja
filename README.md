@@ -104,25 +104,40 @@ call paths. Call flow files follow their most severe hunk, with a **View diff**
 link to that hunk. The coverage count states how many changed files have trees.
 
 - **Tree** folds with native disclosure arrows. Click a function name to zoom
-  into its subtree; breadcrumbs go back through its callers or to all files.
-- **Graph** draws the same calls as an inline SVG, layered by depth. Click a
-  node to isolate and crop its subtree. Wide graphs scroll within the report.
+  into its subtree; **Source** opens the function definition.
+- **Graph** draws calls as an inline SVG. Click a box for source details, or its
+  `+` control or a numbered edge to zoom into the receiver. **Depth 1 / 2 / 3 / all**
+  limits visible edges below the current focus. “All” means all retained nodes,
+  not an unbounded repository graph. Wide graphs scroll within the report.
 - **Sequence** shows root-to-leaf `A → B → C` chip strips, not runtime execution
   order. It displays up to 10 paths per file in the current focus; focusing a
   branch can reveal paths outside the initial ten.
 
-Focus carries across diagram modes. **Escape** returns to all files. Changed
-nodes use their file's most severe hunk color, not an independent assessment of
-the function. `+` means added, `−` removed, and `~` a retained caller containing
-structural changes below it. Unchanged calls are dimmed. Locations are root
-definitions and child call sites, not necessarily callee definitions. Removed
-locations refer to the old snapshot.
+Focus carries across diagram modes. Click a visited-function breadcrumb to return
+to that level and discard later steps; cross-file receivers show their file in
+the trail. **Escape** closes source details first, then returns to all files.
+Changed nodes use their file's most severe hunk color, not an independent
+assessment of the function. Status marks
+`+`, `−`, and `~` mean added, removed, and a retained caller containing structural
+changes below it. Unchanged calls are dimmed but retain all navigation and source
+controls. Edge numbers identify retained syntactic calls, not execution order.
+
+Source is embedded when the report is generated, including resolved definitions
+in files outside the diff. It comes from the immutable **to** commit, or **from**
+for removed calls, with a path, line range, and commit reference. Missing files,
+invalid ranges, and unresolved definitions show an unavailable-source note, never
+a guessed body. One-line descriptions quote attached source comments/docstrings
+only; functions without them get no description. No source is fetched by the
+browser. Reports therefore contain unchanged code as well as changed hunks;
+keep them private.
 
 Trees come directly from calldiff's `DiffNode` results, never from ASCII or
-generated explanations. The JSON keeps only `key`, `label`, `status`, optional
-`file`/`line`, and `children` per node. Per-file limits: **8 roots, 4 edges deep
-(root at depth zero), 8 children per node, 160 total nodes**. Pruning favors
-branches reaching that file and changed calls, retaining source order. A
+generated explanations. Nodes carry `key`, `label`, `status`, `children`, optional
+call-site `file`/`line`/`endLine`, resolved `source`, and a comment-derived
+`description` when present. Per-file limits: **8 roots, 4 edges deep
+(root at depth zero), 8 children per node plus up to 8 extra cross-file callees,
+160 total nodes**. Pruning favors branches reaching that file and changed calls,
+retaining source order. A
 `truncated` flag records serialization cuts; the engine also stops expanding
 at depth 4. Caller/callee context can cross file boundaries. Files without text
 hunks or engine trees have no structured entry.

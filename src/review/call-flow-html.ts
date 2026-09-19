@@ -1,4 +1,18 @@
+import {
+  CALL_FLOW_MAX_CHILDREN,
+  CALL_FLOW_MAX_CROSS_FILE_CHILDREN,
+  CALL_FLOW_MAX_DEPTH,
+  CALL_FLOW_MAX_NODES,
+  CALL_FLOW_MAX_ROOTS,
+} from "./call-flow.js";
+import {
+  CALL_FLOW_DEFAULT_DEPTH,
+  CALL_FLOW_DEPTHS,
+  CALL_FLOW_MODES,
+  CALL_FLOW_NAV_SOURCE,
+} from "./call-flow-nav.js";
 import { escapeHtml } from "./escape-html.js";
+import type { FlowMode } from "./call-flow-nav.js";
 import type {
   CallFlowAvailability,
   CallFlowFile,
@@ -14,15 +28,19 @@ import type {
  * the syntactic call trees that touch each changed file.
  *
  * Everything is server-rendered, so all three modes are readable with
- * JavaScript disabled: mode sections stack under their own headings, and tree
- * nodes fold with native `<details>`. The appended script only switches modes,
- * zooms into a subtree and rebuilds the breadcrumb; it reads every label from
- * the escaped DOM and never receives report text.
+ * JavaScript disabled: mode sections stack under their own headings, tree
+ * nodes fold with native `<details>`, and the resolved definition of a call —
+ * line-numbered and escaped — sits in its own `<details>` under the call. The
+ * appended script switches modes, keeps an explicit trail of the functions the
+ * reviewer visited, limits the graph to a depth below the focused call, and
+ * repeats one node's server-rendered source in a single panel; it reads every
+ * label from the escaped DOM and never receives report text.
  *
  * Node identity is an occurrence path (`0-2-1`), never a key or a name, so
- * duplicate and hostile keys stay distinct. Status reaches the reviewer as a
- * glyph plus color for a call that was added, removed, or contains a change,
- * and plain dimmed text for an unchanged call.
+ * duplicate and hostile keys stay distinct, and trail entries carry the file
+ * section as well, so the same path in two files stays two entries. Status
+ * reaches the reviewer as a glyph plus color for a call that was added,
+ * removed, or contains a change, and plain dimmed text for an unchanged call.
  */
 export function renderCallFlows(report: ReviewReport): string {
   const files = collectFiles(report.callFlows, report.items);
@@ -34,7 +52,13 @@ export function renderCallFlows(report: ReviewReport): string {
     renderSummary(files, new Set(report.items.map(item => item.file)).size),
     renderControls(),
     renderJump(files),
-    '<nav class="cf-crumbs" id="cf-crumbs" aria-label="Call flow focus" hidden></nav>',
+    '<nav class="cf-crumbs" id="cf-crumbs" aria-label="Visited call trail" hidden></nav>',
+    // One panel the script fills with the focused call's definition; without the
+    // script each call keeps its own server-rendered source disclosure instead.
+    '<details class="cf-src-panel" id="cf-src-panel" hidden>',
+    '<summary class="cf-src-panel-sum">Source details</summary>',
+    '<div class="cf-src-panel-body" id="cf-src-panel-body"></div>',
+    "</details>",
     '<div class="cf-files">',
     files.map((view, index) => renderFile(view, index + 1)).join("\n"),
     "</div>",
@@ -78,9 +102,7 @@ const MODE_LABEL = {
   sequence: "Sequence",
 } as const;
 
-type FlowMode = keyof typeof MODE_LABEL;
-
-const MODES: readonly FlowMode[] = ["tree", "graph", "sequence"];
+const MODES: readonly FlowMode[] = CALL_FLOW_MODES;
 
 const AVAILABILITY_NOTE = {
   available: "No call tree reaches a changed file in this range. This is not evidence of safety.",
@@ -92,7 +114,15 @@ const AVAILABILITY_NOTE = {
 /** Call paths drawn per file in Sequence mode before the omitted-path note. */
 const SEQUENCE_LIMIT = 10;
 
+/** What the serializer keeps per changed file; the UI states the same bounds. */
+const BOUNDS_TEXT =
+  `roots ≤${CALL_FLOW_MAX_ROOTS}, depth ≤${CALL_FLOW_MAX_DEPTH} edges, ` +
+  `≤${CALL_FLOW_MAX_CHILDREN} calls per node (up to ${CALL_FLOW_MAX_CROSS_FILE_CHILDREN} more when the callee is defined in another file), ` +
+  `${CALL_FLOW_MAX_NODES} nodes per file`;
+
 const GRAPH_NODE_HEIGHT = 40;
+/** Extra box height for the one-line description the backend may attach. */
+const GRAPH_DESC_HEIGHT = 13;
 const GRAPH_LEVEL_GAP = 32;
 const GRAPH_COLUMN_GAP = 20;
 const GRAPH_PAD = 8;
@@ -175,22 +205,35 @@ function renderSummary(files: readonly FileView[], totalFiles: number): string {
   const coverage = `${plural(calls, "call")} across ${files.length} of ${totalFiles} changed files`;
   return [
     '<div class="cf-head">',
-    '<p class="cf-prov" title="Up to 8 roots, 4 edges deep, 8 children per node and 160 nodes per file. Dynamic calls may be absent.">Syntactic calls · depth ≤4 · + added · − removed · ~ changed</p>',
+    `<p class="cf-prov" title="${escapeHtml(`Bounds per file: ${BOUNDS_TEXT}. Source is the complete resolved definition at the reviewed revision. Dynamic calls may be absent.`)}">Syntactic calls · depth ≤4 · + added · − removed · ~ changed</p>`,
     `<p class="cf-note">${escapeHtml(coverage)}</p>`,
     "</div>",
   ].join("\n");
 }
 
 /** Mode anchors work without JavaScript (each jumps to its section); the
- *  script marks the active one with aria-current once all modes are switchable. */
+ *  script marks the active one with aria-current once all modes are switchable.
+ *  The depth control exists only with the script and only bounds the graph: it
+ *  counts call levels below the focused call, and the focus itself resets it. */
 function renderControls(): string {
   const links = MODES.map(
     (mode) =>
       `<a class="cf-mode-link" data-cf-mode="${mode}" href="#cf-f1-${mode}">${MODE_LABEL[mode]}</a>`,
   ).join("");
+  const depths = CALL_FLOW_DEPTHS.map(
+    (depth) =>
+      `<button type="button" class="cf-depth-btn" data-cf-depth="${depth}"` +
+      ` aria-pressed="${depth === CALL_FLOW_DEFAULT_DEPTH ? "true" : "false"}"` +
+      ` title="Show ${depth === "all" ? "every serialized call" : `${depth} call ${depth === 1 ? "level" : "levels"}`} below the focus">` +
+      `${depth === "all" ? "All" : depth}</button>`,
+  ).join("");
   return [
     '<div class="cf-controls">',
     `<div class="cf-modes" role="group" aria-label="Call flow mode">${links}</div>`,
+    '<div class="cf-depth enhanced" role="group" aria-label="Graph depth below the focused call">',
+    '<span class="cf-depth-label">Graph depth</span>',
+    depths,
+    "</div>",
     '<p class="cf-note cf-order">Call paths, not execution order</p>',
     "</div>",
   ].join("\n");
@@ -243,7 +286,7 @@ function renderFile(view: FileView, at: number): string {
     "</summary>",
     '<div class="cf-file-body">',
     view.truncated
-      ? '<p class="cf-bounds">Bounds reached for this file: roots ≤8, depth ≤4 edges, ≤8 calls per node, 160 nodes. Calls cut at a bound are omitted.</p>'
+      ? `<p class="cf-bounds">Bounds reached for this file: ${escapeHtml(BOUNDS_TEXT)}. Calls cut at a bound are omitted.</p>`
       : "",
     renderModes(view, at),
     "</div>",
@@ -277,6 +320,59 @@ function renderTreeMode(view: FileView, at: number): string {
   return modeSection("tree", at, `<ul class="cf-tree">${trees}</ul>`);
 }
 
+/** The resolved definition of one call. It is a native disclosure, so the actual
+ *  source is readable without the script, and the script clones this body into
+ *  its single panel instead of sending report text through the DOM builder. */
+function renderSource(node: CallFlowNode, path: string, at: number): string {
+  const source = node.source;
+  if (!source) {
+    return `<details class="cf-source" id="cf-f${at}-src-${path}">` +
+      '<summary class="cf-src-sum">Source unavailable</summary>' +
+      '<div class="cf-src-body"><p class="cf-src-note">No resolved definition source for this call.</p></div></details>';
+  }
+  const location = sourceLocationText(source);
+  const lines = source.text.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const body =
+    lines.every((line) => line.trim() === "")
+      ? '<p class="cf-src-note">No definition text was captured for this call.</p>'
+      : [
+          '<pre class="cf-src-code">',
+          lines
+            .map(
+              (line, index) =>
+                '<span class="cf-src-line">' +
+                `<span class="cf-src-no" aria-hidden="true">${source.line + index}</span>` +
+                `${escapeHtml(line)}</span>`,
+            )
+            .join(""),
+          "</pre>",
+        ].join("");
+  const ref = source.ref === "" ? "" : ` · resolved from ${source.ref}`;
+  return [
+    `<details class="cf-source" id="cf-f${at}-src-${path}">`,
+    `<summary class="cf-src-sum mono">${escapeHtml(location)}</summary>`,
+    '<div class="cf-src-body">',
+    `<p class="cf-src-ref mono">${escapeHtml(`Definition in ${location}${ref}`)}</p>`,
+    body,
+    "</div>",
+    "</details>",
+  ].join("");
+}
+
+/** Identity and the two files a node is known by: the resolved definition file
+ *  when the backend resolved one, and the call-site file the node carries. */
+function nodeAttrs(node: CallFlowNode, path: string, at: number): string {
+  const source = node.source;
+  return [
+    ` id="cf-f${at}-t-${path}"`,
+    ` data-cf-file="${at}"`,
+    ` data-cf-path="${path}"`,
+    source ? ` data-cf-srcfile="${escapeHtml(source.file)}"` : "",
+    node.file === undefined ? "" : ` data-cf-nodefile="${escapeHtml(node.file)}"`,
+  ].join("");
+}
+
 function renderTreeNode(
   node: CallFlowNode,
   path: readonly number[],
@@ -298,26 +394,33 @@ function renderTreeNode(
     loc === ""
       ? '<span class="cf-loc cf-loc-none">no source location</span>'
       : `<span class="cf-loc mono">${escapeHtml(loc)}</span>`,
+    node.description ? `<span class="cf-desc">${escapeHtml(node.description)}</span>` : "",
+    // An anchor, not a button: it reaches the disclosure below without the script.
+    `<a class="cf-src-link" href="#cf-f${at}-src-${id}" data-cf-source` +
+      ` data-cf-file="${at}" data-cf-path="${id}">${node.source ? "source" : "details"}</a>`,
   ]
     .filter((part) => part !== "")
     .join("");
   const classes = ["cf-node", `cf-st-${status}`];
   if (inFile) classes.push("cf-infile");
   const kids = node.children;
+  const source = renderSource(node, id, at);
   if (kids.length === 0) {
-    return `<li class="${classes.join(" ")} cf-leaf" id="cf-f${at}-t-${id}" data-cf-file="${at}" data-cf-path="${id}"><span class="cf-row">${row}</span></li>`;
+    return `<li class="${classes.join(" ")} cf-leaf"${nodeAttrs(node, id, at)}><span class="cf-row">${row}</span>${source}</li>`;
   }
   const children = kids
     .map((child, childAt) => renderTreeNode(child, path.concat([childAt]), at, changedFile))
     .join("\n");
   return [
-    `<li class="${classes.join(" ")}" id="cf-f${at}-t-${id}" data-cf-file="${at}" data-cf-path="${id}">`,
+    `<li class="${classes.join(" ")}"${nodeAttrs(node, id, at)}>`,
     '<details class="cf-fold" open>',
     `<summary class="cf-row">${row}</summary>`,
     `<ul class="cf-children">${children}</ul>`,
     "</details>",
-    "</li>",
-  ].join("");
+    source,
+  ]
+    .filter((part) => part !== "")
+    .join("");
 }
 
 /** The mark is drawn only for a call that changed; `same` keeps its label dim. */
@@ -329,19 +432,33 @@ function statusBadge(status: CallFlowStatus, extra: string): string {
   ].join("");
 }
 
-/** `file:line` when both are known, the file alone when the line is not. */
+/** The resolved-definition record the backend attaches when it resolved one. */
+type ResolvedSource = NonNullable<CallFlowNode["source"]>;
+
+/** `file:line` or `file:line-endLine` for the resolved definition. */
+function sourceLocationText(source: ResolvedSource): string {
+  const end = source.endLine;
+  return `${source.file}:${end > source.line ? `${source.line}-${end}` : `${source.line}`}`;
+}
+
+/** `file:line` when both are known, `file:line-endLine` for a call that spans
+ *  lines, the file alone when the line is not known. */
 function locationText(node: CallFlowNode): string {
   const file = node.file ?? "";
   const line = node.line ?? null;
-  if (file === "") return line === null ? "" : `line ${line}`;
-  return line === null ? file : `${file}:${line}`;
+  const end = node.endLine ?? null;
+  if (line === null) return file;
+  const span = end !== null && end > line ? `${line}-${end}` : `${line}`;
+  return file === "" ? `line ${span}` : `${file}:${span}`;
 }
 
 function renderGraphMode(view: FileView, at: number): string {
   const figures = view.trees
     .map((tree, root) => {
       const layout = layoutTree(tree, [root]);
-      const edges = layout.edges.map(renderGraphEdge).join("");
+      const edges = layout.edges
+        .map((edge, index) => renderGraphEdge(edge, index + 1, layout.edges.length, at))
+        .join("");
       const boxes = layout.boxes
         .map((box) => renderGraphNode(box, at, view.file))
         .join("");
@@ -354,7 +471,11 @@ function renderGraphMode(view: FileView, at: number): string {
       ].join("");
     })
     .join("\n");
-  return modeSection("graph", at, figures);
+  return modeSection(
+    "graph",
+    at,
+    `${figures}<p class="cf-note cf-edge-note">Click a box for source. Click + or a numbered edge to zoom into the receiver. Numbers identify static calls, not execution order.</p>`,
+  );
 }
 
 interface GraphBox {
@@ -363,8 +484,11 @@ interface GraphBox {
   x: number;
   y: number;
   readonly width: number;
+  /** Taller when the backend attached a description line. */
+  readonly height: number;
   readonly labelChars: number;
   readonly locChars: number;
+  readonly descChars: number;
 }
 
 interface GraphLayout {
@@ -376,8 +500,10 @@ interface GraphLayout {
 
 /**
  * Hand layout: one row per call depth, boxes packed left to right and centred
- * per row, elbow edges from parent bottom to child top. The SVG keeps its
- * pixel size so labels stay readable; the wrapper scrolls instead of the page.
+ * per row, elbow edges from parent bottom to child top. A row is as tall as its
+ * tallest box, so a description line on one call never overlaps the next row.
+ * The SVG keeps its pixel size so labels stay readable; the wrapper scrolls
+ * instead of the page.
  */
 function layoutTree(root: CallFlowNode, rootPath: readonly number[]): GraphLayout {
   const levels: GraphBox[][] = [];
@@ -385,11 +511,20 @@ function layoutTree(root: CallFlowNode, rootPath: readonly number[]): GraphLayou
   const edges: Array<{ from: GraphBox; to: GraphBox }> = [];
   const walk = (node: CallFlowNode, path: readonly number[], parent: GraphBox | null): void => {
     const loc = locationText(node);
+    const description = node.description ?? "";
     const labelChars = Math.max(1, node.label.length + (node.status === "same" ? 0 : 2));
     const width = Math.ceil(
       Math.min(
         GRAPH_MAX_WIDTH,
-        Math.max(GRAPH_MIN_WIDTH, 24 + Math.max(labelChars * GRAPH_CHAR, loc.length * GRAPH_LOC_CHAR)),
+        Math.max(
+          GRAPH_MIN_WIDTH,
+          48 +
+            Math.max(
+              labelChars * GRAPH_CHAR,
+              loc.length * GRAPH_LOC_CHAR,
+              description.length * GRAPH_LOC_CHAR,
+            ),
+        ),
       ),
     );
     const box: GraphBox = {
@@ -398,8 +533,10 @@ function layoutTree(root: CallFlowNode, rootPath: readonly number[]): GraphLayou
       x: 0,
       y: 0,
       width,
-      labelChars: Math.floor((width - 24) / GRAPH_CHAR),
+      height: description === "" ? GRAPH_NODE_HEIGHT : GRAPH_NODE_HEIGHT + GRAPH_DESC_HEIGHT,
+      labelChars: Math.floor((width - 48) / GRAPH_CHAR),
       locChars: Math.floor((width - 24) / GRAPH_LOC_CHAR),
+      descChars: Math.floor((width - 24) / GRAPH_LOC_CHAR),
     };
     const depth = path.length - 1;
     const level = levels[depth];
@@ -416,10 +553,13 @@ function layoutTree(root: CallFlowNode, rootPath: readonly number[]): GraphLayou
       level.reduce((total, box) => total + box.width, 0) +
       GRAPH_COLUMN_GAP * Math.max(0, level.length - 1),
   );
+  const levelHeights = levels.map((level) => Math.max(...level.map((box) => box.height)));
   const widest = Math.max(...levelWidths, GRAPH_MIN_WIDTH) + GRAPH_PAD * 2;
+  let top = GRAPH_PAD;
   levels.forEach((level, depth) => {
     let x = GRAPH_PAD + Math.max(0, (widest - GRAPH_PAD * 2 - levelWidths[depth]) / 2);
-    const y = GRAPH_PAD + depth * (GRAPH_NODE_HEIGHT + GRAPH_LEVEL_GAP);
+    const y = top;
+    top += levelHeights[depth] + GRAPH_LEVEL_GAP;
     for (const box of level) {
       box.x = Math.round(x);
       box.y = y;
@@ -427,20 +567,36 @@ function layoutTree(root: CallFlowNode, rootPath: readonly number[]): GraphLayou
     }
   });
   const height =
-    GRAPH_PAD * 2 + levels.length * GRAPH_NODE_HEIGHT + Math.max(0, levels.length - 1) * GRAPH_LEVEL_GAP;
+    GRAPH_PAD * 2 +
+    levelHeights.reduce((total, level) => total + level, 0) +
+    Math.max(0, levels.length - 1) * GRAPH_LEVEL_GAP;
   return { boxes, edges, width: Math.round(widest), height: Math.round(height) };
 }
 
-function renderGraphEdge(edge: { from: GraphBox; to: GraphBox }): string {
+/** Elbow edge plus the number of that call in the serialized diagram. The
+ *  number is a link, because it zooms into the callee the edge points at. */
+function renderGraphEdge(
+  edge: { from: GraphBox; to: GraphBox },
+  number: number,
+  total: number,
+  at: number,
+): string {
   const { from, to } = edge;
+  const id = to.path.join("-");
   const x1 = Math.round(from.x + from.width / 2);
-  const y1 = Math.round(from.y + GRAPH_NODE_HEIGHT);
+  const y1 = Math.round(from.y + from.height);
   const x2 = Math.round(to.x + to.width / 2);
   const y2 = Math.round(to.y);
   const mid = Math.round(y1 + (y2 - y1) / 2);
+  const title = `${from.node.label} → ${to.node.label} · call ${number} of ${total} in serialized order`;
   return [
-    `<path class="cf-edge" data-cf-edge-child="${to.path.join("-")}"`,
+    `<path class="cf-edge" data-cf-edge-child="${id}"`,
     ` d="M${x1} ${y1} V${mid} H${x2} V${y2}"></path>`,
+    `<a class="cf-edge-num" data-cf-edge="${number}" href="#cf-f${at}-t-${id}" data-cf-zoom data-cf-file="${at}" data-cf-path="${id}">`,
+    `<title>${escapeHtml(title)}</title>`,
+    `<circle cx="${x2}" cy="${mid}" r="9"></circle>`,
+    `<text class="cf-edge-num-text" x="${x2}" y="${mid + 4}" text-anchor="middle">${number}</text>`,
+    "</a>",
   ].join("");
 }
 
@@ -449,18 +605,37 @@ function renderGraphNode(box: GraphBox, at: number, changedFile: string): string
   const path = box.path.join("-");
   const status = node.status;
   const loc = locationText(node);
+  const source = node.source;
+  const description = node.description ?? "";
+  const desc = description === "" ? "" : clip(description, box.descChars);
   const inFile = node.file === changedFile;
-  const title = [node.label, loc === "" ? "no source location" : loc, STATUS_WORD[status]].join(" · ");
+  const action = `href="#cf-f${at}-src-${path}" data-cf-source`;
+  const title = [
+    node.label,
+    loc === "" ? "no source location" : loc,
+    STATUS_WORD[status],
+    description,
+    source ? `definition in ${sourceLocationText(source)}` : "no resolved definition source",
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
   const mark = STATUS_MARK[status];
   const label = clip(mark ? `${mark} ${node.label}` : node.label, box.labelChars);
   return [
-    `<a class="cf-gnode cf-st-${status}${inFile ? " cf-infile" : ""}" href="#cf-f${at}-t-${path}" data-cf-zoom data-cf-file="${at}" data-cf-path="${path}">`,
+    `<a class="cf-gnode cf-st-${status}${inFile ? " cf-infile" : ""}" ${action} data-cf-file="${at}" data-cf-path="${path}">`,
     `<title>${escapeHtml(title)}</title>`,
-    `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${GRAPH_NODE_HEIGHT}" rx="7"></rect>`,
-    `<text class="cf-glabel" x="${box.x + 12}" y="${loc === "" ? box.y + 25 : box.y + 17}">${escapeHtml(label)}</text>`,
+    `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="7"></rect>`,
+    `<text class="cf-glabel" x="${box.x + 12}" y="${loc === "" && desc === "" ? box.y + 25 : box.y + 17}">${escapeHtml(label)}</text>`,
     loc === ""
       ? ""
       : `<text class="cf-gloc" x="${box.x + 12}" y="${box.y + 31}">${escapeHtml(clip(loc, box.locChars))}</text>`,
+    desc === ""
+      ? ""
+      : `<text class="cf-gdesc" x="${box.x + 12}" y="${loc === "" ? box.y + 31 : box.y + 44}">${escapeHtml(desc)}</text>`,
+    "</a>",
+    `<a class="cf-gzoom" href="#cf-f${at}-t-${path}" data-cf-zoom data-cf-file="${at}" data-cf-path="${path}" aria-label="Zoom into ${escapeHtml(node.label)}">`,
+    `<circle cx="${box.x + box.width - 13}" cy="${box.y + 13}" r="10"></circle>`,
+    `<text x="${box.x + box.width - 13}" y="${box.y + 17}" text-anchor="middle">+</text>`,
     "</a>",
   ]
     .filter((part) => part !== "")
@@ -512,18 +687,28 @@ function renderPath(
   return `<li class="cf-path" data-cf-file="${at}" data-cf-path="${leaf.path.join("-")}"${hidden ? " hidden" : ""}>${chips}</li>`;
 }
 
+/** A chip is the step's zoom target plus, when the backend resolved it, its own
+ *  source link: without the script both are plain anchors that reach the tree. */
 function renderChip(step: { node: CallFlowNode; path: readonly number[] }, at: number): string {
   const path = step.path.join("-");
-  const status = step.node.status;
-  const loc = locationText(step.node);
+  const node = step.node;
+  const status = node.status;
+  const loc = locationText(node);
   const title = loc === "" ? "" : ` title="${escapeHtml(loc)}"`;
   return [
-    `<a class="cf-chip cf-st-${status}" href="#cf-f${at}-t-${path}" data-cf-zoom data-cf-file="${at}" data-cf-path="${path}"${title}>`,
+    `<span class="cf-chip cf-st-${status}"${title}>`,
+    `<a class="cf-chip-zoom" href="#cf-f${at}-t-${path}" data-cf-zoom data-cf-file="${at}" data-cf-path="${path}">`,
     statusBadge(status, "cf-chip-badge"),
-    `<span class="cf-chip-label mono">${escapeHtml(step.node.label)}</span>`,
+    `<span class="cf-chip-label mono">${escapeHtml(node.label)}</span>`,
     loc === "" ? "" : `<span class="cf-chip-loc mono">${escapeHtml(loc)}</span>`,
     "</a>",
-  ].join("");
+    node.description ? `<span class="cf-desc">${escapeHtml(node.description)}</span>` : "",
+    `<a class="cf-src-link" href="#cf-f${at}-src-${path}" data-cf-source` +
+      ` data-cf-file="${at}" data-cf-path="${path}">${node.source ? "source" : "details"}</a>`,
+    "</span>",
+  ]
+    .filter((part) => part !== "")
+    .join("");
 }
 
 export const CALL_FLOW_STYLES = `
@@ -596,12 +781,19 @@ export const CALL_FLOW_STYLES = `
 .cf-crumbs {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
   font-size: 12.5px;
-  overflow-wrap: anywhere;
+  padding-bottom: 3px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 .cf-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 34ch;
   font: inherit;
   font-size: 12px;
   padding: 3px 10px;
@@ -610,9 +802,19 @@ export const CALL_FLOW_STYLES = `
   background: var(--panel);
   color: var(--ink);
   cursor: pointer;
+  white-space: nowrap;
 }
 .cf-crumb[aria-current] { border-color: var(--cursor); font-weight: 600; }
-.cf-sep { color: var(--ink-soft); }
+.cf-crumb-label { overflow: hidden; text-overflow: ellipsis; }
+.cf-crumb-file {
+  flex: 0 0 auto;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.cf-sep { flex: 0 0 auto; color: var(--ink-soft); }
 .cf-files { display: flex; flex-direction: column; gap: 12px; }
 .cf-file {
   background: var(--panel);
@@ -716,6 +918,10 @@ export const CALL_FLOW_STYLES = `
 .cf-gnode rect { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1.5; }
 .cf-gnode:hover rect, .cf-gnode:focus-visible rect { stroke: var(--cursor); stroke-width: 2.5; }
 .cf-gnode:focus-visible { outline: none; }
+.cf-gzoom circle { fill: var(--panel); stroke: var(--line-strong); }
+.cf-gzoom text { fill: var(--ink); font: 14px var(--mono); }
+.cf-gzoom:hover circle, .cf-gzoom:focus-visible circle { stroke: var(--cursor); stroke-width: 2; }
+.cf-gzoom:focus-visible { outline: none; }
 .cf-glabel { font-family: var(--mono); font-size: 12px; fill: var(--ink); }
 .cf-gloc { font-family: var(--mono); font-size: 10px; fill: var(--ink-soft); }
 .cf-gnode.cf-st-same rect { stroke: var(--line); fill: transparent; }
@@ -743,42 +949,120 @@ export const CALL_FLOW_STYLES = `
   border-radius: 999px;
   background: var(--panel);
   color: var(--ink);
+}
+.cf-chip:hover, .cf-chip:focus-within { border-color: var(--cursor); }
+.cf-chip-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  color: inherit;
   text-decoration: none;
 }
-.cf-chip:hover, .cf-chip:focus-visible { border-color: var(--cursor); }
 .cf-chip-label { font-size: 12px; overflow-wrap: anywhere; }
 .cf-chip-loc { font-size: 10.5px; color: var(--ink-soft); }
 .cf-chip.cf-st-same .cf-chip-label { color: var(--ink-soft); }
 .cf-chip:not(.cf-st-same) { border-color: var(--cf-color); background: var(--cf-fill); }
 .cf-chip:not(.cf-st-same) .cf-chip-label { color: var(--cf-color); }
+.cf-chip .cf-desc { max-width: 28ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cf-arrow { color: var(--ink-soft); font-size: 12px; }
+/* One description line per call, only when the backend attached one. */
+.cf-desc { font-size: 11.5px; color: var(--ink-soft); font-style: italic; overflow-wrap: anywhere; }
+.cf-depth { align-items: center; gap: 4px; }
+.cf-depth-label { font-size: 12px; color: var(--ink-soft); }
+.cf-depth-btn { padding: 3px 9px; font-size: 12px; }
+.cf-depth-btn[aria-pressed="true"] { border-color: var(--cursor); background: var(--sunken); font-weight: 600; }
+/* Numbered, clickable call order on the graph edges. */
+.cf-edge-num circle { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1.5; }
+.cf-edge-num text { font-family: var(--mono); font-size: 10.5px; fill: var(--ink-soft); }
+.cf-edge-num:hover circle, .cf-edge-num:focus-visible circle { stroke: var(--cursor); stroke-width: 2; }
+.cf-edge-num:hover text, .cf-edge-num:focus-visible text { fill: var(--cursor); font-weight: 700; }
+.cf-edge-num:focus-visible { outline: none; }
+.cf-gdesc { font-family: var(--mono); font-size: 10px; font-style: italic; fill: var(--ink-soft); }
+/* Resolved definition of one call: a native disclosure without the script, and
+   the body the script clones into its single shared panel. */
+.cf-source { margin: 3px 0 3px 24px; }
+.cf-ready .cf-source { display: none; }
+.cf-src-sum { width: fit-content; cursor: pointer; list-style: none; font-size: 11.5px; color: var(--ink-soft); }
+.cf-src-sum::-webkit-details-marker { display: none; }
+.cf-src-sum::before { content: "▸"; margin-right: 6px; font-size: 10px; transition: transform 0.15s ease; display: inline-block; }
+.cf-source[open] > .cf-src-sum::before { transform: rotate(90deg); }
+.cf-src-sum:hover, .cf-src-sum:focus-visible { color: var(--cursor); }
+.cf-src-body { padding: 6px 0 4px; }
+.cf-src-ref { margin: 0 0 5px; font-size: 11.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.cf-src-code {
+  margin: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+.cf-src-line { display: block; white-space: pre; }
+.cf-src-no {
+  display: inline-block;
+  width: 4ch;
+  margin-right: 10px;
+  text-align: right;
+  color: var(--ink-soft);
+  user-select: none;
+}
+.cf-src-note { margin: 0; font-size: 11.5px; color: var(--ink-soft); font-style: italic; }
+.cf-src-panel {
+  padding: 8px 12px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.cf-src-panel-sum { width: fit-content; cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.cf-src-panel-body { padding-top: 6px; }
+.cf-src-panel-body { max-height: 40vh; overflow: auto; }
+.cf-src-head-line { margin: 0 0 6px; font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.cf-src-missing { margin: 0; }
+.cf-src-link {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-decoration: underline dotted;
+  white-space: nowrap;
+}
+.cf-src-link:hover, .cf-src-link:focus-visible { color: var(--cursor); }
 @media (max-width: 680px) {
   .cf-order { margin-left: 0; }
   .cf-jump ul { max-height: 38vh; }
   .cf-jump-link { width: 100%; }
   .cf-jump-path { max-width: none; flex: 1 1 auto; }
   .cf-file-body { padding: 0 11px 12px; }
+  .cf-crumb { max-width: 24ch; }
+  .cf-crumb-file { max-width: 12ch; }
+  .cf-source { margin-left: 10px; }
+  .cf-src-no { width: 3ch; margin-right: 7px; }
 }
 `;
 
 /**
  * Progressive enhancement for the rendered call flow. Nothing here is
- * interpolated: the active mode, the zoom target and the breadcrumb labels all
- * come from attributes and text already escaped in the DOM.
+ * interpolated: the visited trail, mode, depth and the source text all come from
+ * attributes and text already escaped in the DOM, and the navigation state
+ * machine is the module the unit tests call (see CALL_FLOW_NAV_SOURCE).
  */
 export const CALL_FLOW_SCRIPT = `
 (function () {
   'use strict';
+  ${CALL_FLOW_NAV_SOURCE}
   var view = document.getElementById('view-call-flow');
   if (!view) return;
   var host = view.querySelector('.cf');
   if (!host) return;
   var files = Array.prototype.slice.call(view.querySelectorAll('.cf-file'));
   var modeLinks = Array.prototype.slice.call(view.querySelectorAll('[data-cf-mode]'));
+  var depthButtons = Array.prototype.slice.call(view.querySelectorAll('[data-cf-depth]'));
   var crumbNav = document.getElementById('cf-crumbs');
-  var modes = ['tree', 'graph', 'sequence'];
-  var mode = 'tree';
-  var focus = null;
+  var sourcePanel = document.getElementById('cf-src-panel');
+  var sourceBody = document.getElementById('cf-src-panel-body');
+  var state = cfNav.createState();
 
   function fileAt(index) {
     for (var i = 0; i < files.length; i++) {
@@ -787,19 +1071,25 @@ export const CALL_FLOW_SCRIPT = `
     return null;
   }
 
-  function under(path, at) {
-    return at === '' || path === at || path.indexOf(at + '-') === 0;
-  }
-
-  function onChain(path, at) {
-    return at === '' || path === at || at.indexOf(path + '-') === 0;
-  }
-
   function each(list, at) {
     for (var i = 0; i < list.length; i++) {
       if (list[i].getAttribute('data-cf-path') === at) return list[i];
     }
     return null;
+  }
+
+  function nodeAt(index, path) {
+    var file = fileAt(index);
+    return file === null ? null : each(file.querySelectorAll('li.cf-node'), path);
+  }
+
+  // Where the focus is right now: no entry means the whole file list is shown.
+  function focusAt() {
+    var entry = cfNav.current(state);
+    return {
+      file: entry === null ? null : entry.file,
+      path: entry === null ? '' : entry.path,
+    };
   }
 
   // A tree label is inert markup until the page has scripts. Upgrade it into a
@@ -826,41 +1116,60 @@ export const CALL_FLOW_SCRIPT = `
     for (var i = 0; i < files.length; i++) {
       var sections = files[i].querySelectorAll('[data-cf-mode-body]');
       for (var j = 0; j < sections.length; j++) {
-        sections[j].hidden = sections[j].getAttribute('data-cf-mode-body') !== mode;
+        sections[j].hidden = sections[j].getAttribute('data-cf-mode-body') !== state.mode;
       }
     }
-    var at = focus ? focus.file : files.length ? Number(files[0].getAttribute('data-cf-file')) : null;
+    var focus = focusAt();
     for (var k = 0; k < modeLinks.length; k++) {
       var name = modeLinks[k].getAttribute('data-cf-mode');
-      if (name === mode) modeLinks[k].setAttribute('aria-current', 'true');
+      if (name === state.mode) modeLinks[k].setAttribute('aria-current', 'true');
       else modeLinks[k].removeAttribute('aria-current');
-      if (at !== null) modeLinks[k].setAttribute('href', '#cf-f' + at + '-' + name);
+      if (focus.file !== null) modeLinks[k].setAttribute('href', '#cf-f' + focus.file + '-' + name);
     }
+    for (var d = 0; d < depthButtons.length; d++) {
+      var pressed = String(depthButtons[d].getAttribute('data-cf-depth')) === String(state.depth);
+      depthButtons[d].setAttribute('aria-pressed', pressed ? 'true' : 'false');
+    }
+    var depthControl = host.querySelector('.cf-depth');
+    if (depthControl) depthControl.hidden = state.mode !== 'graph';
+  }
+
+  // Depth bounds the graph only: Tree and Sequence list everything a focus
+  // matches, so they always draw at full depth.
+  function activeDepth() {
+    return state.mode === 'graph' ? state.depth : 'all';
   }
 
   function applyFocus() {
-    var focused = focus ? String(focus.file) : null;
-    var at = focus ? focus.path : '';
+    var focus = focusAt();
+    var depth = activeDepth();
     for (var i = 0; i < files.length; i++) {
       var file = files[i];
-      var mine = focused === null || file.getAttribute('data-cf-file') === focused;
-      if (focus) file.hidden = !mine;
-      else file.hidden = false;
+      var mine = focus.file === null || file.getAttribute('data-cf-file') === String(focus.file);
+      file.hidden = focus.file !== null && !mine;
       var nodes = file.querySelectorAll('li.cf-node');
       for (var n = 0; n < nodes.length; n++) {
         var path = nodes[n].getAttribute('data-cf-path');
-        nodes[n].hidden = !mine || !(under(path, at) || onChain(path, at));
-        nodes[n].classList.toggle('cf-ancestor', mine && at !== '' && path !== at && onChain(path, at));
+        nodes[n].hidden = !mine || !cfNav.visibleNode(path, focus.path, depth);
+        nodes[n].classList.toggle(
+          'cf-ancestor',
+          mine && focus.path !== '' && path !== focus.path && cfNav.onChain(path, focus.path),
+        );
       }
-      var gNodes = file.querySelectorAll('a.cf-gnode');
+      var gNodes = file.querySelectorAll('a.cf-gnode, a.cf-gzoom');
       for (var g = 0; g < gNodes.length; g++) {
         var gPath = gNodes[g].getAttribute('data-cf-path');
-        gNodes[g].toggleAttribute('hidden', !mine || !under(gPath, at));
+        gNodes[g].toggleAttribute('hidden', !mine || !cfNav.under(gPath, focus.path) || !cfNav.visibleNode(gPath, focus.path, depth));
       }
       var edges = file.querySelectorAll('path.cf-edge');
       for (var e = 0; e < edges.length; e++) {
         var child = edges[e].getAttribute('data-cf-edge-child');
-        edges[e].toggleAttribute('hidden', !mine || child === at || !under(child, at));
+        edges[e].toggleAttribute('hidden', !mine || !cfNav.visibleCall(child, focus.path, depth));
+      }
+      var numbers = file.querySelectorAll('a.cf-edge-num');
+      for (var c = 0; c < numbers.length; c++) {
+        var target = numbers[c].getAttribute('data-cf-path');
+        numbers[c].toggleAttribute('hidden', !mine || !cfNav.visibleCall(target, focus.path, depth));
       }
       var graphs = file.querySelectorAll('.cf-svg');
       for (var s = 0; s < graphs.length; s++) {
@@ -887,7 +1196,7 @@ export const CALL_FLOW_SCRIPT = `
       var matches = 0;
       for (var p = 0; p < paths.length; p++) {
         var leaf = paths[p].getAttribute('data-cf-path');
-        var match = mine && under(leaf, at);
+        var match = mine && cfNav.under(leaf, focus.path);
         paths[p].hidden = !match || matches >= limit;
         if (match) matches++;
       }
@@ -900,28 +1209,28 @@ export const CALL_FLOW_SCRIPT = `
   }
 
   function labelAt(index, path) {
-    var file = fileAt(index);
-    if (!file) return '';
-    var node = each(file.querySelectorAll('li.cf-node'), path);
-    var label = node ? node.querySelector('.cf-label') : null;
-    return label ? label.textContent : '';
+    var node = nodeAt(index, path);
+    var label = node === null ? null : node.querySelector('.cf-label');
+    return label === null ? '' : label.textContent;
   }
 
   function fileLabel(index) {
     var file = fileAt(index);
-    if (!file) return '';
-    var path = file.querySelector('.cf-file-path');
-    return path ? path.textContent : '';
+    var path = file === null ? null : file.querySelector('.cf-file-path');
+    return path === null ? '' : path.textContent;
   }
 
-  function crumb(text, index, path) {
-    var button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'cf-crumb';
-    button.textContent = text;
-    button.setAttribute('data-cf-file', String(index));
-    button.setAttribute('data-cf-path', path);
-    return button;
+  // Receiver file transitions: the resolved definition file when the backend
+  // found one, the call-site file next, then the section the call is drawn in.
+  function receiverFile(index, path) {
+    var node = nodeAt(index, path);
+    if (node !== null) {
+      var source = node.getAttribute('data-cf-srcfile');
+      if (source) return source;
+      var callsite = node.getAttribute('data-cf-nodefile');
+      if (callsite) return callsite;
+    }
+    return fileLabel(index);
   }
 
   function sep() {
@@ -932,42 +1241,98 @@ export const CALL_FLOW_SCRIPT = `
     return span;
   }
 
+  function crumb(text, index) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'cf-crumb';
+    if (index < 0) button.setAttribute('data-cf-root', '');
+    else button.setAttribute('data-cf-crumb', String(index));
+    var label = document.createElement('span');
+    label.className = 'cf-crumb-label';
+    label.textContent = text;
+    button.appendChild(label);
+    return button;
+  }
+
+  // The trail is the history of focused calls, so going back is clicking a tab:
+  // every visit after it is dropped. A tab shows the file only where the
+  // receiver file changes, which is what makes a cross-file step visible.
   function renderCrumbs() {
     if (!crumbNav) return;
     while (crumbNav.firstChild) crumbNav.removeChild(crumbNav.firstChild);
-    if (!focus) {
+    var trail = state.trail;
+    if (trail.length === 0) {
       crumbNav.hidden = true;
       return;
     }
-    var all = crumb('All files', focus.file, '');
-    all.setAttribute('data-cf-root', '');
-    crumbNav.appendChild(all);
-    crumbNav.appendChild(sep());
-    var own = crumb(fileLabel(focus.file) || 'file', focus.file, '');
-    if (focus.path === '') own.setAttribute('aria-current', 'true');
-    crumbNav.appendChild(own);
-    var parts = focus.path === '' ? [] : focus.path.split('-');
-    var prefix = '';
-    for (var i = 0; i < parts.length; i++) {
-      prefix = prefix === '' ? parts[i] : prefix + '-' + parts[i];
+    crumbNav.appendChild(crumb('All files', -1));
+    var previous = '';
+    for (var i = 0; i < trail.length; i++) {
+      var entry = trail[i];
+      var label = labelAt(entry.file, entry.path) || entry.path;
+      var file = receiverFile(entry.file, entry.path);
       crumbNav.appendChild(sep());
-      var step = crumb(labelAt(focus.file, prefix) || parts[i], focus.file, prefix);
-      if (i === parts.length - 1) step.setAttribute('aria-current', 'true');
-      crumbNav.appendChild(step);
+      var tab = crumb(label, i);
+      tab.setAttribute('title', file === '' ? label : label + ' · ' + file);
+      if (i === trail.length - 1) tab.setAttribute('aria-current', 'true');
+      if (file !== '' && (i === 0 || file !== previous)) {
+        var tag = document.createElement('span');
+        tag.className = 'cf-crumb-file mono';
+        tag.textContent = file;
+        tab.appendChild(tag);
+      }
+      previous = file;
+      crumbNav.appendChild(tab);
     }
     crumbNav.hidden = false;
   }
 
+  function note(text) {
+    var paragraph = document.createElement('p');
+    paragraph.className = 'cf-note cf-src-missing';
+    paragraph.textContent = text;
+    return paragraph;
+  }
+
+  // The single panel repeats the focused call's definition, cloned from the
+  // disclosure the renderer escaped and line-numbered. No report text is parsed
+  // or interpreted here; a call without a resolved definition says so.
+  function showSource(index, path) {
+    if (!sourcePanel || !sourceBody) return;
+    var disclosure = document.getElementById('cf-f' + index + '-src-' + path);
+    var body = disclosure === null ? null : disclosure.querySelector('.cf-src-body');
+    while (sourceBody.firstChild) sourceBody.removeChild(sourceBody.firstChild);
+    var head = document.createElement('p');
+    head.className = 'cf-src-head-line mono';
+    var where = receiverFile(index, path);
+    head.textContent = labelAt(index, path) + (where === '' ? '' : ' · ' + where);
+    sourceBody.appendChild(head);
+    if (body) sourceBody.appendChild(body.cloneNode(true));
+    else sourceBody.appendChild(note('No resolved definition source for this call. The call site above is all the report has.'));
+    sourcePanel.hidden = false;
+    sourcePanel.open = true;
+    if (sourcePanel.scrollIntoView) sourcePanel.scrollIntoView({ block: 'nearest' });
+  }
+
+  function hideSource() {
+    if (!sourcePanel || sourcePanel.hidden) return;
+    sourcePanel.hidden = true;
+    if (sourceBody) {
+      while (sourceBody.firstChild) sourceBody.removeChild(sourceBody.firstChild);
+    }
+  }
+
   function reveal() {
-    if (!focus) return;
+    var focus = focusAt();
+    if (focus.file === null) return;
     var file = fileAt(focus.file);
     if (!file) return;
     file.open = true;
-    var section = file.querySelector('[data-cf-mode-body="' + mode + '"]');
+    var section = file.querySelector('[data-cf-mode-body="' + state.mode + '"]');
     if (!section) return;
     var target = each(section.querySelectorAll('[data-cf-path]'), focus.path);
     if (!target) return;
-    var fold = mode === 'tree' ? target.querySelector('.cf-fold') : null;
+    var fold = state.mode === 'tree' ? target.querySelector('.cf-fold') : null;
     if (fold) fold.open = true;
     var step = target;
     while (step && step !== view) {
@@ -977,27 +1342,54 @@ export const CALL_FLOW_SCRIPT = `
     if (target.scrollIntoView) target.scrollIntoView({ block: 'center', inline: 'nearest' });
   }
 
-  function setFocus(index, path) {
-    focus = { file: index, path: path };
+  function refresh(scrollCrumbs) {
     applyMode();
     applyFocus();
     renderCrumbs();
+    if (scrollCrumbs && crumbNav && !crumbNav.hidden && crumbNav.scrollIntoView) {
+      crumbNav.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  // Every path that changes the focus keeps an open source panel in step with
+  // it, so the panel never describes a call the trail has left behind.
+  function settle() {
     reveal();
-    crumbNav.scrollIntoView({ block: 'nearest' });
+    var focus = focusAt();
+    if (sourcePanel && !sourcePanel.hidden && focus.file !== null) showSource(focus.file, focus.path);
+  }
+
+  function focusOn(index, path) {
+    var next = cfNav.visit(state, index, path);
+    if (next === state) return;
+    state = next;
+    refresh(true);
+    settle();
+  }
+
+  function goBack(index) {
+    var next = cfNav.truncate(state, index);
+    if (next !== state) {
+      state = next;
+      refresh(true);
+    }
+    settle();
   }
 
   function clearFocus(scrollBack) {
-    focus = null;
-    applyFocus();
-    renderCrumbs();
+    if (state.trail.length === 0) return;
+    state = cfNav.clear(state);
+    refresh(false);
+    hideSource();
     if (scrollBack) host.scrollIntoView({ block: 'start' });
   }
 
   function setMode(next) {
-    if (modes.indexOf(next) < 0) return;
-    mode = next;
-    applyMode();
-    if (mode === 'graph' && !focus) {
+    var change = cfNav.setMode(state, next);
+    if (change === state) return;
+    state = change;
+    refresh(false);
+    if (state.mode === 'graph' && state.trail.length === 0) {
       var wraps = view.querySelectorAll('.cf-svg-wrap');
       for (var i = 0; i < wraps.length; i++) {
         var wrap = wraps[i], graph = wrap.querySelector('svg'), root = wrap.querySelector('.cf-gnode rect');
@@ -1009,24 +1401,38 @@ export const CALL_FLOW_SCRIPT = `
     reveal();
   }
 
+  function setDepth(value) {
+    var change = cfNav.setDepth(state, value);
+    if (change === state) return;
+    state = change;
+    refresh(false);
+  }
+
   document.addEventListener('click', function (event) {
     if (!event.target.closest) return;
     var crumbButton = event.target.closest('.cf-crumb');
     if (crumbButton) {
       event.preventDefault();
       if (crumbButton.hasAttribute('data-cf-root')) clearFocus(false);
-      else {
-        setFocus(
-          Number(crumbButton.getAttribute('data-cf-file')),
-          crumbButton.getAttribute('data-cf-path'),
-        );
-      }
+      else goBack(Number(crumbButton.getAttribute('data-cf-crumb')));
+      return;
+    }
+    var depth = event.target.closest('[data-cf-depth]');
+    if (depth) {
+      event.preventDefault();
+      setDepth(depth.getAttribute('data-cf-depth'));
+      return;
+    }
+    var source = event.target.closest('[data-cf-source]');
+    if (source) {
+      event.preventDefault();
+      showSource(Number(source.getAttribute('data-cf-file')), source.getAttribute('data-cf-path'));
       return;
     }
     var zoom = event.target.closest('[data-cf-zoom]');
     if (zoom) {
       event.preventDefault();
-      setFocus(Number(zoom.getAttribute('data-cf-file')), zoom.getAttribute('data-cf-path'));
+      focusOn(Number(zoom.getAttribute('data-cf-file')), zoom.getAttribute('data-cf-path'));
       return;
     }
     var modeLink = event.target.closest('[data-cf-mode]');
@@ -1037,7 +1443,8 @@ export const CALL_FLOW_SCRIPT = `
     }
     var jump = event.target.closest('.cf-jump-link');
     if (jump) {
-      if (focus) clearFocus(false);
+      hideSource();
+      if (state.trail.length) clearFocus(false);
       var target = document.getElementById(jump.hash.slice(1));
       if (target) target.open = true;
     }
@@ -1047,24 +1454,30 @@ export const CALL_FLOW_SCRIPT = `
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     if (view.hidden) return;
     if (!event.target.closest) return;
-    var zoom = event.target.closest('a[data-cf-zoom]');
-    if (zoom && event.key === 'Enter') {
+    var link = event.target.closest('a[data-cf-zoom], a[data-cf-source]');
+    if (link && event.key === 'Enter') {
       // A focused SVG link gets no default activation in every engine; inside
-      // the report it means "zoom into this node", so do that instead of the
-      // bare anchor jump the href would perform.
+      // the report it means "zoom into this node" or "show this source", so do
+      // that instead of the bare anchor jump the href would perform.
       event.preventDefault();
-      setFocus(Number(zoom.getAttribute('data-cf-file')), zoom.getAttribute('data-cf-path'));
+      var index = Number(link.getAttribute('data-cf-file')), path = link.getAttribute('data-cf-path');
+      if (link.hasAttribute('data-cf-source')) showSource(index, path);
+      else focusOn(index, path);
       return;
     }
-    if (event.key === 'Escape' && focus) {
+    if (event.key === 'Escape' && sourcePanel && !sourcePanel.hidden) {
+      event.preventDefault();
+      hideSource();
+      return;
+    }
+    if (event.key === 'Escape' && state.trail.length) {
       event.preventDefault();
       clearFocus(true);
     }
   });
 
   upgradeLabels();
-  applyMode();
-  applyFocus();
-  renderCrumbs();
+  refresh(false);
+  host.classList.add('cf-ready');
 }());
 `;

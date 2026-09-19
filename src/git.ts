@@ -392,3 +392,31 @@ export function readSnapshotFiles(
 export function describeSnapshot(snapshot: Snapshot): string {
   return snapshot.kind === "worktree" ? "working tree" : snapshot.ref;
 }
+
+/**
+ * Read one file from a snapshot, or null when it does not exist there.
+ *
+ * A commit is read through git, so the text is the immutable blob the revision
+ * recorded even when the worktree has moved on. A worktree snapshot reads the
+ * file on disk.
+ */
+export function readSnapshotFile(
+  cwd: string,
+  snapshot: Snapshot,
+  path: string,
+): string | null {
+  if (snapshot.kind === "worktree") {
+    const full = resolve(cwd, path);
+    if (!isRegularFile(full)) return null;
+    try {
+      return readFileSync(full, "utf8");
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return git(cwd, ["show", `${snapshot.ref}:${path}`]);
+  } catch {
+    return null;
+  }
+}

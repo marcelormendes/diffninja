@@ -23,6 +23,12 @@ export interface CallNode {
   file?: string;
   line?: number;
   endLine?: number;
+  /**
+   * Definition this call resolved to, which for a child is a different place
+   * than the call site in `file`/`line`. Absent when the callee has no indexed
+   * definition (dynamic calls, libraries, unsupported files).
+   */
+  definition?: SourceLoc;
   children: CallNode[];
 }
 
@@ -59,6 +65,11 @@ export interface DiffNode {
   file?: string;
   line?: number;
   endLine?: number;
+  /**
+   * Definition the call resolved to, taken from the `after` snapshot, or from
+   * `before` for a `removed` node. Call sites keep `file`/`line`.
+   */
+  definition?: SourceLoc;
   children: DiffNode[];
 }
 
@@ -111,6 +122,7 @@ export function assignOptionalTreeFields<
     file?: string;
     line?: number;
     endLine?: number;
+    definition?: SourceLoc;
   },
 >(
   target: T,
@@ -119,12 +131,16 @@ export function assignOptionalTreeFields<
     file?: string;
     line?: number;
     endLine?: number;
+    definition?: SourceLoc;
   },
 ): T {
   if (source.kind) target.kind = source.kind;
   if (source.file) target.file = source.file;
   if (source.line != null) target.line = source.line;
   if (source.endLine != null) target.endLine = source.endLine;
+  // Copied, not aliased: a serialized tree must not share mutable state with
+  // the engine tree it came from.
+  if (source.definition) target.definition = { ...source.definition };
   return target;
 }
 

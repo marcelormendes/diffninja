@@ -1,9 +1,12 @@
 import { resolve } from "node:path";
 import { runDiff } from "../run.js";
-import type { DiffTreeResult } from "../types.js";
+import type { DiffNode, DiffTreeResult, Snapshot } from "../types.js";
 import { parseDiff, gitDiff } from "./input.js";
 import { reviewUnits } from "./pipeline.js";
 import { buildCallFlows, reportOrderedTextHunkFiles, treeTouchesFile, CALL_FLOW_MAX_DEPTH } from "./call-flow.js";
+import type { CallFlowNodeDetail } from "./call-flow.js";
+import { definitionReader } from "./source.js";
+import type { DefinitionDetail } from "./source.js";
 import type { CallFlowAvailability, ReviewOptions, ReviewReport } from "./types.js";
 
 export type ReviewInput =
@@ -38,9 +41,24 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
     }
   }
   const result = await reviewUnits(units, options);
+  // Definition source comes from the snapshot the definition resolved in: the
+  // `to` revision, except for a removed call, whose only definition is the
+  // `from` one. Definitions outside the diff, callers and callees alike, are
+  // read the same way. Unreadable definitions stay absent rather than guessed.
+  let nodeDetail: CallFlowNodeDetail | undefined;
+  if (snapshots) {
+    const readDefinition = definitionReader(cwd!);
+    const from: Snapshot = { kind: "commit", ref: snapshots.from };
+    const to: Snapshot = { kind: "commit", ref: snapshots.to };
+    nodeDetail = (node: DiffNode): DefinitionDetail => {
+      const definition = node.definition;
+      if (!definition) return {};
+      return readDefinition(definition, node.status === "removed" ? from : to);
+    };
+  }
   // Structured flows are grouped per changed file in report order, after
   // ranking, so the HTML can order files by the severity of their worst hunk.
-  const callFlows = buildCallFlows(reportOrderedTextHunkFiles(result.items, units), trees);
+  const callFlows = buildCallFlows(reportOrderedTextHunkFiles(result.items, units), trees, nodeDetail);
   if (callFlows.length > 0) callFlowAvailability = "available";
   return { title: "Focused PR review", source, mode: options.mock ? "mock" : "live", createdAt: new Date().toISOString(),
     ...result, callFlow, callFlows, callFlowAvailability, warnings: [...warnings, ...result.warnings] };
