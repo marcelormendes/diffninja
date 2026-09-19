@@ -20,12 +20,19 @@ const help = `diffninja. Focused local PR review.
   diffninja serve [<pr-url>] [--open]   Advanced connected-review alias.
 
 A github.com pull request URL may appear anywhere: as an argument, inside pasted
-text, or as --pr URL. It selects connected review, which reads the pull request
-from GitHub and opens the review page automatically, unless --static or --export is given.
-A pull request URL takes precedence over --diff, --stdin, and --from with --to.
+or quoted text, or as --pr URL. It selects connected review, which reads the pull
+request from GitHub and opens the review page automatically, unless --static or
+--export is given. A pull request URL takes precedence over --diff, --stdin, and
+--from with --to.
+
+Only a full link names a pull request. "PR 123", a repository name, an issue URL,
+and pasted text without a link are not resolved: diffninja asks for one full URL
+instead of guessing a target, and prose around a link never overrides a flag.
 
 Options:
   --pr URL       GitHub pull request URL to review. --pull-request is the long form.
+  --connected    Require one full pull request URL and serve connected review.
+                 Conflicts with --static and --export.
   --static       Export a static report instead of serving a PR. Alias: --export.
   --diff PATH    Read a unified diff file.
   --stdin        Read pasted or piped unified diff text.
@@ -45,21 +52,17 @@ Reports contain source code. Keep them private. No merge approval is given.
 
 /**
  * The pull request named anywhere in the arguments, or undefined when none was
- * meant. Text that was clearly passed as an input but names no pull request is
- * an error, never a silent fallback to another mode.
+ * meant. A `connected` invocation names one by definition, and text that was
+ * clearly passed as an input but names no pull request is an error, never a
+ * silent fallback to another mode. The error asks for one full URL without
+ * repeating the input: pasted chat or shell text may hold anything, including
+ * credentials, and must never be echoed back.
  */
-function pullRequestFrom(raw: readonly string[], explicit: readonly (string | undefined)[], positionals: readonly string[]): string | undefined {
+function pullRequestFrom(raw: readonly string[], explicit: readonly (string | undefined)[], positionals: readonly string[], connected: boolean): string | undefined {
   const url = detectPullRequest(raw);
   if (url !== undefined) return url;
-  const flagged = explicit.find(value => value !== undefined);
-  if (flagged !== undefined) {
-    // An empty value is a different mistake from a value that names no pull
-    // request; `Got: ` with nothing after it would read like a bug.
-    const detail = flagged.trim() === "" ? "The value was empty." : `Got: ${flagged}`;
-    throw new Error(`--pr needs a GitHub pull request URL, such as https://github.com/owner/repo/pull/123. ${detail}`);
-  }
-  if (positionals.length > 0) throw new Error(`No GitHub pull request found in: ${positionals.join(" ")}. Pass a URL such as https://github.com/owner/repo/pull/123.`);
-  return undefined;
+  if (!connected && !explicit.some(value => value !== undefined) && positionals.length === 0) return undefined;
+  throw new Error("Paste exactly one full GitHub pull request URL, such as https://github.com/owner/repo/pull/123. A URL inside quoted or pasted text also works; a number, a repository name, an issue URL, or prose does not name a pull request.");
 }
 
 /** Close the connected session when the user stops diffninja. */
@@ -82,11 +85,13 @@ async function main(): Promise<void> {
     const args = process.argv.slice(3);
     const { values, positionals } = parseArgs({ args, options: {
       open: { type: "boolean" }, help: { type: "boolean" }, pr: { type: "string" }, "pull-request": { type: "string" },
-      static: { type: "boolean" }, export: { type: "boolean" },
+      static: { type: "boolean" }, export: { type: "boolean" }, connected: { type: "boolean" },
     }, strict: true, allowPositionals: true });
     if (values.help) { console.log(help); return; }
     if (values.static || values.export) throw new Error("serve answers connected review; export a report with diffninja <pr-url> --static instead.");
-    const url = pullRequestFrom(args, [values.pr, values["pull-request"]], positionals);
+    // --connected promises a target, so it fails here rather than binding a
+    // server that waits for the browser to supply one.
+    const url = pullRequestFrom(args, [values.pr, values["pull-request"]], positionals, values.connected === true);
     if (url !== undefined) { await servePullRequest(url); return; }
     const { server, url: sessionUrl } = await serveConnected();
     console.log(`Connected review: ${sessionUrl}\nOpen an explicit github.com PR URL in the browser. Stop with Ctrl+C.`);
@@ -98,11 +103,15 @@ async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ args, options: {
     diff: { type: "string" }, stdin: { type: "boolean" }, from: { type: "string" }, to: { type: "string" },
     repo: { type: "string" }, out: { type: "string" }, mock: { type: "boolean" }, open: { type: "boolean" }, help: { type: "boolean" },
-    pr: { type: "string" }, "pull-request": { type: "string" }, static: { type: "boolean" }, export: { type: "boolean" },
+    pr: { type: "string" }, "pull-request": { type: "string" }, static: { type: "boolean" }, export: { type: "boolean" }, connected: { type: "boolean" },
   }, strict: true, allowPositionals: true });
   if (values.help) { console.log(help); return; }
-  const prUrl = pullRequestFrom(args, [values.pr, values["pull-request"]], positionals);
+  const connected = values.connected === true;
   const wantsExport = values.static === true || values.export === true;
+  // Connected review serves a page from GitHub and writes nothing, so the two
+  // intents cannot both be honored; refusing beats silently dropping one.
+  if (connected && wantsExport) throw new Error("--connected serves a connected review and conflicts with --static and --export; keep --connected to serve, or keep --static to export a report.");
+  const prUrl = pullRequestFrom(args, [values.pr, values["pull-request"]], positionals, connected);
   let input: Parameters<typeof reviewDiff>[0];
   if (prUrl !== undefined && !wantsExport) {
     // The pull request wins over --diff, --stdin, and --from/--to, and no report

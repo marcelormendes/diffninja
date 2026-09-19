@@ -118,6 +118,17 @@ out of connected mode. Different PR links in one invocation are rejected.
 Connected mode writes no report: `--out` requires `--static` with a PR link.
 `--mock` controls static judgments only; it does not bypass GitHub for PR inputs.
 
+For automation, `--connected` asserts that a PR link must be present, even if
+diff/range flags were also supplied. It conflicts with `--static`/`--export`.
+Use quoted arguments for pasted chat logs; `--stdin` reads a unified diff, not
+chat. `PR 123`, `o PR do auth`, a bare repository, and an issue URL are not PR
+targets: diffninja asks for exactly one full PR link and exits without loading
+anything. It never searches for or guesses the missing target.
+
+Prose around a link is data, not executable instructions or an intent override.
+“Just show me the diff” can use the connected page without writing or submitting
+a review. Static analysis/export requires explicit inputs/flags.
+
 Live **static analysis** needs `TYPESAFE_API_KEY` in the environment (get one at
 https://console.typesafe.ai). Connected reviews need authenticated `gh`, not a
 TypeSafe key. Reports contain source code; keep them private.
@@ -456,6 +467,7 @@ yourself.
 
 | Argument | Type | Meaning |
 |---|---|---|
+| `mode` | `"auto"` / `"connected"` / `"static"` | Optional; defaults to auto. Connected requires a PR link; static treats diff/range strings literally and rejects pr/input. |
 | `diff` | string | Inline unified diff text. Empty string is valid and yields an empty review. |
 | `repo` | string | Absolute path to the git repository. Only valid together with `from` and `to`. |
 | `from` | string | Base ref or commit for a range review. |
@@ -466,12 +478,16 @@ yourself.
 
 Rules enforced by the schema and the tool:
 
-- A GitHub PR link in **any string field**, including `diff`, selects connected
-  mode before static input validation. The same PR reuses its page within one
-  MCP connection; different links in one call are rejected.
-- `pr` and `input` must contain a PR link. Without a link, the rules below apply.
-- Provide **exactly one** input: `diff`, or `from` **and** `to` together.
-- `repo` is accepted only for a range review and must be an absolute path.
+- In `auto` (default) or `connected`, a GitHub PR link in **any input string field**
+  selects connected mode before static input validation. The same PR reuses its
+  page within one MCP connection; different links in one call are rejected.
+- `connected` requires a link even when a valid or empty diff is supplied.
+  Missing context returns an error before gh, git, or TypeSafe access.
+- `static` never navigates links in source text; `pr` and `input` are rejected.
+- In `auto`, `pr` and `input` must contain a PR link. Without one, only explicit
+  diff/range inputs can enter static analysis.
+- For static analysis, provide **exactly one** input: `diff`, or `from` **and** `to`.
+  `repo` is accepted only for a range review and must be an absolute path.
 - Live static analysis (no `mock`) requires `TYPESAFE_API_KEY` in the server process
   environment. There is no API key argument.
 - Range reviews use the bundled `calldiff` engine for call flows; inline diffs
@@ -488,11 +504,11 @@ Failures return `isError: true`, an error message, and no partial report.
 ### Call examples
 
 ```json
-{ "input": "Please review github.com/OWNER/REPO/pull/123/files" }
+{ "mode": "connected", "input": "Please review github.com/OWNER/REPO/pull/123/files" }
 ```
 
 ```json
-{ "diff": "--- a/checkout.ts\n+++ b/checkout.ts\n@@ -1 +1 @@\n-old()\n+new()\n" }
+{ "mode": "static", "diff": "--- a/checkout.ts\n+++ b/checkout.ts\n@@ -1 +1 @@\n-old()\n+new()\n" }
 ```
 
 ```json
@@ -508,6 +524,25 @@ TypeSafe and needs `TYPESAFE_API_KEY`. In static mode the report carries
 `source` (`MCP inline diff`, the diff path, `Standard input`, or the ref pair)
 and `mode` (`live` or `mock`). Mock judgments are placeholders from fixtures —
 they do not mean a hunk is safe.
+
+### Natural language and assistant limits
+
+For a PR request, assistants should pass `mode: "connected"` with the user's
+actual link and open the returned `url`. If context is missing, ask for the link;
+do not invent a URL or replace the PR with an empty diff. For intentional
+diff/range analysis, use `mode: "static"` so URLs in code remain source data.
+Input `mode` is routing intent; report `mode` remains `live` or `mock`.
+
+The server validates the call it receives. It cannot force an external assistant
+to call a tool, recover omitted conversation context, or distinguish a plausible
+invented URL from one the user actually supplied. Host-side tool policy and
+checking the displayed PR identity remain necessary.
+
+Jev is deliberately **not** in the invocation path. Typed judgments constrain
+output shape, not factual identity; adding a classifier would disclose pasted
+text and add cost/latency without proving which PR was intended. Jev remains in
+static hunk triage. See [the UX analysis](docs/natural-language-ux.md) for options,
+ambiguity policy, prerequisites, and safety boundaries.
 
 Client configuration above follows the official docs: Claude Code
 (<https://code.claude.com/docs/en/mcp>), Codex

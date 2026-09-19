@@ -40,10 +40,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     reserved for the protocol (diagnostics go to stderr).
 - `review_diff` invariants (see `src/review/mcp.ts`; README documents the
   user-facing contract):
-  - Strict input object: `diff?`, `repo?`, `from?`, `to?`, `mock?`, `pr?`, `input?`.
-    A PR link in any string field selects connected mode before static validation.
-    Without a link, exactly one of `diff` or `from`+`to`; `repo` is required and
-    must be absolute for a range. `pr`/`input` require a PR link.
+  - Strict input object: `diff?`, `repo?`, `from?`, `to?`, `mock?`, `pr?`, `input?`,
+    `mode?` (`auto`/`connected`/`static`; default auto).
+    Auto and connected detect PR links in input string fields before static
+    validation. Connected requires a link, never falling back to diff/range.
+    Static skips detection, treats links as source, and rejects pr/input.
+    Static analysis requires exactly one of `diff` or `from`+`to`; `repo` must
+    be absolute for a range. In auto, `pr`/`input` require a PR link.
   - Static success returns `structuredContent` equal to the `ReviewReport`.
     Connected success returns `{ mode: "connected", url, pr, snapshot }`.
     Both include the same JSON in text `content`. Failures return `isError: true`
@@ -60,6 +63,9 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   ranges may need npm for missing grammars. PR inputs still read authenticated
   `gh` even with mock. CLI `--static` / `--export` explicitly exports a PR report
   rather than serving it. Never commit a real API key.
+- CLI `--connected` requires one PR link and conflicts with --static/--export.
+  Invocation resolution is deterministic; never use Jev to guess a PR or intent.
+  Missing/ambiguous references ask for one full link without echoing pasted text.
 - Keep connected safeguards: immutable snapshot binding, canonical line anchors,
   stale-snapshot and duplicate-submit blocking, loopback-only Host/Origin/CSRF
   checks, and no general GitHub/command proxy.
