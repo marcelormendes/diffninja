@@ -1143,6 +1143,7 @@ export const CALL_FLOW_SCRIPT = `
   }
 
   function frameGraphs() {
+    if (state.mode !== 'graph') return;
     var graphs = view.querySelectorAll('.cf-svg:not([hidden])');
     for (var i = 0; i < graphs.length; i++) frameGraph(graphs[i]);
   }
@@ -1498,8 +1499,11 @@ export const CALL_FLOW_SCRIPT = `
   function setMode(next) {
     var change = cfNav.setMode(state, next);
     if (change === state) return;
+    var depthChanged = change.depth !== state.depth;
     state = change;
-    refresh(false);
+    applyMode();
+    if (depthChanged) applyFocus();
+    else frameGraphs();
     reveal();
   }
 
