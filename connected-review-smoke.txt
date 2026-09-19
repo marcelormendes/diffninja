@@ -1,3 +1,3 @@
-Disposable diffninja connected-review validation fixture.
+Disposable diffninja connected-review validation fixture, refreshed head.
 This branch and PR will be deleted after browser-driven review checks.
 No production changes belong in this fixture.
