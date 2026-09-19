@@ -568,9 +568,9 @@ const STYLES = `
   --line: #d1d9e0;
   --line-strong: #afb8c1;
   --accent: #59636e;
-  --teal: #4d8d86;
+  --teal: #276b64;
   --teal-bg: #e8f2f1;
-  --warn: #a2701f;
+  --warn: #805511;
   --warn-bg: #fdf3e2;
   --alarm: #c22e2e;
   --alarm-bg: #fdecec;
@@ -685,7 +685,7 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
 .controls { width: 100%; }
 button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
 button:hover { border-color: var(--teal); }
-button:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
+button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
 button:disabled { cursor: default; opacity: .65; }
 .pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 11px; font-size: 12px; }
 .pill-n { font-size: 11px; color: var(--ink-soft); }
