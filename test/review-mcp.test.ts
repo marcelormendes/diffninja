@@ -142,6 +142,8 @@ describe("review_diff over the MCP protocol", () => {
     expect(report.items).toEqual([]);
     expect(report.modelCalls).toBe(0);
     expect(report.mode).toBe("mock");
+    expect(report.callFlows).toEqual([]);
+    expect(report.callFlowAvailability).toBe("needs-git-range");
   });
 
   test("rejects unusable requests with named tool errors and no model call", async () => {
@@ -224,6 +226,9 @@ describe("review_diff over the MCP protocol", () => {
       expect(report.items).toHaveLength(1);
       expect(report.items[0].file).toBe("checkout.ts");
       expect(report.items[0].callFlow?.join("\n")).toContain("authorize");
+      expect(report.callFlowAvailability).toBe("available");
+      expect(report.callFlows.map(entry => entry.file)).toEqual(["checkout.ts"]);
+      expect(report.callFlows[0].trees[0]).toMatchObject({ key: "checkout", status: "changed", file: "checkout.ts" });
 
       // Reviewing a range writes no report files next to the repository.
       expect(readdirSync(dir).sort()).toEqual(before);

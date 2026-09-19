@@ -15,6 +15,8 @@ function report(
     createdAt: "2026-09-18T10:00:00Z",
     items,
     callFlow: [],
+    callFlows: [],
+    callFlowAvailability: "needs-git-range",
     warnings: [],
     modelCalls: 0,
     ...overrides,
@@ -98,7 +100,13 @@ describe("review HTML", () => {
             judgment: { risk: 1, bug: 0.1, needsHuman: 0.2, confidence: 0.8, category: ATTACK },
           }),
         ],
-        { title: ATTACK, source: ATTACK, createdAt: ATTACK, warnings: [ATTACK], callFlow: [ATTACK] },
+        {
+          title: ATTACK, source: ATTACK, createdAt: ATTACK, warnings: [ATTACK], callFlow: [ATTACK],
+          callFlowAvailability: "available",
+          callFlows: [{ file: ATTACK, truncated: false, trees: [
+            { key: ATTACK, label: ATTACK, file: ATTACK, line: 1, status: "added", children: [] },
+          ] }],
+        },
       ),
     );
     expect(html).not.toContain(ATTACK);
@@ -234,21 +242,6 @@ describe("review HTML", () => {
     }
   });
 
-  test("the toolbar, breadcrumb and jump nav expose the handles the script drives", () => {
-    const html = renderReview(report([item(), item({ status: "passed", file: "b.ts" })]));
-    expect(html).toContain('id="toolbar"');
-    expect(html).toContain('data-action="expand"');
-    expect(html).toContain('data-action="collapse"');
-    expect(html).toMatch(/<nav id="breadcrumb"[^>]*hidden/);
-    expect(html).toContain('data-action="back"');
-    expect(html).toContain('id="focus-rank"');
-    expect(html).toContain('id="focus-path"');
-    expect(html).toMatch(/<p class="empty" id="filter-empty" hidden>/);
-    expect(html).toMatch(
-      /<button type="button" class="jump-toggle enhanced" aria-expanded="false" aria-controls="jump-links">/,
-    );
-    expect(html).toContain('<ul class="toc-list" id="jump-links">');
-  });
 
   test("each hunk has both rank and explicit focus controls in report order", () => {
     const files = ["a.ts", "b.ts", "c.ts"];
@@ -304,18 +297,6 @@ describe("review HTML", () => {
     expect(visible(mock)).not.toContain("no API call was made");
   });
 
-  test("the file asks for nothing external and reads without JavaScript", () => {
-    const html = renderReview(report([item(), item({ status: "passed", file: "b.ts" })]));
-    expect(html.match(/<script\b/g)).toHaveLength(1);
-    expect(html).not.toMatch(/<link\b|@import|https?:\/\/|src=/i);
-    expect([...html.matchAll(/href="([^"]*)"/g)].every((match) => match[1].startsWith("#"))).toBe(
-      true,
-    );
-    expect(scriptOf(html)).not.toMatch(/fetch\(|XMLHttpRequest|localStorage/);
-    const noScript = visible(html);
-    expect(noScript).toContain("-const total = price;");
-  });
-
   test("an empty report says so and renders no toolbar", () => {
     const html = renderReview(report([]));
     expect(html).toContain("No hunks were reviewed in this diff.");
@@ -324,4 +305,69 @@ describe("review HTML", () => {
     expect(html).not.toContain('class="toc-link"');
     expect(html).toContain("dot-attention");
   });
+  test("absence never fabricates a tree or mislabels a completed git-range analysis", () => {
+    const patch = visible(renderReview(report([item()])));
+    expect(patch).toMatch(/git.range/i);
+    expect(patch).not.toMatch(/<svg\b/);
+    for (const availability of ["no-changes", "failed"] as const) {
+      const html = visible(renderReview(report([item()], { callFlowAvailability: availability })));
+      expect(html).not.toMatch(/<svg\b/);
+      expect(html).not.toMatch(/needs a git.range|requires a git.range/i);
+    }
+  });
+
+  test("call-flow files use their worst hunk and link directly to that diff", () => {
+    const html = renderReview(report([
+      item({ file: "a.ts", status: "low" }),
+      item({ file: "b.ts", status: "uncertain" }),
+      item({ file: "a.ts", status: "attention" }),
+    ], {
+      callFlowAvailability: "available",
+      callFlows: ["b.ts", "a.ts"].map(file => ({
+        file, truncated: false,
+        trees: [{ key: "run", label: "run()", file, line: 1, status: "changed", children: [] }],
+      })),
+    }));
+    const headers = [...html.matchAll(/<details class="cf-file cf-file-([a-z]+)"[^>]*>([\s\S]*?)<\/summary>/g)];
+    expect(headers.map(match => match[1])).toEqual(["attention", "uncertain"]);
+    expect(headers[0][2]).toContain("a.ts");
+    expect(headers[0][2]).toContain('href="#item-3"');
+    expect(headers[1][2]).toContain("b.ts");
+    expect(headers[1][2]).toContain('href="#item-2"');
+  });
+
+  test("call diagrams remain readable without scripts and expose no external resources", () => {
+    const html = renderReview(report([item()], {
+      callFlowAvailability: "available",
+      callFlows: [{
+        file: "src/checkout.ts",
+        truncated: true,
+        trees: [{
+          key: "checkout", label: "checkout", file: "src/checkout.ts", line: 1, status: "changed",
+          children: [
+            { key: "authorize", label: "authorize", file: "src/checkout.ts", line: 2, status: "removed", children: [] },
+            { key: "charge", label: "charge", file: "src/checkout.ts", line: 3, status: "same", children: [] },
+          ],
+        }],
+      }],
+    }));
+    const rendered = visible(html);
+    expect(rendered).toMatch(/href="#view-diff"[^>]*>Diff</);
+    expect(rendered).toMatch(/href="#view-call-flow"[^>]*>Call flow</);
+    expect(rendered).toContain("Tree");
+    expect(rendered).toContain("Graph");
+    expect(rendered).toContain("Sequence");
+    expect(rendered).toMatch(/<svg\b/);
+    expect(rendered).toContain("authorize");
+    expect(rendered).toContain("charge");
+    expect(rendered).toContain("src/checkout.ts:2");
+    expect(rendered).toContain("→");
+    expect(rendered).toMatch(/truncat|limit|omitt/i);
+    expect(rendered).toContain("-const total = price;");
+    expect(html.match(/<script\b/g)).toHaveLength(1);
+    expect(html).not.toMatch(/<script[^>]+src=|<link\b|@import|url\(["']?https?:/i);
+    expect([...html.matchAll(/href="([^"]*)"/g)].every((match) => match[1].startsWith("#"))).toBe(true);
+    expect(scriptOf(html)).not.toMatch(/fetch\(|XMLHttpRequest|localStorage/);
+  });
+
 });

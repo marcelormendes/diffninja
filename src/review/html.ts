@@ -1,4 +1,6 @@
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
+import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
+import { escapeHtml } from "./escape-html.js";
 
 /**
  * Render a review report as one self-contained HTML document.
@@ -37,16 +39,24 @@ export function renderReview(report: ReviewReport): string {
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="color-scheme" content="light dark">',
     `<title>${escapeHtml(`diffninja review: ${report.title || "untitled diff"}`)}</title>`,
-    `<style>${STYLES}</style>`,
+    `<style>${STYLES}\n${CALL_FLOW_STYLES}</style>`,
     "</head>",
     "<body>",
     '<div class="wrap">',
     renderHeader(report),
+    '<nav class="view-switch" aria-label="Report view">',
+    '<a href="#view-diff" data-view="diff" aria-current="page">Diff</a>',
+    '<a href="#view-call-flow" data-view="call-flow">Call flow</a>',
+    "</nav>",
+    '<section id="view-diff" aria-label="Diff">',
     body,
-    renderExtras(report),
+    "</section>",
+    '<section id="view-call-flow" aria-label="Call flow">',
+    renderCallFlows(report),
+    "</section>",
     renderFooter(report),
     "</div>",
-    `<script>${SCRIPT}</script>`,
+    `<script>${SCRIPT}\n${CALL_FLOW_SCRIPT}</script>`,
     "</body>",
     "</html>",
     "",
@@ -302,18 +312,6 @@ function renderDiff(diff: string): string {
   ].join("\n");
 }
 
-function renderExtras(report: ReviewReport): string {
-  if (report.callFlow.length === 0) return "";
-  const flow = report.callFlow
-    .map((entry) => `<li>${escapeHtml(entry)}</li>`)
-    .join("\n");
-  return [
-    '<section class="extras"><details>',
-    `<summary>Call flow (${report.callFlow.length} entries)</summary>`,
-    `<ol class="flow">${flow}</ol>`,
-    "</details></section>",
-  ].join("\n");
-}
 
 function renderFooter(report: ReviewReport): string {
   return [
@@ -330,6 +328,29 @@ function renderFooter(report: ReviewReport): string {
 const SCRIPT = `
 (function () {
   'use strict';
+  document.documentElement.classList.add('js');
+  var diffView = document.getElementById('view-diff');
+  var flowView = document.getElementById('view-call-flow');
+  var viewLinks = Array.prototype.slice.call(document.querySelectorAll('[data-view]'));
+  function showView(name) {
+    var flow = name === 'call-flow';
+    diffView.hidden = flow;
+    flowView.hidden = !flow;
+    viewLinks.forEach(function (link) {
+      if (link.getAttribute('data-view') === name) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+  }
+  showView(location.hash === '#view-call-flow' ? 'call-flow' : 'diff');
+  document.addEventListener('click', function (event) {
+    if (!event.target.closest) return;
+    var link = event.target.closest('[data-view]');
+    if (!link) return;
+    event.preventDefault();
+    if (cards.length && focusIndex >= 0) exitFocus();
+    showView(link.getAttribute('data-view'));
+    history.replaceState(null, '', link.hash);
+  });
   var cards = Array.prototype.slice.call(document.querySelectorAll('.card'));
   if (!cards.length) return;
   var filters = Array.prototype.slice.call(document.querySelectorAll('[data-filter]'));
@@ -366,6 +387,7 @@ const SCRIPT = `
     var card = cards[index];
     var summary = card.querySelector('summary');
     if (summary) summary.focus({ preventScroll: true });
+    measureToolbar();
     card.scrollIntoView({ block: 'start' });
   }
 
@@ -452,6 +474,20 @@ const SCRIPT = `
     }
     if (button && button === jump) { setJump(jump.getAttribute('aria-expanded') !== 'true'); return; }
     var link = event.target.closest('.toc-link');
+    var flowDiff = event.target.closest('[data-flow-diff]');
+    if (flowDiff) {
+      event.preventDefault();
+      var hunk = document.getElementById(flowDiff.hash.slice(1));
+      if (!hunk) return;
+      if (focusIndex >= 0) exitFocus();
+      filters.forEach(function (chip) { chip.setAttribute('aria-pressed', 'true'); });
+      showView('diff');
+      apply();
+      hunk.open = true;
+      setCursor(cards.indexOf(hunk), true);
+      history.replaceState(null, '', flowDiff.hash);
+      return;
+    }
     if (link) {
       event.preventDefault();
       var target = document.getElementById(link.hash.slice(1));
@@ -471,6 +507,7 @@ const SCRIPT = `
 
   document.addEventListener('keydown', function (event) {
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (diffView.hidden) return;
     if (!event.target.closest) return;
     if (event.key === 'Escape') {
       if (focusIndex >= 0) { event.preventDefault(); exitFocus(); }
@@ -509,7 +546,6 @@ const SCRIPT = `
     document.documentElement.style.setProperty('--toolbar-height', toolbar.offsetHeight + 'px');
   }
 
-  document.documentElement.classList.add('js');
   apply();
   setCursor(cursor, false);
   var initial = location.hash ? document.getElementById(location.hash.slice(1)) : null;
@@ -633,6 +669,10 @@ h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere
 .dot-uncertain { background: var(--warn); }
 .dot-low { background: var(--line-strong); }
 .dot-passed { background: var(--teal); }
+.view-switch { display: flex; gap: 4px; margin: 14px 0; border-bottom: 1px solid var(--line); }
+.view-switch a { color: var(--ink-soft); padding: 8px 16px; text-decoration: none; border-bottom: 2px solid transparent; }
+.view-switch a:hover, .view-switch a:focus-visible { color: var(--ink); }
+.js .view-switch [aria-current] { color: var(--ink); border-bottom-color: var(--cursor); font-weight: 600; }
 .toolbar {
   position: sticky; top: 0; z-index: 5; background: var(--bg);
   border-bottom: 1px solid var(--line); padding: 10px 0; margin-bottom: 14px;
@@ -677,7 +717,7 @@ button:disabled { cursor: default; opacity: .65; }
 .js .card.cursor { outline: 2px solid var(--cursor); outline-offset: 3px; }
 .card { scroll-margin-top: calc(var(--toolbar-height, 0px) + 14px); }
 .focus-mode .wrap { max-width: none; }
-.focus-mode .masthead, .focus-mode .extras, .focus-mode .foot { display: none; }
+.focus-mode .masthead, .focus-mode .foot { display: none; }
 .focus-mode .controls, .focus-mode .toc { display: none !important; }
 .cards { margin: 0; }
 .card {
@@ -769,31 +809,6 @@ pre.diff {
 .ln-meta > .code { color: var(--ink-soft); }
 .ln-note > .code { color: var(--ink-soft); font-style: italic; }
 .empty { padding: 18px 0; color: var(--ink-soft); }
-.extras { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
-.extras details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
-.extras summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  list-style: none;
-  padding: 11px 14px;
-  font-size: 14px;
-  font-weight: 600;
-}
-.extras summary::-webkit-details-marker { display: none; }
-.extras summary::after {
-  content: "\\25B8";
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--ink-soft);
-  transition: transform 0.15s ease;
-}
-.extras details[open] summary::after { transform: rotate(90deg); }
-.flow { margin: 0; padding: 0 14px 14px; }
-.flow { list-style: none; }
-.flow li { font-family: var(--mono); font-size: 12.5px; padding: 6px 0; border-top: 1px dashed var(--line); overflow-wrap: anywhere; }
-.flow li:first-child { border-top: 0; }
 .foot { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-soft); }
 .foot p { margin: 4px 0; overflow-wrap: anywhere; }
 @media (max-width: 680px) {
@@ -827,12 +842,3 @@ function formatInteger(value: number): string {
   return Number.isFinite(value) ? String(Math.round(value)) : "n/a";
 }
 
-/** Escape text for HTML element and attribute contexts. */
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}

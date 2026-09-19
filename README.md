@@ -26,8 +26,9 @@ Two front ends share one engine:
    closed to human review instead of degrading into a pass.
 
 Both front ends return the same `ReviewReport`: `items` (per-hunk status,
-priority, reasons, judgment), `callFlow`, `warnings`, `modelCalls`, `mode`,
-`source`, `createdAt`, `title`.
+priority, reasons, judgment), `callFlow` (ASCII assessment context), `callFlows`
+(structured per-file trees), `callFlowAvailability`, `warnings`, `modelCalls`,
+`mode`, `source`, `createdAt`, `title`.
 
 ## Local build first
 
@@ -97,6 +98,45 @@ Light/dark colors follow your system preference.
   hunk; **f** focuses it. Focused buttons and links retain native Enter behavior.
 - **Jump to a hunk** opens its target; on small screens the jump list is a toolbar
   dropdown. Without JavaScript the ordinary anchor links remain visible.
+
+Use **Diff | Call flow** to switch between source changes and their syntactic
+call paths. Call flow files follow their most severe hunk, with a **View diff**
+link to that hunk. The coverage count states how many changed files have trees.
+
+- **Tree** folds with native disclosure arrows. Click a function name to zoom
+  into its subtree; breadcrumbs go back through its callers or to all files.
+- **Graph** draws the same calls as an inline SVG, layered by depth. Click a
+  node to isolate and crop its subtree. Wide graphs scroll within the report.
+- **Sequence** shows root-to-leaf `A → B → C` chip strips, not runtime execution
+  order. It displays up to 10 paths per file in the current focus; focusing a
+  branch can reveal paths outside the initial ten.
+
+Focus carries across diagram modes. **Escape** returns to all files. Changed
+nodes use their file's most severe hunk color, not an independent assessment of
+the function. `+` means added, `−` removed, and `~` a retained caller containing
+structural changes below it. Unchanged calls are dimmed. Locations are root
+definitions and child call sites, not necessarily callee definitions. Removed
+locations refer to the old snapshot.
+
+Trees come directly from calldiff's `DiffNode` results, never from ASCII or
+generated explanations. The JSON keeps only `key`, `label`, `status`, optional
+`file`/`line`, and `children` per node. Per-file limits: **8 roots, 4 edges deep
+(root at depth zero), 8 children per node, 160 total nodes**. Pruning favors
+branches reaching that file and changed calls, retaining source order. A
+`truncated` flag records serialization cuts; the engine also stops expanding
+at depth 4. Caller/callee context can cross file boundaries. Files without text
+hunks or engine trees have no structured entry.
+
+Only git-range inputs have repository call flows, including runs with `--mock`
+judgments. Patch-only inputs show a short git-range note, not invented diagrams.
+`callFlowAvailability` distinguishes `available`, `needs-git-range`,
+`no-changes`, and `failed`. Missing paths, dynamic calls, parse failures, depth
+limits and non-call body changes mean these diagrams cannot establish safety.
+Without JavaScript both views and all three diagram modes are server-rendered;
+native folding still works.
+
+See [the outcome check](docs/OUTCOME_CHECK.md) for the five-file walkthrough,
+design cuts, and verification limits.
 
 A single note distinguishes mock and live output. Reasons, judgments, warnings,
 priorities and request counts remain in the JSON twin; mock data is only a

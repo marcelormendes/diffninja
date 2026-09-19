@@ -24,6 +24,10 @@ describe("diffninja command", () => {
       expect(report.callFlow.join("\n")).toContain("authorize");
       expect(report.items[0].callFlow.join("\n")).toContain("authorize");
       expect(report.items[0].file).toBe("checkout.ts");
+      expect(report.callFlowAvailability).toBe("available");
+      expect(report.callFlows.map((entry: { file: string }) => entry.file)).toEqual(["checkout.ts"]);
+      expect(report.callFlows[0].truncated).toBe(false);
+      expect(report.callFlows[0].trees[0]).toMatchObject({ key: "checkout", status: "changed", file: "checkout.ts" });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   it("reviews the realistic patch through file and stdin inputs", () => {
@@ -34,6 +38,8 @@ describe("diffninja command", () => {
       const fileReport = JSON.parse(readFileSync(out + ".json", "utf8"));
       expect(fileReport.items).toHaveLength(5);
       expect(fileReport.mode).toBe("mock");
+      expect(fileReport.callFlows).toEqual([]);
+      expect(fileReport.callFlowAvailability).toBe("needs-git-range");
       expect(fileReport.items.some((item: { status: string }) => item.status === "passed")).toBe(true);
       expect(readFileSync(out, "utf8")).toContain("diffninja");
       execFileSync(process.execPath, ["--import", "tsx", cli, "--stdin", "--mock", "--out", out], { input: readFileSync(patch) });
