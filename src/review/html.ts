@@ -45,14 +45,14 @@ export function renderReview(report: ReviewReport): string {
     '<div class="wrap">',
     renderHeader(report),
     '<nav class="view-switch" aria-label="Report view">',
-    '<a href="#view-diff" data-view="diff" aria-current="page">Diff</a>',
-    '<a href="#view-call-flow" data-view="call-flow">Call flow</a>',
+    '<a href="#view-call-flow" data-view="call-flow" aria-current="page">Call flow</a>',
+    '<a href="#view-diff" data-view="diff">Diff</a>',
     "</nav>",
-    '<section id="view-diff" aria-label="Diff">',
-    body,
-    "</section>",
     '<section id="view-call-flow" aria-label="Call flow">',
     renderCallFlows(report),
+    "</section>",
+    '<section id="view-diff" aria-label="Diff">',
+    body,
     "</section>",
     renderFooter(report),
     "</div>",
@@ -341,7 +341,7 @@ const SCRIPT = `
       else link.removeAttribute('aria-current');
     });
   }
-  showView(location.hash === '#view-call-flow' ? 'call-flow' : 'diff');
+  showView(location.hash === '#view-diff' ? 'diff' : 'call-flow');
   document.addEventListener('click', function (event) {
     if (!event.target.closest) return;
     var link = event.target.closest('[data-view]');

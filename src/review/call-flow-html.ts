@@ -909,10 +909,9 @@ export const CALL_FLOW_STYLES = `
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--sunken);
-  overflow-x: auto;
   overscroll-behavior-x: contain;
 }
-.cf-svg { display: block; }
+.cf-svg { display: block; width: 100%; height: auto; }
 .cf-svg-wrap + .cf-svg-wrap { margin-top: 10px; }
 .cf-edge { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
 .cf-gnode rect { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1.5; }
