@@ -30,6 +30,30 @@ priority, reasons, judgment), `callFlow` (ASCII assessment context), `callFlows`
 (structured per-file trees), `callFlowAvailability`, `warnings`, `modelCalls`,
 `mode`, `source`, `createdAt`, `title`.
 
+## Why structured judgment instead of an LLM review
+
+Pasting a diff into a chat model and asking "review this" produces prose:
+verbose, different on every run, and impossible to trust programmatically.
+diffninja takes a different path. Jev is TypeSafe's System One model: it
+does not generate text. Each hunk gets one call carrying four typed
+questions (impact scope, visible bug likelihood, change category, missing
+context), and the answers come back as numbers and categories only.
+
+| Standard LLM code review | diffninja |
+|---|---|
+| Writes paragraphs of feedback | Returns typed signal; ranking, ordering and colors are computed in code |
+| Confidently approves what it does not understand | Uncertainty is a first-class route: low confidence or a split vote fails closed to `uncertain`, never degrades into a pass |
+| The "rubric" is buried in a prompt and the model's mood | Every threshold is a constant: weights, gates, gray bands, rubrics — tunable and calibratable against real review outcomes |
+| Cannot be unit-tested | 112 review tests pin the pipeline's behavior |
+| Reads untrusted diff text as a prompt, open to injection | State is treated as untrusted code, and only numbers cross the boundary — no generated prose ever enters the HTML, JSON or MCP result |
+| Chatty, slow, expensive per review | One small structured judgment call per hunk |
+
+The trade-off is deliberate: there are no prose explanations by design.
+Reasons are fixed templates filled with the returned numbers, so the
+report reads like an ordinary PR review with color guiding attention.
+The model does triage silently in the background; the human remains the
+reviewer.
+
 ## Local build first
 
 This checkout is not published by this work: the package is `private` and both
