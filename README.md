@@ -214,21 +214,25 @@ not an upload facility for an existing HTML report. It does not call a model or
 generate review prose. Select validated diff lines, write single-line inline
 comments and a review body, choose Comment, Approve, or Request changes, then
 preview the exact JSON payload before submitting. GitHub enforces permissions:
-authentication does not establish write access, and authors cannot approve
-their own PRs (GitHub can also reject other decisions on self-authored PRs).
+authentication does not establish write access. GitHub rejects both Approve and
+Request changes on the authenticated user's own PR; Comment remains available.
 The effective `gh api user` login is displayed and checked again at submission.
 
 The snapshot binds repository, PR, base/head SHAs, and a fingerprint of the
-exact diff. Binary or incomplete patches cannot be submitted. Refresh after a
-snapshot mismatch and revalidate anchors before previewing again. Review
-payloads include `commit_id`; GitHub has **no atomic “submit only if head is
+exact diff. Binary, incomplete, and unsupported patches (including submodules
+and symlinks) cannot be submitted. Refresh after a snapshot mismatch: every
+inline draft is preserved but must be explicitly confirmed against the displayed
+current code or attached to a newly selected line before previewing again.
+Review payloads include `commit_id`; GitHub has **no atomic “submit only if head is
 unchanged”** operation, so a head change between the final check and POST remains
 possible. The receipt identifies the actual reviewed commit.
 
 Only one submission can run at a time. A timeout or ambiguous write outcome
 locks submission pending reconciliation against GitHub; absence of a matching
 review is not proof that retry is safe. Do not open another session to blindly
-retry an uncertain write. Recoverable failures preserve browser drafts.
+retry an uncertain write. Recoverable failures preserve browser drafts in
+per-tab `sessionStorage` (memory only if storage is unavailable). Closing the tab
+or stopping the server is not a durable draft or uncertain-write recovery system.
 Drafts contain source/review content; treat the browser session as private.
 
 Authentication is delegated entirely to `gh`: no diffninja token store, PAT UI,
