@@ -1,7 +1,11 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   ConnectedReview,
   GhCommandError,
+  ghCliRunner,
   MIN_GH_VERSION,
   type ConnectedState,
   type GhInvocation,
@@ -10,6 +14,29 @@ import {
   type ReviewEvent,
   type ReviewInput,
 } from "../src/review/github.js";
+
+describe("gh process input failures", () => {
+  it("preserves an early rejection without crashing on a broken stdin pipe", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-gh-exit-"));
+    const originalPath = process.env.PATH;
+    try {
+      writeFileSync(join(dir, "gh"), `#!${process.execPath}
+process.stderr.write("gh: Bad credentials (HTTP 401)\\n");
+process.exit(1);
+`, { mode: 0o755 });
+      process.env.PATH = `${dir}${delimiter}${originalPath ?? ""}`;
+      await expect(ghCliRunner().run({
+        args: ["api", "--input", "-"],
+        stdin: "x".repeat(1024 * 1024),
+        timeoutMs: 5_000,
+      })).rejects.toMatchObject({ name: "GhCommandError", message: "gh: Bad credentials (HTTP 401)" });
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 /**
  * A scripted `gh`. It answers the same argv diffninja builds, so the tests
@@ -186,6 +213,18 @@ async function rejected(work: Promise<unknown>): Promise<string> {
 }
 
 describe("connected review load", () => {
+  it("exports only a successfully bound canonical patch, retaining it after a failed refresh", async () => {
+    const gh = new FakeGh();
+    const review = session(gh);
+    expect(() => review.getDiff()).toThrow(/Load a pull request/);
+    await review.load(PR_URL);
+    expect(review.getDiff()).toBe(DIFF);
+    gh.diff = DIFF.replace("+added()", "+changed()");
+    gh.failures.set("files", "gh: Bad credentials (HTTP 401)");
+    await expect(review.load(PR_URL)).rejects.toThrow(/not authenticated/);
+    expect(review.getDiff()).toBe(DIFF);
+  });
+
   it("binds identity, canonical metadata, and diff anchors", async () => {
     const { state } = await loadedSession();
     expect(state.status).toBe("ready");

@@ -1,19 +1,20 @@
 # diffninja
 
-Focused PR reviews. Jev reads the diff behind the scenes; you review only what
-matters.
+Focused PR reviews: paste a GitHub PR link to open a connected, human-authored
+review workspace. No separate server command is needed.
 
-Paste a diff (or point at a git range) and diffninja returns a navigable PR-style
-report: full diffs, line numbers, and color cues for where to start. Assessment
-details stay in the JSON sidecar, not in the review interface.
+Without a PR link, diffninja keeps its static analysis workflow: paste a diff
+or point at a git range, and Jev ranks the changes in a navigable report.
+Assessment details stay in the JSON sidecar, not in the review interface.
 
-Two front ends share one engine:
+Two front ends:
 
-- `diffninja` — the CLI. Writes an HTML report plus a JSON twin.
-- `diffninja-mcp` — a stdio MCP server exposing one tool, `review_diff`, for
-  coding agents. Writes no report files; the report is the tool result.
+- `diffninja` — the CLI. PR links load GitHub and open a loopback review page;
+  diff/range inputs write an HTML report plus a JSON twin.
+- `diffninja-mcp` — a stdio MCP server exposing `review_diff`. PR links return
+  a loopback review URL; diff/range inputs return the report without files.
 
-## How it works
+## How static analysis works
 
 1. **Deterministic checks first.** No-op hunks, blank-only doc changes, and
    oversized hunks are settled in code without calling any model. Oversized
@@ -25,7 +26,7 @@ Two front ends share one engine:
    and sorted into attention / uncertain / low / passed. Uncertain calls fail
    closed to human review instead of degrading into a pass.
 
-Both front ends return the same `ReviewReport`: `items` (per-hunk status,
+For static analysis, both front ends return the same `ReviewReport`: `items` (per-hunk status,
 priority, reasons, judgment), `callFlow` (ASCII assessment context), `callFlows`
 (structured per-file trees), `callFlowAvailability`, `warnings`, `modelCalls`,
 `mode`, `source`, `createdAt`, `title`.
@@ -44,7 +45,7 @@ context), and the answers come back as numbers and categories only.
 | Writes paragraphs of feedback | Returns typed signal; ranking, ordering and colors are computed in code |
 | Confidently approves what it does not understand | Uncertainty is a first-class route: low confidence or a split vote fails closed to `uncertain`, never degrades into a pass |
 | The "rubric" is buried in a prompt and the model's mood | Every threshold is a constant: weights, gates, gray bands, rubrics — tunable and calibratable against real review outcomes |
-| Cannot be unit-tested | 112 review tests pin the pipeline's behavior |
+| Cannot be unit-tested | Regression tests cover the deterministic pipeline and review boundaries |
 | Reads untrusted diff text as a prompt, open to injection | State is treated as untrusted code, and only numbers cross the boundary — no generated prose ever enters the HTML, JSON or MCP result |
 | Chatty, slow, expensive per review | One small structured judgment call per hunk |
 
@@ -77,6 +78,16 @@ Node `>=22.18` is required.
 ## CLI usage
 
 ```bash
+# open a connected GitHub review automatically
+node /absolute/path/to/diffninja/dist/review/cli.js https://github.com/OWNER/REPO/pull/123
+
+# PR links may also appear in flags or pasted text
+node /absolute/path/to/diffninja/dist/review/cli.js --pr github.com/OWNER/REPO/pull/123/files
+node /absolute/path/to/diffninja/dist/review/cli.js "Please review https://github.com/OWNER/REPO/pull/123"
+
+# explicitly export the PR as an offline HTML report (JSON alongside it)
+node /absolute/path/to/diffninja/dist/review/cli.js --static --mock https://github.com/OWNER/REPO/pull/123
+
 # review a diff file
 diffninja --diff change.patch
 
@@ -96,12 +107,20 @@ diffninja --diff change.patch --mock
 diffninja --diff change.patch --open
 ```
 
-Replace `diffninja` with `node dist/review/cli.js` when running from an
-unpublished checkout. The CLI writes `review.html` in the current directory
-(or the `--out` path) plus a `.json` twin beside it, both mode `600`.
+For the shorthand examples above, replace `diffninja` with
+`node /absolute/path/to/diffninja/dist/review/cli.js`.
+Static mode writes `review.html` in the current directory (or the `--out` path)
+plus a `.json` twin beside it, both mode `600`.
 
-Live mode needs `TYPESAFE_API_KEY` in the environment (get one at
-https://console.typesafe.ai). Reports contain source code, keep them private.
+A PR link anywhere in argv takes precedence over diff/stdin/range inputs.
+`--pr` and `--pull-request` accept a link; `--static` (alias `--export`) opts
+out of connected mode. Different PR links in one invocation are rejected.
+Connected mode writes no report: `--out` requires `--static` with a PR link.
+`--mock` controls static judgments only; it does not bypass GitHub for PR inputs.
+
+Live **static analysis** needs `TYPESAFE_API_KEY` in the environment (get one at
+https://console.typesafe.ai). Connected reviews need authenticated `gh`, not a
+TypeSafe key. Reports contain source code; keep them private.
 Static analysis never approves, blocks, or merges anything. Connected mode below
 can submit a review only after the human writes it, previews it, and presses Submit.
 
@@ -194,17 +213,24 @@ counts all attempted HTTP requests, including retries; failed judgments stay
 `uncertain`. See [the Jev audit](docs/JEV_AUDIT.md) for sources, policy choices,
 pricing and the limits of offline verification.
 
-## Connected GitHub reviews (opt-in)
+## Connected GitHub reviews (default for PR links)
 
-Build locally, install GitHub CLI **2.45.0 or newer**, and authenticate separately:
+Build locally, install [GitHub CLI](https://cli.github.com) **2.45.0 or newer**,
+and authenticate separately:
 
 ```bash
 gh auth login --hostname github.com
-node /absolute/path/to/diffninja/dist/review/cli.js serve --open
+node /absolute/path/to/diffninja/dist/review/cli.js github.com/OWNER/REPO/pull/123
 ```
 
-The server binds an ephemeral port on `127.0.0.1`, prints its URL, and stops with
-Ctrl+C. Paste an explicit `https://github.com/OWNER/REPO/pull/NUMBER` URL.
+The CLI resolves the PR through `gh`, binds an ephemeral port on `127.0.0.1`,
+prints its URL, and automatically opens the loaded review page. Stop with Ctrl+C.
+URLs accept an omitted scheme, trailing slash, or trailing paths such as `/files`.
+Missing `gh` or authentication fails before starting a server and gives setup
+instructions; diffninja never asks for a token.
+
+`serve` remains an advanced alias: with a PR link it follows the same one-step
+flow; without one it opens an empty workspace (`--open` launches its browser).
 One github.com PR and effective account are bound per session. Start a new
 session for another PR or another completed review. There is no automatic PR
 selection or creation, and fork reviews target the base repository's PR.
@@ -248,11 +274,11 @@ API routes are `GET /api/state` and `POST /api/load`, `/api/preview`,
 `/api/submit`, `/api/reconcile`; none is a generic GitHub or command proxy.
 Local malicious processes and browser extensions are outside this boundary.
 The static `file://` report remains offline, cannot write to GitHub, and never
-probes localhost. MCP `review_diff` remains analysis-only.
+probes localhost. MCP PR inputs return a connected page with the same safeguards.
 
 Windows uses `rundll32.exe` to launch the default browser; macOS uses `open`,
-Linux uses `xdg-open`. Browser launching is optional: open the printed URL if
-the desktop launcher is unavailable.
+Linux uses `xdg-open`. PR inputs automatically attempt browser launch; open the
+printed URL manually if the desktop launcher is unavailable.
 
 ## MCP server: the `review_diff` tool
 
@@ -434,23 +460,36 @@ yourself.
 | `repo` | string | Absolute path to the git repository. Only valid together with `from` and `to`. |
 | `from` | string | Base ref or commit for a range review. |
 | `to` | string | Head ref or commit for a range review. Endpoints are compared directly, not the merge base. |
-| `mock` | boolean | Offline fixture judgments for this call only. Not a real Jev review. |
+| `pr` | string | GitHub PR link; starts a connected review. |
+| `input` | string | Free text containing a GitHub PR link; starts a connected review. |
+| `mock` | boolean | Offline fixture judgments for static analysis only. Ignored for connected reviews, which still read GitHub. |
 
 Rules enforced by the schema and the tool:
 
+- A GitHub PR link in **any string field**, including `diff`, selects connected
+  mode before static input validation. The same PR reuses its page within one
+  MCP connection; different links in one call are rejected.
+- `pr` and `input` must contain a PR link. Without a link, the rules below apply.
 - Provide **exactly one** input: `diff`, or `from` **and** `to` together.
 - `repo` is accepted only for a range review and must be an absolute path.
-- Live mode (no `mock`) requires `TYPESAFE_API_KEY` in the server process
+- Live static analysis (no `mock`) requires `TYPESAFE_API_KEY` in the server process
   environment. There is no API key argument.
 - Range reviews use the bundled `calldiff` engine for call flows; inline diffs
   report patch-only warnings instead, since full files are unavailable.
 
-Returns a tool result whose `structuredContent` **is** the `ReviewReport`, with
-`content` carrying the same report as JSON text. Failures (ambiguous input, a
-missing repo, a live call with no key) come back as a tool error with
-`isError: true` and no partial report.
+For static inputs, `structuredContent` **is** the `ReviewReport`, with `content`
+carrying the same report as JSON text. For PR inputs, both carry
+`{ "mode": "connected", "url": "http://127.0.0.1:PORT/", "pr": "https://github.com/OWNER/REPO/pull/N", "snapshot": ... }`.
+Open `url` in a browser; MCP does not launch one or submit a review itself.
+Pages live for the MCP connection and close on disconnect. The server writes
+no report files and reserves stdout for the protocol.
+Failures return `isError: true`, an error message, and no partial report.
 
 ### Call examples
+
+```json
+{ "input": "Please review github.com/OWNER/REPO/pull/123/files" }
+```
 
 ```json
 { "diff": "--- a/checkout.ts\n+++ b/checkout.ts\n@@ -1 +1 @@\n-old()\n+new()\n" }
@@ -465,7 +504,7 @@ missing repo, a live call with no key) come back as a tool error with
 ```
 
 The last one is live: it sends the changed hunks and matching call flows to
-TypeSafe and needs `TYPESAFE_API_KEY`. In every mode the report carries
+TypeSafe and needs `TYPESAFE_API_KEY`. In static mode the report carries
 `source` (`MCP inline diff`, the diff path, `Standard input`, or the ref pair)
 and `mode` (`live` or `mock`). Mock judgments are placeholders from fixtures —
 they do not mean a hunk is safe.

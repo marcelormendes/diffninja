@@ -160,8 +160,13 @@ export function ghCliRunner(): GhRunner {
   return {
     run: (invocation) =>
       new Promise<GhResult>((resolve, reject) => {
+        let inputError: Error | undefined;
         const settle = (error: ExecFileException | null, stdout: string, stderr: string): void => {
           if (error === null) {
+            if (inputError !== undefined) {
+              reject(new GhCommandError("gh input could not be delivered", stdout, stderr));
+              return;
+            }
             resolve({ stdout, stderr });
             return;
           }
@@ -183,7 +188,11 @@ export function ghCliRunner(): GhRunner {
           windowsHide: true,
           env: ghEnvironment(),
         }, settle);
-        child.stdin?.end(invocation.stdin ?? "");
+        // An early exit can close stdin before the payload is delivered. Keep
+        // the command's diagnostic on failure; never accept a partial input on
+        // success, and never let a stream error crash the CLI or MCP process.
+        child.stdin?.on("error", (error: Error) => { inputError = error; });
+        child.stdin?.end(invocation.stdin);
       }),
   };
 }
@@ -261,7 +270,7 @@ function classifyGhFailure(rawError: Error, subject: RejectionSubject): Error {
   if (status === 408 || /timed out|timeout/i.test(detail)) {
     return new Error("gh did not answer in time; the request did not complete. Check the network, then try again.");
   }
-  if (/was not found/i.test(detail) && status === null) return new Error("The GitHub CLI (gh) was not found on PATH. Install gh 2.45.0 or newer and try again.");
+  if (/was not found/i.test(detail) && status === null) return new Error("The GitHub CLI (gh) was not found on PATH. Install gh 2.45.0 or newer from https://cli.github.com, then run `gh auth login --hostname github.com` and try again.");
   if (/unknown json field|unknown flag|unknown shorthand|unknown command/i.test(detail)) {
     return new Error(`The installed gh does not support the flags diffninja needs. Update gh to ${MIN_GH_VERSION} or newer.`);
   }
@@ -728,6 +737,7 @@ function apiPath(coordinates: PullCoordinates, suffix: string): string {
 
 interface SnapshotRead {
   snapshot: ConnectedSnapshot;
+  diff: string;
   anchors: Set<string>;
   /** A fact the reviewer should see even though the snapshot is reviewable. */
   note: string | null;
@@ -753,6 +763,7 @@ export class ConnectedReview {
   private version: string | null = null;
   private identity: ConnectedIdentity | undefined;
   private snapshot: ConnectedSnapshot | undefined;
+  private diff: string | undefined;
   private anchors = new Set<string>();
   private status: ConnectedStatus = "empty";
   private receipt: ConnectedReceipt | undefined;
@@ -775,6 +786,12 @@ export class ConnectedReview {
       receipt: this.receipt,
       message: this.message,
     };
+  }
+
+  /** Canonical patch from the last successfully bound snapshot, for static export. */
+  getDiff(): string {
+    if (this.diff === undefined) throw new Error("Load a pull request before exporting its diff.");
+    return this.diff;
   }
 
   async load(url: string): Promise<ConnectedState> {
@@ -933,7 +950,7 @@ export class ConnectedReview {
     };
     const reason = canonical.problem ?? reviewabilityProblem(meta);
     if (reason !== null) snapshot.unavailableReason = reason;
-    return { snapshot, anchors: canonical.anchors, note: reason === null ? forkNote(meta) : null };
+    return { snapshot, diff: rawDiff, anchors: canonical.anchors, note: reason === null ? forkNote(meta) : null };
   }
 
   /**
@@ -961,6 +978,7 @@ export class ConnectedReview {
     const read = await this.readSnapshot(target);
     this.identity = identity;
     this.snapshot = read.snapshot;
+    this.diff = read.diff;
     this.anchors = read.anchors;
     this.previewed = undefined;
     this.message = read.snapshot.unavailableReason ?? read.note ?? undefined;
