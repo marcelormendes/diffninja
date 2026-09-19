@@ -102,8 +102,8 @@ unpublished checkout. The CLI writes `review.html` in the current directory
 
 Live mode needs `TYPESAFE_API_KEY` in the environment (get one at
 https://console.typesafe.ai). Reports contain source code, keep them private.
-diffninja never approves, blocks, or merges anything. A human still owns the
-decision.
+Static analysis never approves, blocks, or merges anything. Connected mode below
+can submit a review only after the human writes it, previews it, and presses Submit.
 
 ### Navigating the report
 
@@ -193,6 +193,62 @@ a 10-second attempt timeout inside a 30-second per-hunk budget. `modelCalls`
 counts all attempted HTTP requests, including retries; failed judgments stay
 `uncertain`. See [the Jev audit](docs/JEV_AUDIT.md) for sources, policy choices,
 pricing and the limits of offline verification.
+
+## Connected GitHub reviews (opt-in)
+
+Build locally, install GitHub CLI **2.45.0 or newer**, and authenticate separately:
+
+```bash
+gh auth login --hostname github.com
+node /absolute/path/to/diffninja/dist/review/cli.js serve --open
+```
+
+The server binds an ephemeral port on `127.0.0.1`, prints its URL, and stops with
+Ctrl+C. Paste an explicit `https://github.com/OWNER/REPO/pull/NUMBER` URL.
+One github.com PR and effective account are bound per session. Start a new
+session for another PR or another completed review. There is no automatic PR
+selection or creation, and fork reviews target the base repository's PR.
+
+Connected mode is a human review workspace over the **canonical GitHub patch**,
+not an upload facility for an existing HTML report. It does not call a model or
+generate review prose. Select validated diff lines, write single-line inline
+comments and a review body, choose Comment, Approve, or Request changes, then
+preview the exact JSON payload before submitting. GitHub enforces permissions:
+authentication does not establish write access, and authors cannot approve
+their own PRs (GitHub can also reject other decisions on self-authored PRs).
+The effective `gh api user` login is displayed and checked again at submission.
+
+The snapshot binds repository, PR, base/head SHAs, and a fingerprint of the
+exact diff. Binary or incomplete patches cannot be submitted. Refresh after a
+snapshot mismatch and revalidate anchors before previewing again. Review
+payloads include `commit_id`; GitHub has **no atomic “submit only if head is
+unchanged”** operation, so a head change between the final check and POST remains
+possible. The receipt identifies the actual reviewed commit.
+
+Only one submission can run at a time. A timeout or ambiguous write outcome
+locks submission pending reconciliation against GitHub; absence of a matching
+review is not proof that retry is safe. Do not open another session to blindly
+retry an uncertain write. Recoverable failures preserve browser drafts.
+Drafts contain source/review content; treat the browser session as private.
+
+Authentication is delegated entirely to `gh`: no diffninja token store, PAT UI,
+or credential extraction. `GH_TOKEN` (and GitHub CLI's other environment
+overrides) can override stored credentials. GitHub CLI may store credentials
+in plaintext when an OS credential store is unavailable; diffninja makes no
+stronger storage guarantee. Backend calls are noninteractive, bounded, and use
+executable argument arrays, with JSON on stdin rather than shell interpolation.
+
+The loopback server validates Host and Origin, requires a per-session CSRF token
+on mutations, disables caching/framing, and serves a restrictive CSP. Its only
+API routes are `GET /api/state` and `POST /api/load`, `/api/preview`,
+`/api/submit`, `/api/reconcile`; none is a generic GitHub or command proxy.
+Local malicious processes and browser extensions are outside this boundary.
+The static `file://` report remains offline, cannot write to GitHub, and never
+probes localhost. MCP `review_diff` remains analysis-only.
+
+Windows uses `rundll32.exe` to launch the default browser; macOS uses `open`,
+Linux uses `xdg-open`. Browser launching is optional: open the printed URL if
+the desktop launcher is unavailable.
 
 ## MCP server: the `review_diff` tool
 

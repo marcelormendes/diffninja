@@ -6,12 +6,14 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { reviewDiff } from "./service.js";
 import { renderReview } from "./html.js";
+import { serveConnected } from "./connected.js";
 
 const help = `diffninja. Focused local PR review.
 
   diffninja --diff change.patch [--mock] [--out review.html]
   git diff main...HEAD | diffninja --stdin [--mock]
   diffninja --repo /path/to/repo --from main --to HEAD [--mock]
+  diffninja serve [--open]   Connected, human-authored GitHub PR review.
 
 Options:
   --diff PATH    Read a unified diff file.
@@ -30,6 +32,15 @@ Reports contain source code. Keep them private. No merge approval is given.
 `;
 
 async function main(): Promise<void> {
+  if (process.argv[2] === "serve") {
+    const { values } = parseArgs({ args: process.argv.slice(3), options: { open: { type: "boolean" }, help: { type: "boolean" } }, strict: true, allowPositionals: false });
+    if (values.help) { console.log(help); return; }
+    const { server, url } = await serveConnected();
+    console.log(`Connected review: ${url}\nOpen an explicit github.com PR URL in the browser. Stop with Ctrl+C.`);
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { server.close(); server.closeAllConnections(); });
+    if (values.open) await openInBrowser(url);
+    return;
+  }
   const { values } = parseArgs({ options: {
     diff: { type: "string" }, stdin: { type: "boolean" }, from: { type: "string" }, to: { type: "string" },
     repo: { type: "string" }, out: { type: "string" }, mock: { type: "boolean" }, open: { type: "boolean" }, help: { type: "boolean" },
@@ -73,9 +84,10 @@ async function main(): Promise<void> {
 
 /** Open a URL in the default browser. Best effort: logs instead of throwing. */
 function openInBrowser(url: string): Promise<void> {
-  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32.exe" : "xdg-open";
+  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
   return new Promise((resolve) => {
-    execFile(opener, [url], (error) => {
+    execFile(opener, args, { timeout: 10_000, windowsHide: true }, (error) => {
       if (error) {
         console.error(`diffninja: could not open the browser (${error.message})`);
       }
