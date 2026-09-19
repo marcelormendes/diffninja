@@ -105,17 +105,24 @@ link to that hunk. The coverage count states how many changed files have trees.
 
 - **Tree** folds with native disclosure arrows. Click a function name to zoom
   into its subtree; **Source** opens the function definition.
-- **Graph** draws calls as an inline SVG. Click a box for source details, or its
-  `+` control or a numbered edge to zoom into the receiver. **Depth 1 / 2 / 3 / all**
-  limits visible edges below the current focus. “All” means all retained nodes,
-  not an unbounded repository graph. Wide graphs scroll within the report.
+- **Graph** opens at readable size in a bounded canvas. Drag or swipe to pan;
+  use **− / +** to zoom, **Overview** to fit the shape, and **Readable** to reset
+  around the selected function. A focused canvas supports arrow-key pan,
+  **+ / −** zoom and **Home** reset. Ordinary wheel scrolling scrolls the page.
+  Click a box to select it and inspect source without cropping the graph; its
+  `+` control or a numbered edge focuses the receiver's branch.
+  **Depth 1 / 2 / 3 / all** limits edges below that branch. “All” means retained
+  nodes, not an unbounded repository graph.
 - **Sequence** shows root-to-leaf `A → B → C` chip strips, not runtime execution
   order. It displays up to 10 paths per file in the current focus; focusing a
   branch can reveal paths outside the initial ten.
 
-Focus carries across diagram modes. Click a visited-function breadcrumb to return
-to that level and discard later steps; cross-file receivers show their file in
-the trail. **Escape** closes source details first, then returns to all files.
+The mode tabs reveal the same selected function, expanding its Tree ancestors.
+Returning to Graph preserves its pan and zoom. Mode changes add no breadcrumbs.
+Click a visited-function breadcrumb to return and discard later visits;
+cross-file receivers show their file in the trail. **Escape** closes source
+details first, then returns to all files. Without JavaScript, all modes and
+Sequence paths remain available, with native-size graphs scrolling locally.
 Changed nodes use their file's most severe hunk color, not an independent
 assessment of the function. Status marks
 `+`, `−`, and `~` mean added, removed, and a retained caller containing structural

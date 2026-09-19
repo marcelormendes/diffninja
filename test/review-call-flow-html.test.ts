@@ -234,6 +234,21 @@ describe("call-flow graph edges", () => {
 
 });
 
+describe("call-flow progressive enhancement", () => {
+  test("without JavaScript every Sequence path remains available, including paths beyond ten", () => {
+    const root = node({
+      children: Array.from({ length: 12 }, (_, i) =>
+        node({ key: `helper${i}`, label: `helper${i}()`, line: i + 10 }),
+      ),
+    });
+    const html = readable(renderReview(report([flow("src/a.ts", [root])])));
+    const paths = [...html.matchAll(/<li class="cf-path"([^>]*)>/g)];
+    expect(paths).toHaveLength(12);
+    expect(paths.every((path) => !/\bhidden\b/.test(path[1]))).toBe(true);
+    expect(html).toContain("helper11()");
+  });
+});
+
 describe("call-flow controls", () => {
   test("the graph depth control lists the bounded depths and starts at All", () => {
     const html = readable(renderReview(report([flow("src/a.ts", [nested()])])));

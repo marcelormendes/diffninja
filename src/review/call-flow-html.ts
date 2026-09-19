@@ -234,7 +234,6 @@ function renderControls(): string {
     '<span class="cf-depth-label">Graph depth</span>',
     depths,
     "</div>",
-    '<p class="cf-note cf-order">Call paths, not execution order</p>',
     "</div>",
   ].join("\n");
 }
@@ -463,18 +462,27 @@ function renderGraphMode(view: FileView, at: number): string {
         .map((box) => renderGraphNode(box, at, view.file))
         .join("");
       return [
+        `<div class="cf-graph-frame" data-cf-graph="${at}:${root}">`,
+        '<div class="cf-camera-tools enhanced" role="group" aria-label="Graph framing">',
+        '<button type="button" data-cf-camera="out" aria-label="Zoom out">−</button>',
+        '<output class="cf-scale" aria-label="Graph scale">100%</output>',
+        '<button type="button" data-cf-camera="in" aria-label="Zoom in">+</button>',
+        '<button type="button" data-cf-camera="overview" title="Fit all retained calls. Labels may be small.">Overview</button>',
+        '<button type="button" data-cf-camera="readable" title="Readable size at the selected function">Readable</button>',
+        '<span class="cf-note">Drag / swipe to pan</span>',
+        '</div>',
         '<div class="cf-svg-wrap">',
         `<svg class="cf-svg" width="${layout.width}" height="${layout.height}" viewBox="0 0 ${layout.width} ${layout.height}" role="group" aria-label="${escapeHtml(`Call graph for ${tree.label}`)}">`,
         edges,
         boxes,
-        "</svg></div>",
+        "</svg></div></div>",
       ].join("");
     })
     .join("\n");
   return modeSection(
     "graph",
     at,
-    `${figures}<p class="cf-note cf-edge-note">Click a box for source. Click + or a numbered edge to zoom into the receiver. Numbers identify static calls, not execution order.</p>`,
+    `${figures}<p class="cf-note cf-edge-note">Boxes select and show source. + and numbered edges focus a branch. Numbers identify static calls, not execution order.</p>`,
   );
 }
 
@@ -502,8 +510,8 @@ interface GraphLayout {
  * Hand layout: one row per call depth, boxes packed left to right and centred
  * per row, elbow edges from parent bottom to child top. A row is as tall as its
  * tallest box, so a description line on one call never overlaps the next row.
- * The SVG keeps its pixel size so labels stay readable; the wrapper scrolls
- * instead of the page.
+ * The enhanced viewport frames these coordinates without shrinking text.
+ * Without JavaScript the native-size diagram scrolls inside its container.
  */
 function layoutTree(root: CallFlowNode, rootPath: readonly number[]): GraphLayout {
   const levels: GraphBox[][] = [];
@@ -656,7 +664,7 @@ function renderSequenceMode(view: FileView, at: number): string {
   return modeSection(
     "sequence",
     at,
-    `<ol class="cf-paths" data-cf-path-limit="${SEQUENCE_LIMIT}">${paths.map((chain, index) => renderPath(chain, at, index >= SEQUENCE_LIMIT)).join("\n")}</ol>${note}`,
+    `<p class="cf-note">Static call paths, not execution order.</p><ol class="cf-paths" data-cf-path-limit="${SEQUENCE_LIMIT}">${paths.map((chain) => renderPath(chain, at)).join("\n")}</ol>${note}`,
   );
 }
 
@@ -678,13 +686,12 @@ function collectPaths(
 function renderPath(
   chain: ReadonlyArray<{ node: CallFlowNode; path: readonly number[] }>,
   at: number,
-  hidden: boolean,
 ): string {
   const leaf = chain[chain.length - 1];
   const chips = chain
     .map((step) => renderChip(step, at))
     .join('<span class="cf-arrow" aria-hidden="true">→</span>');
-  return `<li class="cf-path" data-cf-file="${at}" data-cf-path="${leaf.path.join("-")}"${hidden ? " hidden" : ""}>${chips}</li>`;
+  return `<li class="cf-path" data-cf-file="${at}" data-cf-path="${leaf.path.join("-")}">${chips}</li>`;
 }
 
 /** A chip is the step's zoom target plus, when the backend resolved it, its own
@@ -730,6 +737,8 @@ export const CALL_FLOW_STYLES = `
   overflow-wrap: anywhere;
 }
 .cf-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.cf-ready .cf-controls { position: sticky; top: var(--toolbar-height, 0px); z-index: 4; background: var(--bg); padding: 8px 0; }
+.cf, .cf-files, .cf-file-body, .cf-mode { min-width: 0; }
 .cf-modes {
   display: inline-flex;
   align-items: stretch;
@@ -750,7 +759,6 @@ export const CALL_FLOW_STYLES = `
 .cf-mode-link:last-child { border-right: 0; }
 .cf-mode-link:hover, .cf-mode-link:focus-visible { color: var(--ink); background: var(--sunken); }
 .js .cf-mode-link[aria-current] { color: var(--ink); background: var(--sunken); font-weight: 600; }
-.cf-order { margin-left: auto; }
 .cf-jump ul {
   display: flex;
   flex-wrap: wrap;
@@ -862,6 +870,8 @@ export const CALL_FLOW_STYLES = `
   text-transform: uppercase;
   color: var(--ink-soft);
 }
+.cf-ready .cf-mode-head { display: none; }
+.cf-ready .cf-mode + .cf-mode { margin-top: 0; border-top: 0; }
 .cf-tree, .cf-children { list-style: none; margin: 0; padding: 0; }
 .cf-children { margin-left: 15px; padding-left: 10px; border-left: 1px dashed var(--line); }
 .cf-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 3px 0; }
@@ -905,17 +915,28 @@ export const CALL_FLOW_STYLES = `
 .cf-node.cf-ancestor > .cf-fold > .cf-row { display: none; }
 .cf-node.cf-ancestor > .cf-fold > .cf-children { margin: 0; padding: 0; border: 0; }
 .cf-svg-wrap {
-  padding: 6px;
+  max-width: 100%;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--sunken);
-  overscroll-behavior-x: contain;
+  overscroll-behavior: contain;
 }
-.cf-svg { display: block; width: 100%; height: auto; }
-.cf-svg-wrap + .cf-svg-wrap { margin-top: 10px; }
+.cf-svg { display: block; max-width: none; }
+.cf-ready .cf-svg-wrap { height: clamp(280px, 48vh, 440px); overflow: hidden; touch-action: none; cursor: grab; }
+.cf-ready .cf-svg-wrap:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
+.cf-ready .cf-svg-wrap.cf-dragging { cursor: grabbing; user-select: none; }
+.cf-ready .cf-svg { width: 100%; height: 100%; }
+.cf-graph-frame + .cf-graph-frame { margin-top: 14px; }
+.cf-camera-tools { align-items: center; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.cf-camera-tools button { min-height: 36px; font-size: 12px; }
+.cf-scale { min-width: 4ch; text-align: center; font: 11px var(--mono); color: var(--ink-soft); }
+.cf-omitted { display: none; }
+.cf-ready .cf-omitted { display: block; }
+.cf-node.cf-selected > .cf-row, .cf-node.cf-selected > .cf-fold > .cf-row,
+.cf-chip.cf-selected { outline: 2px solid var(--cursor); outline-offset: 1px; border-radius: 5px; }
 .cf-edge { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
 .cf-gnode rect { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1.5; }
-.cf-gnode:hover rect, .cf-gnode:focus-visible rect { stroke: var(--cursor); stroke-width: 2.5; }
 .cf-gnode:focus-visible { outline: none; }
 .cf-gzoom circle { fill: var(--panel); stroke: var(--line-strong); }
 .cf-gzoom text { fill: var(--ink); font: 14px var(--mono); }
@@ -927,6 +948,8 @@ export const CALL_FLOW_STYLES = `
 .cf-gnode.cf-st-same .cf-glabel { fill: var(--ink-soft); }
 .cf-gnode:not(.cf-st-same) rect { stroke: var(--cf-color); fill: var(--cf-fill); }
 .cf-gnode:not(.cf-st-same) .cf-glabel { fill: var(--cf-color); }
+.cf-gnode:hover rect, .cf-gnode:focus-visible rect { stroke: var(--cursor); stroke-width: 2.5; }
+.cf-gnode.cf-selected rect { stroke: var(--cursor); stroke-width: 3; }
 .cf-paths { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .cf-path {
   display: flex;
@@ -958,7 +981,7 @@ export const CALL_FLOW_STYLES = `
   color: inherit;
   text-decoration: none;
 }
-.cf-chip-label { font-size: 12px; overflow-wrap: anywhere; }
+.cf-chip-label { min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
 .cf-chip-loc { font-size: 10.5px; color: var(--ink-soft); }
 .cf-chip.cf-st-same .cf-chip-label { color: var(--ink-soft); }
 .cf-chip:not(.cf-st-same) { border-color: var(--cf-color); background: var(--cf-fill); }
@@ -1029,7 +1052,6 @@ export const CALL_FLOW_STYLES = `
 }
 .cf-src-link:hover, .cf-src-link:focus-visible { color: var(--cursor); }
 @media (max-width: 680px) {
-  .cf-order { margin-left: 0; }
   .cf-jump ul { max-height: 38vh; }
   .cf-jump-link { width: 100%; }
   .cf-jump-path { max-width: none; flex: 1 1 auto; }
@@ -1038,6 +1060,8 @@ export const CALL_FLOW_STYLES = `
   .cf-crumb-file { max-width: 12ch; }
   .cf-source { margin-left: 10px; }
   .cf-src-no { width: 3ch; margin-right: 7px; }
+  .cf-chip, .cf-chip-zoom { min-width: 0; flex-wrap: wrap; }
+  .cf-chip-loc { overflow-wrap: anywhere; }
 }
 `;
 
@@ -1062,6 +1086,79 @@ export const CALL_FLOW_SCRIPT = `
   var sourcePanel = document.getElementById('cf-src-panel');
   var sourceBody = document.getElementById('cf-src-panel-body');
   var state = cfNav.createState();
+  var graphViews = new WeakMap();
+  var graphSelections = new WeakMap();
+  var drag = null;
+  var suppressClick = false;
+
+  function rectOf(rect) {
+    return {
+      x: Number(rect.getAttribute('x')), y: Number(rect.getAttribute('y')),
+      width: Number(rect.getAttribute('width')), height: Number(rect.getAttribute('height')),
+    };
+  }
+
+  function paintCamera(graph, camera) {
+    var info = graphViews.get(graph);
+    state = cfNav.setCamera(state, info.key, camera);
+    graph.setAttribute('viewBox', [camera.x, camera.y, info.size.width / camera.scale, info.size.height / camera.scale].join(' '));
+    var frame = graph.closest('.cf-graph-frame');
+    frame.querySelector('.cf-scale').textContent = Math.round(camera.scale * 100) + '%';
+    frame.querySelector('[data-cf-camera="out"]').disabled = camera.scale <= 1;
+    frame.querySelector('[data-cf-camera="in"]').disabled = camera.scale >= 2.5;
+  }
+
+  function frameGraph(graph) {
+    var wrap = graph.parentElement;
+    if (state.mode !== 'graph' || !wrap.clientWidth || !wrap.clientHeight || !graph.getClientRects().length) return;
+    var boxes = graph.querySelectorAll('a.cf-gnode:not([hidden]) rect');
+    if (!boxes.length) return;
+    var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    for (var i = 0; i < boxes.length; i++) {
+      var box = rectOf(boxes[i]);
+      left = Math.min(left, box.x); top = Math.min(top, box.y);
+      right = Math.max(right, box.x + box.width); bottom = Math.max(bottom, box.y + box.height);
+    }
+    var selected = graph.querySelector('a.cf-gnode.cf-selected:not([hidden]) rect');
+    var bounds = { x: left - 16, y: top - 16, width: right - left + 32, height: bottom - top + 32 };
+    var size = { width: wrap.clientWidth, height: wrap.clientHeight };
+    var target = rectOf(selected || boxes[0]);
+    var branch = state.branch;
+    var key = graph.closest('.cf-graph-frame').getAttribute('data-cf-graph') + '/' +
+      (branch ? cfNav.key(branch.file, branch.path) : '') + '/' + state.depth;
+    graphViews.set(graph, { key: key, bounds: bounds, size: size, target: target });
+    var camera = state.cameras[key];
+    camera = camera ? cfNav.constrain(camera, bounds, size) : cfNav.frame(bounds, size, target);
+    var selection = selected ? selected.parentElement.getAttribute('data-cf-path') : '';
+    // Only a new cross-view selection can move an existing camera. Returning to
+    // the same selection preserves even a deliberately panned-away viewport.
+    if (selected && graphSelections.has(graph) && graphSelections.get(graph) !== selection &&
+        (target.x < camera.x || target.y < camera.y ||
+         target.x + target.width > camera.x + size.width / camera.scale ||
+         target.y + target.height > camera.y + size.height / camera.scale)) {
+      camera = cfNav.frame(bounds, size, target);
+    }
+    graphSelections.set(graph, selection);
+    paintCamera(graph, camera);
+  }
+
+  function frameGraphs() {
+    var graphs = view.querySelectorAll('.cf-svg:not([hidden])');
+    for (var i = 0; i < graphs.length; i++) frameGraph(graphs[i]);
+  }
+
+  function cameraAction(graph, action) {
+    var info = graphViews.get(graph);
+    if (!info) return;
+    var camera = state.cameras[info.key];
+    if (action === 'readable' || action === 'overview') {
+      camera = cfNav.frame(info.bounds, info.size, info.target, action === 'overview');
+    } else {
+      camera = cfNav.zoom(camera, action === 'in' ? 1.25 : 0.8,
+        { x: info.size.width / 2, y: info.size.height / 2 }, info.bounds, info.size);
+    }
+    paintCamera(graph, camera);
+  }
 
   function fileAt(index) {
     for (var i = 0; i < files.length; i++) {
@@ -1133,15 +1230,11 @@ export const CALL_FLOW_SCRIPT = `
     if (depthControl) depthControl.hidden = state.mode !== 'graph';
   }
 
-  // Depth bounds the graph only: Tree and Sequence list everything a focus
-  // matches, so they always draw at full depth.
-  function activeDepth() {
-    return state.mode === 'graph' ? state.depth : 'all';
-  }
-
   function applyFocus() {
-    var focus = focusAt();
-    var depth = activeDepth();
+    var selected = focusAt();
+    var branch = state.branch;
+    var focus = { file: branch === null ? null : branch.file, path: branch === null ? '' : branch.path };
+    var depth = state.depth;
     for (var i = 0; i < files.length; i++) {
       var file = files[i];
       var mine = focus.file === null || file.getAttribute('data-cf-file') === String(focus.file);
@@ -1149,7 +1242,8 @@ export const CALL_FLOW_SCRIPT = `
       var nodes = file.querySelectorAll('li.cf-node');
       for (var n = 0; n < nodes.length; n++) {
         var path = nodes[n].getAttribute('data-cf-path');
-        nodes[n].hidden = !mine || !cfNav.visibleNode(path, focus.path, depth);
+        nodes[n].hidden = !mine || !cfNav.visibleNode(path, focus.path, 'all');
+        nodes[n].classList.toggle('cf-selected', Number(file.getAttribute('data-cf-file')) === selected.file && path === selected.path);
         nodes[n].classList.toggle(
           'cf-ancestor',
           mine && focus.path !== '' && path !== focus.path && cfNav.onChain(path, focus.path),
@@ -1159,6 +1253,7 @@ export const CALL_FLOW_SCRIPT = `
       for (var g = 0; g < gNodes.length; g++) {
         var gPath = gNodes[g].getAttribute('data-cf-path');
         gNodes[g].toggleAttribute('hidden', !mine || !cfNav.under(gPath, focus.path) || !cfNav.visibleNode(gPath, focus.path, depth));
+        gNodes[g].classList.toggle('cf-selected', Number(file.getAttribute('data-cf-file')) === selected.file && gPath === selected.path);
       }
       var edges = file.querySelectorAll('path.cf-edge');
       for (var e = 0; e < edges.length; e++) {
@@ -1173,31 +1268,32 @@ export const CALL_FLOW_SCRIPT = `
       var graphs = file.querySelectorAll('.cf-svg');
       for (var s = 0; s < graphs.length; s++) {
         var graph = graphs[s];
-        var shown = graph.querySelectorAll('a.cf-gnode:not([hidden]) rect');
-        graph.toggleAttribute('hidden', shown.length === 0);
-        graph.parentElement.hidden = shown.length === 0;
-        if (!shown.length) continue;
-        var left = Infinity, top = Infinity, right = 0, bottom = 0;
-        for (var b = 0; b < shown.length; b++) {
-          var box = shown[b];
-          var x = Number(box.getAttribute('x')), y = Number(box.getAttribute('y'));
-          left = Math.min(left, x); top = Math.min(top, y);
-          right = Math.max(right, x + Number(box.getAttribute('width')));
-          bottom = Math.max(bottom, y + Number(box.getAttribute('height')));
-        }
-        graph.setAttribute('viewBox', [left - 8, top - 8, right - left + 16, bottom - top + 16].join(' '));
-        graph.setAttribute('width', String(right - left + 16));
-        graph.setAttribute('height', String(bottom - top + 16));
+        var shown = graph.querySelector('a.cf-gnode:not([hidden])');
+        graph.toggleAttribute('hidden', !shown);
+        graph.closest('.cf-graph-frame').hidden = !shown;
+        if (shown) frameGraph(graph);
       }
       var paths = file.querySelectorAll('.cf-path');
       var pathList = file.querySelector('.cf-paths');
       var limit = pathList ? Number(pathList.getAttribute('data-cf-path-limit')) : 0;
-      var matches = 0;
+      var matching = [];
+      var preferred = -1;
       for (var p = 0; p < paths.length; p++) {
         var leaf = paths[p].getAttribute('data-cf-path');
-        var match = mine && cfNav.under(leaf, focus.path);
-        paths[p].hidden = !match || matches >= limit;
-        if (match) matches++;
+        paths[p].hidden = true;
+        if (mine && cfNav.under(leaf, focus.path)) {
+          if (preferred < 0 && Number(file.getAttribute('data-cf-file')) === selected.file && cfNav.under(leaf, selected.path)) preferred = matching.length;
+          matching.push(paths[p]);
+        }
+      }
+      var matches = matching.length;
+      for (var m = 0; m < Math.min(matches, limit); m++) {
+        matching[m === limit - 1 && preferred >= limit ? preferred : m].hidden = false;
+      }
+      var chips = file.querySelectorAll('.cf-chip');
+      for (var h = 0; h < chips.length; h++) {
+        var link = chips[h].querySelector('[data-cf-path]');
+        chips[h].classList.toggle('cf-selected', Number(file.getAttribute('data-cf-file')) === selected.file && link.getAttribute('data-cf-path') === selected.path);
       }
       var omitted = file.querySelector('.cf-omitted');
       if (omitted) {
@@ -1329,7 +1425,8 @@ export const CALL_FLOW_SCRIPT = `
     file.open = true;
     var section = file.querySelector('[data-cf-mode-body="' + state.mode + '"]');
     if (!section) return;
-    var target = each(section.querySelectorAll('[data-cf-path]'), focus.path);
+    var targets = section.querySelectorAll(state.mode === 'tree' ? 'li.cf-node' : state.mode === 'graph' ? 'a.cf-gnode' : '.cf-path:not([hidden]) .cf-chip-zoom');
+    var target = each(targets, focus.path);
     if (!target) return;
     var fold = state.mode === 'tree' ? target.querySelector('.cf-fold') : null;
     if (fold) fold.open = true;
@@ -1338,7 +1435,13 @@ export const CALL_FLOW_SCRIPT = `
       if (step.tagName === 'DETAILS') step.open = true;
       step = step.parentElement;
     }
-    if (target.scrollIntoView) target.scrollIntoView({ block: 'center', inline: 'nearest' });
+    if (state.mode === 'tree') target = target.querySelector('.cf-label');
+    if (state.mode === 'graph') {
+      frameGraphs();
+      target = target.closest('.cf-graph-frame');
+    }
+    if (target && target.scrollIntoView) target.scrollIntoView({ block: 'center', inline: 'nearest' });
+    if (target && target.focus && state.mode !== 'graph') target.focus({ preventScroll: true });
   }
 
   function refresh(scrollCrumbs) {
@@ -1356,6 +1459,15 @@ export const CALL_FLOW_SCRIPT = `
     reveal();
     var focus = focusAt();
     if (sourcePanel && !sourcePanel.hidden && focus.file !== null) showSource(focus.file, focus.path);
+  }
+
+  function inspectSource(index, path) {
+    state = cfNav.inspect(state, index, path);
+    // Inspection must not move the canvas underneath the pointer.
+    var graph = fileAt(index).querySelector('.cf-gnode[data-cf-path="' + path + '"]');
+    if (graph && state.mode === 'graph') graphSelections.set(graph.closest('svg'), path);
+    refresh(false);
+    showSource(index, path);
   }
 
   function focusOn(index, path) {
@@ -1388,15 +1500,6 @@ export const CALL_FLOW_SCRIPT = `
     if (change === state) return;
     state = change;
     refresh(false);
-    if (state.mode === 'graph' && state.trail.length === 0) {
-      var wraps = view.querySelectorAll('.cf-svg-wrap');
-      for (var i = 0; i < wraps.length; i++) {
-        var wrap = wraps[i], graph = wrap.querySelector('svg'), root = wrap.querySelector('.cf-gnode rect');
-        if (!root || !wrap.clientWidth) continue;
-        var origin = Number(graph.getAttribute('viewBox').split(' ')[0]);
-        wrap.scrollLeft = Number(root.getAttribute('x')) + Number(root.getAttribute('width')) / 2 - origin - wrap.clientWidth / 2;
-      }
-    }
     reveal();
   }
 
@@ -1409,6 +1512,11 @@ export const CALL_FLOW_SCRIPT = `
 
   document.addEventListener('click', function (event) {
     if (!event.target.closest) return;
+    var cameraButton = event.target.closest('[data-cf-camera]');
+    if (cameraButton) {
+      cameraAction(cameraButton.closest('.cf-graph-frame').querySelector('svg'), cameraButton.getAttribute('data-cf-camera'));
+      return;
+    }
     var crumbButton = event.target.closest('.cf-crumb');
     if (crumbButton) {
       event.preventDefault();
@@ -1425,7 +1533,7 @@ export const CALL_FLOW_SCRIPT = `
     var source = event.target.closest('[data-cf-source]');
     if (source) {
       event.preventDefault();
-      showSource(Number(source.getAttribute('data-cf-file')), source.getAttribute('data-cf-path'));
+      inspectSource(Number(source.getAttribute('data-cf-file')), source.getAttribute('data-cf-path'));
       return;
     }
     var zoom = event.target.closest('[data-cf-zoom]');
@@ -1453,6 +1561,26 @@ export const CALL_FLOW_SCRIPT = `
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     if (view.hidden) return;
     if (!event.target.closest) return;
+    var canvas = event.target.closest('.cf-svg-wrap');
+    if (canvas) {
+      var graph = canvas.querySelector('svg'), info = graphViews.get(graph);
+      var moves = { ArrowLeft: [60, 0], ArrowRight: [-60, 0], ArrowUp: [0, 60], ArrowDown: [0, -60] };
+      if (info && moves[event.key]) {
+        event.preventDefault();
+        paintCamera(graph, cfNav.pan(state.cameras[info.key], moves[event.key][0], moves[event.key][1], info.bounds, info.size));
+        return;
+      }
+      if (event.key === '+' || event.key === '=' || event.key === '-') {
+        event.preventDefault();
+        cameraAction(graph, event.key === '-' ? 'out' : 'in');
+        return;
+      }
+      if (event.key === 'Home') {
+        event.preventDefault();
+        cameraAction(graph, 'readable');
+        return;
+      }
+    }
     var link = event.target.closest('a[data-cf-zoom], a[data-cf-source]');
     if (link && event.key === 'Enter') {
       // A focused SVG link gets no default activation in every engine; inside
@@ -1460,7 +1588,7 @@ export const CALL_FLOW_SCRIPT = `
       // that instead of the bare anchor jump the href would perform.
       event.preventDefault();
       var index = Number(link.getAttribute('data-cf-file')), path = link.getAttribute('data-cf-path');
-      if (link.hasAttribute('data-cf-source')) showSource(index, path);
+      if (link.hasAttribute('data-cf-source')) inspectSource(index, path);
       else focusOn(index, path);
       return;
     }
@@ -1475,8 +1603,67 @@ export const CALL_FLOW_SCRIPT = `
     }
   });
 
+  view.addEventListener('pointerdown', function (event) {
+    var wrap = event.target.closest('.cf-svg-wrap');
+    if (!wrap || event.button !== 0 || !event.isPrimary) return;
+    suppressClick = false;
+    drag = { wrap: wrap, id: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+  });
+  view.addEventListener('pointermove', function (event) {
+    if (!drag || drag.id !== event.pointerId) return;
+    var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+    if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 5) return;
+    drag.moved = true;
+    drag.wrap.setPointerCapture(event.pointerId);
+    drag.wrap.classList.add('cf-dragging');
+    var graph = drag.wrap.querySelector('svg'), info = graphViews.get(graph);
+    if (info) paintCamera(graph, cfNav.pan(state.cameras[info.key], dx, dy, info.bounds, info.size));
+    drag.x = event.clientX; drag.y = event.clientY;
+  });
+  function finishDrag(event) {
+    if (!drag || drag.id !== event.pointerId) return;
+    suppressClick = drag.moved && event.type === 'pointerup';
+    drag.wrap.classList.remove('cf-dragging');
+    if (drag.wrap.hasPointerCapture(event.pointerId)) drag.wrap.releasePointerCapture(event.pointerId);
+    drag = null;
+  }
+  view.addEventListener('pointerup', finishDrag);
+  view.addEventListener('pointercancel', finishDrag);
+  view.addEventListener('click', function (event) {
+    if (!suppressClick) return;
+    suppressClick = false;
+    if (!event.target.closest('.cf-svg-wrap')) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+
+  var wraps = view.querySelectorAll('.cf-svg-wrap');
+  for (var w = 0; w < wraps.length; w++) {
+    wraps[w].tabIndex = 0;
+    wraps[w].setAttribute('role', 'region');
+    wraps[w].setAttribute('aria-label', 'Pannable call graph. Arrow keys pan, plus and minus zoom, Home restores readable size.');
+  }
+  view.addEventListener('focusin', function (event) {
+    var link = event.target.closest('.cf-gnode, .cf-gzoom, .cf-edge-num');
+    if (!link || !link.matches(':focus-visible')) return;
+    var graph = link.closest('svg'), info = graphViews.get(graph);
+    var node = each(graph.querySelectorAll('.cf-gnode'), link.getAttribute('data-cf-path'));
+    if (!info || !node) return;
+    var target = rectOf(node.querySelector('rect'));
+    var camera = state.cameras[info.key];
+    if (target.x < camera.x || target.y < camera.y || target.x + target.width > camera.x + info.size.width / camera.scale ||
+        target.y + target.height > camera.y + info.size.height / camera.scale) {
+      paintCamera(graph, cfNav.frame(info.bounds, info.size, target));
+    }
+  });
+  if (typeof ResizeObserver !== 'undefined') {
+    var observer = new ResizeObserver(frameGraphs);
+    for (var r = 0; r < wraps.length; r++) observer.observe(wraps[r]);
+  } else window.addEventListener('resize', frameGraphs);
+  view.addEventListener('toggle', frameGraphs, true);
+
   upgradeLabels();
-  refresh(false);
   host.classList.add('cf-ready');
+  refresh(false);
 }());
 `;
