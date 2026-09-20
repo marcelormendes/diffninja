@@ -436,6 +436,36 @@ worktree. Native source builds in this sandbox also used
 That header path is machine-specific; do not apply it to a different Node
 version or assume it exists on another platform.
 
+### Local preparation verification
+
+- `npm ci`, `npm run build` and `npm run lint` passed.
+- The unchanged full suite passed: **393 tests in 46 files**, using
+  `npm test -- --maxWorkers=2` with a private `TMPDIR`, matching local Node
+  headers, and all 21 on-demand grammars available to both workers. The native
+  grammars were real packages, including locally compiled Perl/Kotlin; no test
+  assertions or runtime code were changed. Earlier runs used a shared cache
+  and/or encountered Swift's download timeout described above; this passing run
+  proves cached native behavior, not reliable cold Swift installation through
+  this workstation's proxy.
+- `npm pack --dry-run` and the final real pack contain **105 files**:
+  `LICENSE`, `README.md`, `package.json`, 51 JavaScript files and 51 declarations.
+  The final tarball is 153,906 bytes; no stale `tmp-report.js`, source, tests,
+  development scripts or lockfile is included.
+- The final tarball passed clean-room global installation on Linux x64 with
+  Node 24.20.0/npm 10.9.4 and Node 22.18.0/npm 11.5.1: both installed command
+  shims, mock CLI reports, native TypeScript/Python and an MCP stdio review.
+  A minimum-toolchain install initially hit the consumer script's network
+  timeout; a fresh-prefix rerun passed.
+- npm's real shim generator produced correctly targeted `.cmd` and `.ps1`
+  files for both bins. These were inspected on Linux, not executed on Windows.
+- `actionlint` 1.7.12 accepted the workflow. Executed metadata-gate checks
+  allowed publication only for a tag push, denied PR/manual-dispatch events,
+  and rejected a tag/version mismatch. The hosted workflow itself was not run.
+
+Temporary test caches and downloaded validation tooling were removed. The
+ignored `dist-pack/` directory retains the tarball, its SHA-256 sidecar and the
+complete `pack-files.txt` inventory for inspection; these are not npm contents.
+
 ## Primary references
 
 - [npm trusted publishers: OIDC requirements and configuration](https://docs.npmjs.com/trusted-publishers/)
