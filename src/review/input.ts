@@ -5,6 +5,9 @@ function pathName(raw: string): string {
   const value = raw.split("\t")[0];
   if (value.startsWith('"')) {
     // Keep Git's quoted path verbatim rather than guessing at octal escapes.
+    // A quoted path (or one containing " b/") therefore differs from the
+    // repo-relative path the engine reports, which downstream file matching and
+    // definition reads compare against.
     return value;
   }
   return value.replace(/^[ab]\//, "");

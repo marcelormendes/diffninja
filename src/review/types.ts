@@ -61,6 +61,7 @@ export interface CallFlowFile {
  * the analysis threw.
  */
 export type CallFlowAvailability = "available" | "needs-git-range" | "no-changes" | "failed";
+/** One parsed piece of the input: a text hunk, or a file's metadata-only change. */
 export interface ReviewUnit {
   id: string;
   file: string;
@@ -70,19 +71,26 @@ export interface ReviewUnit {
   removed: number;
   oldStart: number;
   newStart: number;
+  /**
+   * Why this unit cannot be judged from the diff alone (binary, rename, mode,
+   * symbolic link, submodule). A unit that carries one never reaches the model.
+   */
   special?: string;
   callFlow?: string[];
 }
 export interface Judgment {
   risk: number; // 0..3, probability-weighted rubric index
-  bug: number;
-  needsHuman: number;
+  bug: number; // 0..1, validated end to end
+  needsHuman: number; // 0..1, validated end to end
+  /** One of `REVIEW_CATEGORIES`; the closed set is checked before the answer is believed. */
   category: string;
+  /** Lower of the risk and category answer confidences, 0..1. */
   confidence: number;
 }
 export interface ReviewItem extends ReviewUnit {
   status: ReviewStatus;
   priority: number; // 0..100
+  /** Fixed templates over returned values and this adapter's own rubric text; no model-authored text is quoted. */
   reasons: string[];
   judgment?: Judgment;
 }
@@ -101,10 +109,14 @@ export interface ReviewReport {
   callFlows: CallFlowFile[];
   callFlowAvailability: CallFlowAvailability;
   warnings: string[];
+  /** Counts attempted HTTP requests, retries and failures included; always zero in mock mode. */
   modelCalls: number;
 }
 export interface ReviewOptions {
+  /** Deterministic local fixtures, not an assessment of the code; no request is made. */
   mock?: boolean;
+  /** Takes precedence over the `TYPESAFE_API_KEY` environment variable. */
   apiKey?: string;
+  /** Test seam; defaults to `globalThis.fetch`. */
   fetch?: typeof globalThis.fetch;
 }
