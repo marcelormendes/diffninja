@@ -65,7 +65,7 @@ function machineFor(arch: string): number {
   return arch === "x64" ? 0x8664 : 0xaa64;
 }
 
-function prebuildRoot(machine: number): { root: string; file: string } {
+function prebuildRoot(machine: number) {
   const root = mkdtempSync(join(tmpdir(), "diffninja prebuild "));
   const dir = join(root, "prebuilds", `${process.platform}-${process.arch}`);
   mkdirSync(dir, { recursive: true });

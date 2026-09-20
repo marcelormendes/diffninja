@@ -197,25 +197,18 @@ export function mislabeledPrebuild(packageRoot: string): string | null {
 }
 
 /**
- * Explain a native load failure in actionable terms. The caller still throws;
- * extraction treats it as a per-file warning, so the hint must name the fix.
+ * Explain a native load failure in actionable terms. Extraction treats load
+ * failures as per-file warnings, so the hint must name the fix.
  */
-function describeNativeLoadFailure(npmPackage: string, err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
-  if (/GLIBCXX|GLIBC_/i.test(message)) {
+function withNativeLoadHints(npmPackage: string, err: Error): string {
+  if (/GLIBCXX|GLIBC_/i.test(err.message)) {
     return (
-      `${message} — the ${npmPackage} native module needs libstdc++ from GCC 13.1 ` +
+      `${err.message} — the ${npmPackage} native module needs libstdc++ from GCC 13.1 ` +
       `or newer (for example Ubuntu 24.04+). Rebuild it for this host with ` +
       `\`npm rebuild ${npmPackage} --build-from-source\`, or upgrade libstdc++.`
     );
   }
-  return message;
-}
-
-function isEsmTopLevelAwait(err: unknown): boolean {
-  const code = err instanceof Error ? errnoCode(err) : undefined;
-  const msg = err instanceof Error ? err.message : String(err);
-  return code === "ERR_REQUIRE_ASYNC_MODULE" || msg.includes("top-level await");
+  return err.message;
 }
 
 function requireGrammar(
@@ -227,7 +220,13 @@ function requireGrammar(
     // SAFETY: grammar packages export a module compatible with GrammarModule.
     return require(npmPackage) as GrammarModule;
   } catch (err) {
-    if (isEsmTopLevelAwait(err)) {
+    // SAFETY: catch bindings are unknown; normalize to Error at the boundary.
+    const failure = err instanceof Error ? err : new Error(String(err));
+    const code = errnoCode(failure);
+    if (
+      code === "ERR_REQUIRE_ASYNC_MODULE" ||
+      failure.message.includes("top-level await")
+    ) {
       const binding = loadNativeBinding(packageRoot);
       if (binding) return binding;
     } else {
@@ -246,7 +245,7 @@ function requireGrammar(
         }
       }
     }
-    throw new Error(describeNativeLoadFailure(npmPackage, err));
+    throw new Error(withNativeLoadHints(npmPackage, failure));
   }
 }
 
@@ -301,7 +300,6 @@ function installGrammarPackage(cacheDir: string, npmPackage: string): void {
     "--legacy-peer-deps",
     installSpecFor(npmPackage),
   ]);
-  let lastError: unknown = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       execFileSync(npm.file, npm.args, {
@@ -311,16 +309,18 @@ function installGrammarPackage(cacheDir: string, npmPackage: string): void {
       });
       return;
     } catch (err) {
-      lastError = err;
-      if (attempt < 3) sleepMs(2000 * attempt);
+      if (attempt === 3) {
+        // SAFETY: catch bindings are unknown; normalize to Error at the boundary.
+        const failure = err instanceof Error ? err : new Error(String(err));
+        const hint = installFailureHint(npmPackage);
+        throw new Error(
+          `Could not install the ${npmPackage} grammar into ${cacheDir}: ${failure.message}` +
+            (hint ? ` ${hint}` : ""),
+        );
+      }
+      sleepMs(2000 * attempt);
     }
   }
-  const detail = lastError instanceof Error ? lastError.message : String(lastError);
-  const hint = installFailureHint(npmPackage);
-  throw new Error(
-    `Could not install the ${npmPackage} grammar into ${cacheDir}: ${detail}` +
-      (hint ? ` ${hint}` : ""),
-  );
 }
 
 /**
@@ -335,7 +335,13 @@ export function loadGrammarPackage(npmPackage: string): GrammarModule {
       // SAFETY: local dependency resolves to a tree-sitter grammar module.
       return localRequire(npmPackage) as GrammarModule;
     } catch (err) {
-      if (isEsmTopLevelAwait(err)) {
+      // SAFETY: catch bindings are unknown; normalize to Error at the boundary.
+      const failure = err instanceof Error ? err : new Error(String(err));
+      const code = errnoCode(failure);
+      if (
+        code === "ERR_REQUIRE_ASYNC_MODULE" ||
+        failure.message.includes("top-level await")
+      ) {
         const entry = localRequire.resolve(npmPackage);
         const packageRoot = join(entry, "..", "..");
         const binding = loadNativeBinding(packageRoot);
