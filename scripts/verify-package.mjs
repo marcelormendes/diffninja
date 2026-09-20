@@ -60,13 +60,13 @@ try {
 
   // Native DLLs stay locked while loaded on Windows. Use a child that exits
   // before removing the sandbox, just like the CLI and MCP checks below.
+  // On-demand grammar installation runs on every platform: on Windows it
+  // exercises the npm-cli.js invocation, which cmd.exe shims cannot serve.
   run(process.execPath, ["--input-type=module", "-e", `
     import assert from "node:assert/strict";
     const { extractFunctions } = await import(process.argv[1]);
     assert.equal(extractFunctions("sample.ts", "export function greet() { return 42; }")[0].key, "greet");
-    if (process.platform !== "win32") {
-      assert.equal(extractFunctions("sample.py", "def greet():\\n    return 42\\n")[0].key, "greet");
-    }
+    assert.equal(extractFunctions("sample.py", "def greet():\\n    return 42\\n")[0].key, "greet");
   `, pathToFileURL(join(packageDir, "dist/extract.js")).href], {
     env: { ...isolatedEnv, CALLDIFF_GRAMMAR_CACHE: join(sandbox, "grammar cache") },
   });
@@ -80,6 +80,13 @@ try {
   assert.equal(report.mode, "mock");
   assert.equal(report.items.length, 1);
   assert.match(readFileSync(out, "utf8"), /<!doctype html>/i);
+
+  // --open is best-effort (no browser on CI): it must still exit 0 with the
+  // report written. On Windows this executes the rundll32 opener path.
+  const openOut = join(sandbox, "review-open.html");
+  run(process.execPath, [join(packageDir, manifest.bin.diffninja), "--diff", patchPath, "--mock", "--out", openOut, "--open"]);
+  assert(existsSync(openOut));
+  assert(existsSync(openOut + ".json"));
 
   const appRequire = createRequire(join(packageDir, "package.json"));
   const { Client } = await import(pathToFileURL(appRequire.resolve("@modelcontextprotocol/sdk/client/index.js")).href);
@@ -102,7 +109,7 @@ try {
   } finally {
     await client.close();
   }
-  console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, both command shims, CLI, native TypeScript${windows ? " (on-demand grammars unsupported on Windows)" : "/Python"}, MCP stdio`);
+  console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, both command shims, CLI, --open, native TypeScript/Python, MCP stdio`);
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
 }
