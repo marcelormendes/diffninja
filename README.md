@@ -45,7 +45,11 @@ context), and the answers come back as numbers and categories only.
 | Writes paragraphs of feedback | Returns typed signal; ranking, ordering and colors are computed in code |
 | Confidently approves what it does not understand | Uncertainty is a first-class route: low confidence or a split vote fails closed to `uncertain`, never degrades into a pass |
 | The "rubric" is buried in a prompt and the model's mood | Every threshold is a constant: weights, gates, gray bands, rubrics — tunable and calibratable against real review outcomes |
+<<<<<<< HEAD
 | Cannot be unit-tested | Regression tests cover the deterministic pipeline and review boundaries |
+=======
+| Cannot be unit-tested | The review test suite pins the pipeline's behavior |
+>>>>>>> ded18fb (docs: document first npm release and platform limitations)
 | Reads untrusted diff text as a prompt, open to injection | State is treated as untrusted code, and only numbers cross the boundary — no generated prose ever enters the HTML, JSON or MCP result |
 | Chatty, slow, expensive per review | One small structured judgment call per hunk |
 
@@ -78,13 +82,34 @@ diffninja --help                 # CLI: writes review.html plus its JSON twin
 ```powershell
 # Windows PowerShell
 npm install -g diffninja
-diffninja --help                 # npm also installs the diffninja.cmd / diffninja-mcp.cmd shims
+diffninja --help                 # npm writes diffninja.cmd, diffninja.ps1 and a shell shim
 ```
 
 Both bins ship in the package: `diffninja` (the CLI) and `diffninja-mcp` (the
-MCP server). Point MCP clients at the server with `node` plus the absolute path
-of its entry point; the server speaks JSON-RPC on stdin/stdout only, so a client
-launches it and no shell wrapper is involved.
+MCP server). npm generates three Windows shims per bin — `.cmd`, `.ps1` and a
+shell script — so a host whose PowerShell execution policy blocks `.ps1` can
+call the `.cmd` form instead (`npm.cmd install -g diffninja`, then
+`diffninja.cmd --help`) without changing the policy. Point MCP clients at the
+server with `node` plus the absolute path of its entry point; the server speaks
+JSON-RPC on stdin/stdout only, so a client launches it and no shell wrapper is
+involved.
+
+### What the tarball contains, and what npm installs
+
+`files` in `package.json` limits the package to `dist/**/*.js` and
+`dist/**/*.d.ts`, plus `package.json`, `README.md` and `LICENSE`. `src`, `test`,
+`scripts`, `tsconfig.json`, `vitest.config.ts` and the lockfile stay out of the
+tarball.
+
+TypeScript/TSX and JavaScript grammar support is therefore a normal npm
+dependency, not something copied into the tarball: `tree-sitter@^0.25.1` and
+`tree-sitter-typescript@^0.23.2` are `dependencies`, so npm installs them from
+the registry beside diffninja, and `tree-sitter-javascript@0.23.1` arrives as
+tree-sitter-typescript's own dependency. npm's `bundleDependencies` (the field
+that would inline a `node_modules` directory into the published package) is not
+used, and the packed tarball contains no `node_modules` at all. Grammars for
+every other language are fetched on demand into the grammar cache described
+below.
 
 ### From this checkout (works today)
 
@@ -136,31 +161,73 @@ setups below use that form.
 
 Install-time caveats for both paths:
 
-- **Native prebuilds.** Linux ARM64 is currently a release blocker: the bundled
-  TypeScript/JavaScript grammars' ARM64 files contain x86-64 code. Corrected
-  upstream artifacts and a passing ARM64 install gate are needed before release.
-  Linux runtime prebuilds also require `GLIBCXX_3.4.31` (GCC 13.1+ libstdc++,
-  such as Ubuntu 24.04); older distributions need a source rebuild. macOS
-  x64/ARM64 and Windows x64 artifacts exist but await runtime CI verification.
-  Source-build workarounds and exact evidence: [docs/npm-release.md](docs/npm-release.md).
-- **Peer-range warnings on install.** The grammar packages declare older
-  optional `tree-sitter` peer ranges. Clean global installs tested here exit 0
-  with `ERESOLVE overriding peer dependency` warnings and work at runtime,
-  but `npm ls` marks those ranges invalid. Local installs can instead add an
-  older parser copy, which requires compilation on platforms without its
-  prebuilds. The root project's override does not apply to consumers. The
-  recommended fix is corrected upstream peer metadata, not consumer `--force`
-  or `--legacy-peer-deps` flags.
-- **Grammar cache.** Git-range reviews install any missing tree-sitter grammar
-  into `CALLDIFF_GRAMMAR_CACHE` (default `~/.cache/calldiff/grammars`), which
-  writes to that directory and uses npm. Inline diff text never needs it, and
-  preinstalling the grammars keeps a review offline; see the MCP section for the
-  `readOnlyHint` consequence. Most grammar packages ship prebuilds for all six
-  platform/arch pairs, but not all of them do — Perl and Kotlin ship none, for
-  example — and those compile from source on first use, which needs a C/C++
-  toolchain and Python. A grammar that cannot be installed fails the call-flow
-  step, not the review: `callFlowAvailability` becomes `"failed"` and a warning
-  says the review is based on the diff alone.
+- **Direct dependencies and the peer warning.** The grammar packages diffninja
+  installs declare an *optional* peer of an older parser
+  (`tree-sitter-typescript@0.23.2` wants `tree-sitter@^0.21.0`,
+  `tree-sitter-javascript@0.23.1` wants `^0.21.1`) while diffninja depends on
+  `^0.25.1`. npm's documented behavior for a conflicting
+  peer is to resolve it against the nearest non-peer dependency and warn, so a
+  global install prints `ERESOLVE overriding peer dependency` and still installs
+  0.25.1. In that layout `npm ls` exits 1 with `ELSPROBLEMS`, marking the peer
+  ranges invalid. A local project install resolves the same conflict the other
+  way: it adds a second, older `tree-sitter@0.21.1` next to diffninja's 0.25.1,
+  and that copy has no Linux ARM64 or Windows ARM64 prebuild, so installing it
+  there needs a build toolchain. The repository's own `overrides` entry does not
+  help consumers: npm honors `overrides` only from the root `package.json`. The
+  fix belongs upstream as a widened peer range, so do not paper over it with
+  consumer `--force` or `--legacy-peer-deps` flags.
+- **Linux ARM64 is not supported.** `tree-sitter-typescript@0.23.2` and
+  `tree-sitter-javascript@0.23.1` ship x86-64 code under
+  `prebuilds/linux-arm64/`: the file is byte-identical to the x64 one and its ELF
+  header reads `Advanced Micro Devices X86-64`, so TypeScript/TSX and JavaScript
+  call-flow extraction cannot load on ARM64 Linux even though the file exists.
+  The release pipeline therefore gates Linux x64, macOS x64, macOS ARM64 and
+  Windows x64, and Linux ARM64 has no supported path until the upstream packages
+  ship corrected artifacts. Evidence and the upstream fix are in
+  [docs/npm-release.md](docs/npm-release.md).
+- **Linux needs a recent libstdc++.** The `tree-sitter@0.25.1` Linux prebuild
+  imports `GLIBCXX_3.4.31` (GCC 13.1+, i.e. libstdc++ from Ubuntu 24.04 or
+  newer), so the same binary fails at first use on older distributions instead of
+  at install time. `npm rebuild --prefix <installed diffninja> tree-sitter
+  --build-from-source` rebuilds it against the host toolchain.
+- **Grammar cache.** Git-range reviews install a missing grammar with
+  `npm install --prefix <cache> --no-save --no-fund --no-audit
+  --legacy-peer-deps <grammar>` into `CALLDIFF_GRAMMAR_CACHE`, which defaults to
+  `~/.cache/calldiff/grammars` (`C:\Users\<you>\.cache\calldiff\grammars` on
+  Windows). It writes there and needs the network; inline diff text never does.
+  Preinstalling the same grammars the same way keeps a review offline and makes
+  the first call predictable:
+
+  ```bash
+  export CALLDIFF_GRAMMAR_CACHE="$HOME/.cache/calldiff/grammars"
+  npm install --prefix "$CALLDIFF_GRAMMAR_CACHE" --no-save --no-fund --no-audit \
+    --legacy-peer-deps tree-sitter-python
+  ```
+
+  ```powershell
+  # Windows: call npm.cmd, and match the runtime's exact pins where it has one
+  $cache = "D:\diffninja-grammar-cache"     # any writable path; spaces are fine
+  npm.cmd install --prefix "$cache" --no-save --no-fund --no-audit --legacy-peer-deps tree-sitter-python
+  $env:CALLDIFF_GRAMMAR_CACHE = $cache
+  ```
+
+  The runtime pins two specs, so a manual preinstall must match them:
+  `tree-sitter-c-sharp@0.23.1` and
+  `@tree-sitter-grammars/tree-sitter-lua@0.2.0`; everything else installs at its
+  latest version. **On Windows the automatic path does not work at all**: the
+  runtime launches `npm` directly (`execFileSync("npm", …)`) and Node cannot
+  start a `.cmd`/`.bat` shim without a shell, so that install fails. A grammar
+  already present in the cache is loaded from disk without npm ever running, so
+  the `npm.cmd` preinstall above is the workaround for Windows reviewers. Some
+  grammar packages also have no prebuild for the running platform and compile
+  with node-gyp on first use, which needs a C/C++ toolchain and Python:
+  `tree-sitter-perl@2.0.0` and `tree-sitter-kotlin@0.3.8` ship none,
+  `@tree-sitter-grammars/tree-sitter-lua@0.2.0` ships no Linux ARM64 or Windows
+  ARM64 prebuild. A grammar that cannot be installed is reported per file
+  (`warn: failed to parse <file>`) and the review still runs on the diff and
+  whatever call flows resolved; `callFlowAvailability` is `"failed"` only when
+  the analysis itself throws. See the MCP section for the `readOnlyHint`
+  consequence.
 - **Reports are private.** They embed source code, including unchanged code, so
   keep them out of shared directories.
 
@@ -224,9 +291,17 @@ TypeSafe key. Reports contain source code; keep them private.
 Static analysis never approves, blocks, or merges anything. Connected mode below
 can submit a review only after the human writes it, previews it, and presses Submit.
 
+`--open` is best effort and platform-specific: it runs `open` on macOS and
+`xdg-open` everywhere else. Windows ships neither, so `--open` there prints
+`could not open the browser` and exits 0 with the report already written — the
+run always prints the `file:///…` URL and the JSON path. Open the HTML yourself
+(`start "" review.html` in cmd.exe, `Start-Process .\review.html` in PowerShell,
+or the printed URL); nothing in the report depends on an opener.
+
 ### Navigating the report
 
-The HTML is one self-contained file: open it directly with `file://` or `--open`.
+The HTML is one self-contained file: open it directly with `file://` or `--open`
+(on Windows use the printed `file:///…` path — see the CLI caveat above).
 It makes no external requests and has no frontend dependencies. All hunks start
 expanded; full diffs and native folding remain available with JavaScript disabled.
 Light/dark colors follow your system preference.
@@ -412,7 +487,10 @@ installation into `CALLDIFF_GRAMMAR_CACHE` (default `~/.cache/calldiff/grammars`
 This can write cache files and access npm even with `mock: true`; the tool
 therefore advertises `readOnlyHint: false`, although it does not edit repository
 source. For strictly offline reviews, supply inline diff text or preinstall
-the required grammars. Mock always disables TypeSafe calls.
+the required grammars. Mock always disables TypeSafe calls. On Windows that
+automatic install never runs (the runtime cannot start npm's `.cmd` shim), so
+preinstalling with `npm.cmd` as shown in the install caveats is the only way to
+get call flows for languages whose grammar is not a package dependency.
 
 A hybrid (skill for review conventions, MCP for the call) only helps if you
 want agent-side playbooks on top of the tool; it is not needed to run reviews.
