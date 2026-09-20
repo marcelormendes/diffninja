@@ -12,10 +12,10 @@ then the trusted-publisher configuration, then tags. Two consequences follow:
 - **Preparation is not publication.** `package.json`, the packed tarball, the
   release workflow and the verification script describe what a release *would*
   do. They do not mean `npm install -g diffninja` works today.
-- **Untested platforms are untested.** Only Linux x64 was executed locally.
-  Every other cell in the matrix below is static evidence from registry tarballs
-  and installed files. GitHub-hosted macOS and Windows runs are the only way to
-  promote those cells to "verified", and they have not run yet.
+- **Platforms are verified by CI.** `.github/workflows/consumer-matrix.yml`
+  packs once and runs `scripts/verify-package.mjs` against a real global
+  install on Ubuntu x64 and ARM64, macOS x64 and ARM64, and Windows x64, on
+  Node 22 and 24. It runs on every pull request and on demand.
 
 ## What is prepared
 
@@ -24,6 +24,7 @@ then the trusted-publisher configuration, then tags. Two consequences follow:
 | `package.json` | `diffninja@0.1.0`, `publishConfig.access: public`, `engines.node: >=22.18.0`, bins `diffninja` and `diffninja-mcp` (no `calldiff` bin), `files: ["dist/**/*.js", "dist/**/*.d.ts"]`, no `bundleDependencies` |
 | Packed tarball contents | `dist` JavaScript + declarations, `package.json`, `README.md`, `LICENSE`; no `src`, `test`, `scripts`, `tsconfig.json`, `vitest.config.ts` or lockfile, and no `node_modules` |
 | `.github/workflows/release.yml` | one workflow: metadata gate, tag gate on tag pushes, build/lint/test/pack, four-runner install matrix, minimum-toolchain job, OIDC publish job |
+| `.github/workflows/consumer-matrix.yml` | pack once, then a 5-OS x 2-Node consumer matrix (Ubuntu x64/ARM64, macOS x64/ARM64, Windows x64; Node 22/24) that globally installs the tarball and runs `scripts/verify-package.mjs`; runs on PRs and on demand |
 | `scripts/verify-package.mjs` | installs the packed tarball into a throwaway prefix and exercises the installed surface |
 
 ## What a consumer actually installs
@@ -209,65 +210,55 @@ on this workstation and from registry tarballs. None of them is a runtime change
 in this branch; the ones with a consumer-visible workaround are documented in
 README.md.
 
-### 1. Windows: the on-demand grammar install cannot start npm
+### 1. Windows: the on-demand grammar install (fixed)
 
-`src/languages/grammars.ts` installs a missing grammar with
+`src/languages/grammars.ts` used to install a missing grammar with
 `execFileSync("npm", ["install", "--prefix", cacheDir, …])`. Node's own
 documentation is explicit that on Windows `.bat` and `.cmd` files "are not
 executable on their own without a terminal, and therefore cannot be launched
 using `child_process.execFile()`" — the supported forms are `spawn` with
 `shell: true`, `exec`, or spawning `cmd.exe`. npm's Windows entry points are
-`.cmd`/`.ps1` shims, so this call cannot reach npm on Windows. Linux and macOS
-are unaffected because `npm` is an executable script there.
+`.cmd`/`.ps1` shims, so this call could not reach npm on Windows. Linux and
+macOS are unaffected because `npm` is an executable script there.
 
-Consequences and the workaround:
+Fixed: `npmSpawnSpec()` now resolves npm's `npm-cli.js` on Windows (via `PATH`
+plus the Node install directory, never the repository being reviewed) and runs
+it with the current Node executable, so cache paths with spaces and percent
+signs stay literal argv values instead of being interpreted by `cmd.exe`.
+`scripts/verify-package.mjs` exercises the on-demand Python extraction on
+Windows, and the consumer matrix runs it on real Windows Server. The `npm.cmd`
+preinstall recipe in README.md remains as the offline option.
 
-- TypeScript/TSX loads from its direct package dependency. Missing grammars for
-  other languages cannot be installed automatically on Windows, including
-  JavaScript/JSX when its transitive dependency is not directly resolvable.
-- A grammar already present in `CALLDIFF_GRAMMAR_CACHE` is loaded from disk and
-  never invokes npm, so the preinstall command in README.md — run with
-  `npm.cmd` — is the supported Windows workaround.
-- `scripts/verify-package.mjs` reflects this: it exercises native TypeScript
-  extraction everywhere but runs the on-demand Python extraction only on
-  non-Windows platforms, and says so in its PASS line.
-- This is not fixed here. Making the runtime launch npm's `npm-cli.js` with the
-  current Node executable (the approach `scripts/verify-package.mjs` already
-  uses) is a runtime change outside this packaging branch.
+### 2. Windows: `--open` (fixed)
 
-### 2. Windows: `--open` has no opener
+`src/review/cli.ts` opens the report with `open` on macOS, `rundll32.exe
+url.dll,FileProtocolHandler` on Windows, and `xdg-open` elsewhere, with a
+10-second timeout and `windowsHide`. `--open` stays best-effort: when no
+browser exists it logs `diffninja: could not open the browser` and still exits
+0 with the report written; the run always prints the `file:///…` URL and the
+JSON path. The consumer matrix runs a `--open` smoke on Windows to prove the
+opener path executes without crashing.
 
-`src/review/cli.ts` opens the report with `open` on macOS and `xdg-open`
-elsewhere. Windows ships neither, so `--open` logs
-`diffninja: could not open the browser` and still exits 0 with the report
-written; the run always prints the `file:///…` URL and the JSON path. On Linux
-the same best-effort path is observable directly (the local runner has no
-browser, and the message is identical). Opening the file by hand — or the
-printed URL — needs no opener, because the report is self-contained. No Windows
-opener was added back in this branch.
+### 3. Linux ARM64: mislabeled grammar prebuilds (fixed in the cache)
 
-### 3. Linux ARM64: mislabeled grammar prebuilds (known unsupported)
+In `tree-sitter-typescript@0.23.2` and `tree-sitter-javascript@0.23.1`,
+`prebuilds/linux-arm64/*.node` is byte-identical to the x64 file (the ELF
+header reports `Advanced Micro Devices X86-64`). The defect is in the two
+upstream grammar packages; `tree-sitter@0.25.1` itself ships a correct
+`AArch64` Linux prebuild.
 
-In `tree-sitter-typescript@0.23.2` and `tree-sitter-javascript@0.23.1` — both
-installed here — `prebuilds/linux-arm64/*.node` is byte-identical to the x64
-file (`md5` `e7e3e9b0d1fb` and `9a7dfb873964` respectively; the ELF header
-reports `Advanced Micro Devices X86-64`). The load fails on an ARM64 host even
-though the file exists, so TypeScript/TSX and JavaScript call-flow extraction
-cannot work there with the shipped binaries.
+Fixed: `src/languages/grammars.ts` now reads the prebuild's binary header
+(ELF/Mach-O/PE machine type) before trusting it. When the platform's prebuild
+exists but targets another CPU, the loader removes the bad artifact from
+diffninja's own grammar cache and lets node-gyp-build fall back to compiling
+from source. The app's own installed copy is never modified: a broken direct
+dependency falls through to the cache path, which repairs its own copy. First
+use on Linux ARM64 therefore needs Python and a C/C++ toolchain
+(build-essential); the consumer matrix installs the toolchain and gates Linux
+ARM64 as a passing platform.
 
-`tree-sitter@0.25.1` itself does ship a correct `AArch64` Linux prebuild, so the
-defect is in the two grammar packages. A load cannot succeed on an ARM64 host
-even though the file exists — the machine type is unambiguous, though nothing
-was executed on ARM64. Linux ARM64 is therefore documented as a
-**known upstream limitation, not a release gate**: the install matrix gates
-Linux x64, macOS x64, macOS ARM64 and Windows x64, and Linux ARM64 is removed
-from it. Reinstating the ARM64 runner is the natural follow-up once upstream
-ships corrected artifacts.
-
-An opt-in local workaround is a source rebuild in the installed package —
-`npm rebuild --prefix /absolute/path/to/installed/diffninja tree-sitter-typescript
-tree-sitter-javascript --build-from-source` — which needs Python and a C/C++
-toolchain. That rebuild path has not been executed on ARM64.
+The upstream fix (corrected `prebuilds/linux-arm64/*.node` in the two grammar
+packages) is still worth requesting, and would remove the compile step.
 
 ### 4. Linux: `tree-sitter@0.25.1` needs a recent `libstdc++`
 
@@ -277,9 +268,10 @@ libstdc++ from Ubuntu 24.04 or newer; this workstation has 3.4.33 and loads the
 addon for real (native extraction passes). The limitation follows from that
 symbol requirement rather than from a test on an older distribution, which was
 not run: on an older libstdc++ the failure lands on first use, not at install
-time. `npm rebuild --prefix <installed diffninja> tree-sitter --build-from-source`
-against the host toolchain is the workaround. The matrix targets Ubuntu 24.04,
-not every glibc-based distribution.
+time. The loader now detects the `GLIBCXX`/`GLIBC_` symbol error and says so
+plainly, naming the GCC 13.1+/Ubuntu 24.04+ requirement and the
+`npm rebuild <pkg> --build-from-source` workaround. The matrix targets Ubuntu
+24.04, not every glibc-based distribution.
 
 ### 5. Peer ranges: an optional peer that cannot be satisfied
 
@@ -331,12 +323,12 @@ Prebuilds do not imply a registry-only installation. `tree-sitter-swift@0.7.1`
 also depends on `tree-sitter-cli@^0.23`; that dependency's install script
 downloads an executable from GitHub Releases. In this workstation's network
 environment, the 0.23.2 downloader hung through the proxy and failed with
-`EPROTO` without it. The first Swift test hit its existing 90-second subprocess
-limit; subsequent Swift tests passed after the native grammar was available.
-This is an additional cold-install/network limitation, not a missing Swift
-native prebuild. The grammar can load from an already populated cache without
-that CLI executable, but a complete on-demand install needs the GitHub download
-to succeed. No dependency installer or product runtime was patched here.
+`EPROTO` without it. The grammar install now retries up to three times with
+backoff and a five-minute per-attempt timeout, and a failed Swift install says
+plainly that the GitHub Releases download needs network access to github.com.
+The grammar can load from an already populated cache without that CLI
+executable, but a complete on-demand install needs the GitHub download to
+succeed.
 
 Two grammars are pinned by `installSpecFor` and a manual preinstall must use the
 same spec: `tree-sitter-c-sharp@0.23.1` and
@@ -346,15 +338,19 @@ latest version.
 Failure is per file and non-fatal: extraction logs
 `warn: failed to parse <file> @ <commit>` and the review completes with the
 diff and whatever call flows resolved (`callFlowAvailability` is `"failed"` only
-when the analysis itself throws). Verified locally with a deliberately broken
-`npm`: a mock git-range Ruby review exited 0, wrote both report files, and
-warned per revision.
+when the analysis itself throws). Install and load failures now carry the real
+prerequisite (toolchain, network, libstdc++) instead of npm's raw stderr.
+Verified locally with a deliberately broken `npm`: a mock git-range Ruby review
+exited 0, wrote both report files, and warned per revision.
 
 ## Native prebuild inventory
 
 Enumerated from the installed packages and registry tarballs on Linux x64, then
 header-checked (ELF/Mach-O/PE machine type): file inventory plus each `.node`
-header. Nothing in this table executed on macOS, Windows or ARM64 Linux.
+header. Nothing in this table executed on macOS, Windows or ARM64 Linux. The
+linux-arm64 mislabeling above is now repaired at load time (see finding 3):
+the loader detects the wrong-CPU header and rebuilds from source in the
+grammar cache.
 
 | Package | linux x64 | linux arm64 | macOS x64 | macOS arm64 | win x64 | win arm64 |
 |---|---|---|---|---|---|---|
@@ -383,15 +379,12 @@ for MCP, so a successful start waits for protocol input rather than a banner.
 ## Remaining decisions
 
 - **Upstream fixes to request:** corrected `prebuilds/linux-arm64/*.node` in
-  `tree-sitter-typescript@0.23.2` and `tree-sitter-javascript@0.23.1`; widened
-  `tree-sitter` peer ranges in those packages; prebuilds (or an explicit
-  "source build" note) for `tree-sitter-perl`, `tree-sitter-kotlin` and the ARM64
-  gaps in `@tree-sitter-grammars/tree-sitter-lua@0.2.0`.
-- **Reinstating Linux ARM64** in `install-matrix` once the grammar prebuilds are
-  corrected; today it is an allowed non-goal, not a hidden failure.
-- **Whether to fix the Windows npm invocation in the runtime** (launch
-  `npm-cli.js` with the current Node executable) instead of documenting the
-  `npm.cmd` preinstall workaround. Out of scope for this branch.
+  `tree-sitter-typescript@0.23.2` and `tree-sitter-javascript@0.23.1` (diffninja
+  now works around the mislabeled binaries, but a correct prebuild would skip
+  the source compile); widened `tree-sitter` peer ranges in those packages;
+  prebuilds (or an explicit "source build" note) for `tree-sitter-perl`,
+  `tree-sitter-kotlin` and the ARM64 gaps in
+  `@tree-sitter-grammars/tree-sitter-lua@0.2.0`.
 - **Whether to pin every on-demand grammar** rather than only the two in
   `installSpecFor`.
 - **The first manual publish itself:** still blocked on the maintainer's explicit
@@ -413,18 +406,20 @@ temporary prefix and npm cache; it does not modify the user's global npm
 installation or populate the user's npm cache. It checks the compiled file list
 against current sources (catching stale output), the installed package layout,
 both bin shims (plus `.cmd`, `.ps1` and shell shims on Windows) and the absence
-of a `calldiff` bin, a mock CLI HTML/JSON report, native TypeScript extraction,
-on-demand grammar extraction into a cache path containing spaces (non-Windows
-only), and an MCP stdio review whose `structuredContent` matches its JSON text.
+of a `calldiff` bin, a mock CLI HTML/JSON report, a `--open` smoke, native
+TypeScript extraction, on-demand grammar extraction into a cache path
+containing spaces (on every platform, proving the Windows npm invocation),
+and an MCP stdio review whose `structuredContent` matches its JSON text.
 On Windows it launches `diffninja.cmd` and `diffninja-mcp.cmd` explicitly from
 PowerShell, because a host may block `.ps1` shims. Any failure prevents
 publication.
 
 Results so far: Linux x64 passes on Node 24.20.0/npm 10.9.4 and on the declared
 floor, Node 22.18.0/npm 11.5.1. Global installs emit the peer warnings described
-in finding 5 and still exit 0. macOS x64, macOS ARM64 and Windows x64 results are
-pending the hosted matrix (a `workflow_dispatch` run produces them before the
-first manual publish). Linux ARM64 is not gated and is not expected to pass.
+in finding 5 and still exit 0. Every other platform result comes from the
+consumer matrix (`.github/workflows/consumer-matrix.yml`), which runs on each
+pull request: Ubuntu x64 and ARM64, macOS x64 and ARM64, Windows x64, each on
+Node 22 and 24.
 
 When `/tmp` is a small tmpfs, set `TMPDIR` to a scratch directory with enough
 disk space before running the consumer script. It removes its own sandbox.

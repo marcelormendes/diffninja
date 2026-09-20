@@ -113,9 +113,9 @@ below.
 
 JavaScript's transitive package is not guaranteed to be directly resolvable by
 the loader: npm can nest it beneath `tree-sitter-typescript`. In that layout,
-JavaScript/JSX also falls back to the on-demand grammar cache. Windows users
-should preinstall `tree-sitter-javascript` there when reviewing JavaScript,
-using the `npm.cmd` cache recipe below; TypeScript/TSX is a direct dependency.
+JavaScript/JSX also falls back to the on-demand grammar cache, which the
+runtime populates automatically on every platform (Windows included);
+TypeScript/TSX is a direct dependency.
 
 ### From this checkout (works today)
 
@@ -182,15 +182,15 @@ Install-time caveats for both paths:
   help consumers: npm honors `overrides` only from the root `package.json`. The
   fix belongs upstream as a widened peer range, so do not paper over it with
   consumer `--force` or `--legacy-peer-deps` flags.
-- **Linux ARM64 is not supported.** `tree-sitter-typescript@0.23.2` and
+- **Linux ARM64 needs a build toolchain.** `tree-sitter-typescript@0.23.2` and
   `tree-sitter-javascript@0.23.1` ship x86-64 code under
-  `prebuilds/linux-arm64/`: the file is byte-identical to the x64 one and its ELF
-  header reads `Advanced Micro Devices X86-64`, so TypeScript/TSX and JavaScript
-  call-flow extraction cannot load on ARM64 Linux even though the file exists.
-  The release pipeline therefore gates Linux x64, macOS x64, macOS ARM64 and
-  Windows x64, and Linux ARM64 has no supported path until the upstream packages
-  ship corrected artifacts. Evidence and the upstream fix are in
-  [docs/npm-release.md](docs/npm-release.md).
+  `prebuilds/linux-arm64/` (the file is byte-identical to the x64 one; its ELF
+  header reads `Advanced Micro Devices X86-64`). diffninja detects the
+  mismatch by reading the binary header and rebuilds the grammar from source
+  in its own grammar cache, so call-flow extraction works, but the first use
+  compiles with node-gyp: Python and a C/C++ toolchain (build-essential) must
+  be installed. The upstream fix (corrected prebuilds) is still worth
+  requesting; evidence is in [docs/npm-release.md](docs/npm-release.md).
 - **Linux needs a recent libstdc++.** The `tree-sitter@0.25.1` Linux prebuild
   imports `GLIBCXX_3.4.31` (GCC 13.1+, i.e. libstdc++ from Ubuntu 24.04 or
   newer), so the same binary fails at first use on older distributions instead of
@@ -220,13 +220,13 @@ Install-time caveats for both paths:
   The runtime pins two specs, so a manual preinstall must match them:
   `tree-sitter-c-sharp@0.23.1` and
   `@tree-sitter-grammars/tree-sitter-lua@0.2.0`; everything else installs at its
-  latest version. **On Windows the automatic path does not work at all**: the
-  runtime launches `npm` directly (`execFileSync("npm", …)`) and Node cannot
-  start a `.cmd`/`.bat` shim without a shell, so that install fails. A grammar
-  already present in the cache is loaded from disk without npm ever running, so
-  the `npm.cmd` preinstall above is the workaround for Windows reviewers. Some
-  grammar packages also have no prebuild for the running platform and compile
-  with node-gyp on first use, which needs a C/C++ toolchain and Python:
+  latest version. On Windows the automatic install runs npm's `npm-cli.js`
+  through the current Node executable (a `.cmd` shim cannot be started without
+  a shell), so it works there too, with spaces and `%` in cache paths kept
+  literal. A manual `npm.cmd` preinstall is still the way to keep a review
+  offline. Some grammar packages also have no prebuild for the running platform
+  and compile with node-gyp on first use, which needs a C/C++ toolchain and
+  Python:
   `tree-sitter-perl@2.0.0` and `tree-sitter-kotlin@0.3.8` ship none,
   `@tree-sitter-grammars/tree-sitter-lua@0.2.0` ships no Linux ARM64 or Windows
   ARM64 prebuild. A grammar that cannot be installed is reported per file
