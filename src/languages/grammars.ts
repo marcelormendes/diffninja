@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -28,10 +27,6 @@ type NativeBinding = GrammarModule & {
 };
 
 type NodeGypBuild = (root: string) => GrammarModule;
-
-type PackageJson = {
-  version?: string;
-};
 
 function errnoCode(err: Error): string | undefined {
   // SAFETY: Node require/fs failures are ErrnoException with optional string code.
@@ -190,20 +185,4 @@ export function resolveLanguage(
   }
   // Native grammar packages export { language, nodeTypeInfo, ... } — pass the module.
   return mod;
-}
-
-export function readCachedPackageVersion(
-  npmPackage: string,
-): string | null {
-  const cacheDir = grammarCacheDir();
-  const pkgJson = join(cacheDir, "node_modules", npmPackage, "package.json");
-  if (!existsSync(pkgJson)) return null;
-  try {
-    const raw: unknown = JSON.parse(readFileSync(pkgJson, "utf8"));
-    // SAFETY: npm package.json is JSON with an optional string version field.
-    const pkg = raw as PackageJson;
-    return pkg.version ?? null;
-  } catch {
-    return null;
-  }
 }
