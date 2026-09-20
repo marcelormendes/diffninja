@@ -128,6 +128,8 @@ if (args[0] === "--version") {
 `);
   writeFileSync(join(dir, "gh"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)} "$@"\n`, { mode: 0o755 });
   writeFileSync(join(dir, "xdg-open"), `#!/bin/sh\nprintf '%s' "$1" >> "$DIFFNINJA_OPEN_LOG"\n`, { mode: 0o755 });
+  // The CLI opens the browser with `open` on macOS, `xdg-open` on Linux.
+  writeFileSync(join(dir, "open"), `#!/bin/sh\nprintf '%s' "$1" >> "$DIFFNINJA_OPEN_LOG"\n`, { mode: 0o755 });
   return { dir, ghLog, openLog, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, DIFFNINJA_GH_LOG: ghLog, DIFFNINJA_OPEN_LOG: openLog } };
 }
 
