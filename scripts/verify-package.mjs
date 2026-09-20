@@ -46,6 +46,11 @@ try {
   const binDir = windows ? prefix : join(prefix, "bin");
   for (const name of ["diffninja", "diffninja-mcp"]) {
     assert(existsSync(join(binDir, name + (windows ? ".cmd" : ""))), `Missing ${name} shim`);
+    assert.equal(readFileSync(join(packageDir, manifest.bin[name]), "utf8").split("\n")[0], "#!/usr/bin/env node");
+    if (windows) {
+      assert(existsSync(join(binDir, name)), `Missing ${name} shell shim`);
+      assert(existsSync(join(binDir, name + ".ps1")), `Missing ${name} PowerShell shim`);
+    }
   }
   assert(!readdirSync(binDir).some(name => /^calldiff(?:\.|$)/.test(name)));
   const help = windows
@@ -59,7 +64,9 @@ try {
     import assert from "node:assert/strict";
     const { extractFunctions } = await import(process.argv[1]);
     assert.equal(extractFunctions("sample.ts", "export function greet() { return 42; }")[0].key, "greet");
-    assert.equal(extractFunctions("sample.py", "def greet():\\n    return 42\\n")[0].key, "greet");
+    if (process.platform !== "win32") {
+      assert.equal(extractFunctions("sample.py", "def greet():\\n    return 42\\n")[0].key, "greet");
+    }
   `, pathToFileURL(join(packageDir, "dist/extract.js")).href], {
     env: { ...isolatedEnv, CALLDIFF_GRAMMAR_CACHE: join(sandbox, "grammar cache") },
   });
@@ -79,7 +86,13 @@ try {
   const { StdioClientTransport } = await import(pathToFileURL(appRequire.resolve("@modelcontextprotocol/sdk/client/stdio.js")).href);
   const client = new Client({ name: "package-verification", version: "1.0.0" });
   try {
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(packageDir, manifest.bin["diffninja-mcp"])], stderr: "inherit", cwd: sandbox }));
+    // Start through the installed command shim, not just its JavaScript target.
+    // PowerShell must invoke .cmd explicitly on hosts that block .ps1 scripts.
+    const command = windows ? "powershell.exe" : join(binDir, "diffninja-mcp");
+    const args = windows
+      ? ["-NoProfile", "-NonInteractive", "-Command", `& '${join(binDir, "diffninja-mcp.cmd").replaceAll("'", "''")}'; exit $LASTEXITCODE`]
+      : [];
+    await client.connect(new StdioClientTransport({ command, args, stderr: "inherit", cwd: sandbox }));
     assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["review_diff"]);
     const result = await client.callTool({ name: "review_diff", arguments: { diff: patch, mock: true } });
     assert(!result.isError);
@@ -89,7 +102,7 @@ try {
   } finally {
     await client.close();
   }
-  console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, bins, CLI, native TypeScript/Python, MCP stdio`);
+  console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, both command shims, CLI, native TypeScript${windows ? " (on-demand grammars unsupported on Windows)" : "/Python"}, MCP stdio`);
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
 }
