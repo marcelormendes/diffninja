@@ -55,16 +55,38 @@ report reads like an ordinary PR review with color guiding attention.
 The model does triage silently in the background; the human remains the
 reviewer.
 
-## Local build first
+## Install
 
-This checkout is not published by this work: the package is `private` and both
-`diffninja` and `diffninja-mcp` are absent from the npm registry as of this
-writing, so the setup below builds the checkout and points clients at the
-absolute path of the built entry point. The `bin` entries in `package.json`
-(`diffninja`, `diffninja-mcp`, `calldiff`) describe what an install would
-expose; until a release exists, use `node /absolute/path/to/diffninja/dist/...`
-instead of a bare command. If the package does get published, a client entry
-can shell out to the installed binary the same way.
+`diffninja@0.1.0` is packaged for the npm registry but **not published yet**:
+the release pipeline, the npm-side trusted-publisher configuration and the
+bootstrap step that has to happen first are documented in
+[docs/npm-release.md](docs/npm-release.md). The npm commands below are the
+install this release is built for — they start working once `0.1.0` is on the
+registry. Until then, build the checkout and use the absolute path of the built
+entry point, as shown further down.
+
+Node `>=22.18` is required in every case.
+
+### npm install (once a release is published)
+
+```bash
+# macOS / Linux
+npm install -g diffninja
+diffninja --help                 # CLI: writes review.html plus its JSON twin
+```
+
+```powershell
+# Windows PowerShell
+npm install -g diffninja
+diffninja --help                 # npm also installs the diffninja.cmd / diffninja-mcp.cmd shims
+```
+
+Both bins ship in the package: `diffninja` (the CLI) and `diffninja-mcp` (the
+MCP server). Point MCP clients at the server with `node` plus the absolute path
+of its entry point; the server speaks JSON-RPC on stdin/stdout only, so a client
+launches it and no shell wrapper is involved.
+
+### From this checkout (works today)
 
 ```bash
 git clone https://github.com/marcelormendes/diffninja.git
@@ -73,7 +95,74 @@ npm install
 npm run build   # tsc -> dist/
 ```
 
-Node `>=22.18` is required.
+The `bin` entries in `package.json` (`diffninja`, `diffninja-mcp`) describe what
+the installed package exposes. Without an install, use
+`node /absolute/path/to/diffninja/dist/review/cli.js` and
+`node /absolute/path/to/diffninja/dist/review/mcp-cli.js` instead of the bare
+commands.
+
+### Absolute paths for MCP client configuration
+
+Client configs need an absolute `node` path and an absolute path to the server
+entry point; `npm root -g` prints the global `node_modules` directory, so no
+path has to be guessed:
+
+| Platform | `node` | server entry point |
+|---|---|---|
+| macOS / Linux | `command -v node` — typically `/usr/local/bin/node` or `/usr/bin/node` | `npm root -g` (typically `/usr/local/lib/node_modules`) + `/diffninja/dist/review/mcp-cli.js` |
+| Windows | `where.exe node` — typically `C:\Program Files\nodejs\node.exe` | `npm root -g` (normally `%APPDATA%\npm\node_modules`) + `\diffninja\dist\review\mcp-cli.js` |
+
+On macOS and Linux the shell can assemble both halves, which is also the quickest
+way to see whether the install landed:
+`node "$(npm root -g)/diffninja/dist/review/mcp-cli.js"` (it then waits for
+JSON-RPC on stdin).
+
+On PowerShell, discover and print a JSON-safe server configuration:
+
+```powershell
+$node = node -p "process.execPath"
+$entry = Join-Path (npm.cmd root -g) "diffninja\dist\review\mcp-cli.js"
+@{ command = $node; args = @($entry) } | ConvertTo-Json
+```
+
+Use those literal absolute paths in the client's `command` and `args`; JSON
+backslashes must be escaped. Recompute them after changing Node managers or npm
+prefixes. If PowerShell blocks npm's `.ps1` shim, use `npm.cmd install -g diffninja`
+and `diffninja.cmd --help`; no execution-policy change is needed.
+
+For a checkout instead of a global install, replace the tail with
+`/absolute/path/to/diffninja/dist/review/mcp-cli.js`; the examples in the client
+setups below use that form.
+
+Install-time caveats for both paths:
+
+- **Native prebuilds.** Linux ARM64 is currently a release blocker: the bundled
+  TypeScript/JavaScript grammars' ARM64 files contain x86-64 code. Corrected
+  upstream artifacts and a passing ARM64 install gate are needed before release.
+  Linux runtime prebuilds also require `GLIBCXX_3.4.31` (GCC 13.1+ libstdc++,
+  such as Ubuntu 24.04); older distributions need a source rebuild. macOS
+  x64/ARM64 and Windows x64 artifacts exist but await runtime CI verification.
+  Source-build workarounds and exact evidence: [docs/npm-release.md](docs/npm-release.md).
+- **Peer-range warnings on install.** The grammar packages declare older
+  optional `tree-sitter` peer ranges. Clean global installs tested here exit 0
+  with `ERESOLVE overriding peer dependency` warnings and work at runtime,
+  but `npm ls` marks those ranges invalid. Local installs can instead add an
+  older parser copy, which requires compilation on platforms without its
+  prebuilds. The root project's override does not apply to consumers. The
+  recommended fix is corrected upstream peer metadata, not consumer `--force`
+  or `--legacy-peer-deps` flags.
+- **Grammar cache.** Git-range reviews install any missing tree-sitter grammar
+  into `CALLDIFF_GRAMMAR_CACHE` (default `~/.cache/calldiff/grammars`), which
+  writes to that directory and uses npm. Inline diff text never needs it, and
+  preinstalling the grammars keeps a review offline; see the MCP section for the
+  `readOnlyHint` consequence. Most grammar packages ship prebuilds for all six
+  platform/arch pairs, but not all of them do — Perl and Kotlin ship none, for
+  example — and those compile from source on first use, which needs a C/C++
+  toolchain and Python. A grammar that cannot be installed fails the call-flow
+  step, not the review: `callFlowAvailability` becomes `"failed"` and a warning
+  says the review is based on the diff alone.
+- **Reports are private.** They embed source code, including unchanged code, so
+  keep them out of shared directories.
 
 ## CLI usage
 
@@ -295,7 +384,8 @@ printed URL manually if the desktop launcher is unavailable.
 
 MCP is the recommended way to hand diff review to a coding agent. The server
 speaks MCP over stdio and exposes exactly one tool. Point the client at the
-built entry point, absolute path required:
+built entry point, absolute path required — from a global install that is
+`"$(npm root -g)/diffninja/dist/review/mcp-cli.js"`, and from a checkout it is:
 
 ```bash
 node /absolute/path/to/diffninja/dist/review/mcp-cli.js
@@ -552,10 +642,13 @@ Client configuration above follows the official docs: Claude Code
 
 ## Also bundled: calldiff
 
-This repo is a fork. The call-flow diff engine (`calldiff diff|tree|reach`)
-comes from [calldiff](https://github.com/tanishqkancharla/calldiff) by Tanishq
-Kancharla, MIT licensed (see LICENSE). diffninja uses its call graphs to show
-which flows each hunk touches.
+This repo is a fork. The call-flow diff engine underneath — its `diff`, `tree`
+and `reach` operations, reached from TypeScript rather than from a shell command
+(no `calldiff` binary is installed by this package) — comes from
+[calldiff](https://github.com/tanishqkancharla/calldiff) by Tanishq Kancharla,
+MIT licensed (see LICENSE). diffninja uses its call graphs to show which flows
+each hunk touches. For development the forked entry point is still runnable from
+a checkout: `node dist/cli.js --help`.
 
 ## Dev
 
@@ -565,8 +658,18 @@ npm run lint    # oxlint
 npm test        # vitest run
 npm run dev -- --diff examples/review/checkout.patch --mock
 npm test -- test/review-*.test.ts  # review contracts without the forked engine suite
+
+# packaging: build, pack, then install the tarball into a throwaway prefix
+# and exercise the published surface (bins, mock review, native grammars, MCP)
+mkdir -p dist-pack
+npm pack --pack-destination dist-pack
+node scripts/verify-package.mjs dist-pack
 ```
 
 For development, launch from the checkout so Node can resolve `tsx`:
 `node --import tsx src/review/mcp-cli.ts`. Client setups running from another
 directory should use the built absolute path above.
+
+Releases, the npm trusted-publisher configuration and the native prebuild
+matrix are covered in [docs/npm-release.md](docs/npm-release.md); that page is
+also where the current state — prepared, not published — is stated.

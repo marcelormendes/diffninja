@@ -1,0 +1,276 @@
+# Release pipeline for the diffninja npm package.
+#
+# Pushing a validated `v<version>` tag runs the whole gate first — clean
+# install, build, lint, tests, pack — and only then publishes the exact tarball
+# that was verified. Authentication is npm trusted publishing (OpenID Connect):
+# no npm token is stored in this repository or in GitHub secrets.
+#
+# One workflow file on purpose. npm binds a trusted publisher to a workflow
+# filename, and OIDC validation of workflows reached through `workflow_call` is
+# checked against the calling workflow's name, so the publish step stays in the
+# same file as the checks it depends on.
+#
+# See docs/npm-release.md for the npm-side configuration this depends on.
+
+name: Release
+
+on:
+  push:
+    tags:
+      # GitHub tag filters are globs; the exact v<major>.<minor>.<patch> shape
+      # and its match against package.json version are checked below.
+      - "v*"
+
+# Least privilege by default; only the publish job adds id-token: write.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Trusted publishing needs npm >= 11.5.1 on Node >= 22.14; diffninja also
+  # requires Node >= 22.18. 24 is the current LTS line.
+  NODE_VERSION: "24"
+  NPM_MIN_VERSION: "11.5.1"
+  # The tarball is the only hand-off between jobs.
+  ARTIFACT_NAME: package-tarball
+  ARTIFACT_DIR: dist-pack
+
+jobs:
+  verify:
+    name: Verify tag and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      # Full history: the ancestry check below needs the release branch graph.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Validate the release tag
+        id: tag
+        env:
+          RELEASE_BRANCH: main
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="$(node -p "require('./package.json').version")"
+          package_name="$(node -p "require('./package.json').name")"
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::package.json version '$version' is not a plain X.Y.Z release version"
+            exit 1
+          fi
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag '$tag' does not match package.json version '$version' (expected 'v$version')"
+            exit 1
+          fi
+          if [ "$package_name" != "diffninja" ]; then
+            echo "::error::refusing to publish '$package_name': the trusted publisher is bound to 'diffninja'"
+            exit 1
+          fi
+          if [ "$(node -p "require('./package.json').private === true")" = "true" ]; then
+            echo "::error::package.json still sets \"private\": true, which blocks npm publish"
+            exit 1
+          fi
+
+          # A tag can point anywhere. Publishing requires the tagged commit to be
+          # part of the release branch, not just any commit that got tagged.
+          # checkout with fetch-depth: 0 already brings the branch refs; fetch
+          # only when it did not, so this step never needs the network twice.
+          branch_ref="refs/remotes/origin/$RELEASE_BRANCH"
+          if ! git rev-parse --verify --quiet "$branch_ref" >/dev/null; then
+            git fetch --no-tags origin "+refs/heads/$RELEASE_BRANCH:$branch_ref"
+          fi
+          if ! git merge-base --is-ancestor HEAD "$branch_ref"; then
+            echo "::error::$tag does not point at a commit contained in $RELEASE_BRANCH"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing diffninja@$version from $tag ($GITHUB_SHA), contained in $RELEASE_BRANCH"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+          # npm's release guidance: never cache in a release build.
+          package-manager-cache: false
+
+      - name: Check the toolchain
+        run: |
+          set -euo pipefail
+          node --version
+          echo "npm $(npm --version)"
+          # npm 11.5.1 is the first CLI that can exchange an OIDC token.
+          if [ "$(printf '%s\n%s\n' "$NPM_MIN_VERSION" "$(npm --version)" | sort -V | head -n1)" != "$NPM_MIN_VERSION" ]; then
+            echo "::error::npm $(npm --version) is older than $NPM_MIN_VERSION, which trusted publishing requires"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Pack the tarball that will be published
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          npm pack --pack-destination "$ARTIFACT_DIR"
+          tarball="$(node -e '
+            const files = require("node:fs").readdirSync(process.env.ARTIFACT_DIR).filter((name) => name.endsWith(".tgz"));
+            if (files.length !== 1) throw new Error(`expected exactly one tarball, found ${files.length}`);
+            process.stdout.write(files[0]);
+          ')"
+          if [ "$tarball" != "diffninja-${{ steps.tag.outputs.version }}.tgz" ]; then
+            echo "::error::npm pack produced '$tarball', expected 'diffninja-${{ steps.tag.outputs.version }}.tgz'"
+            exit 1
+          fi
+          sha256="$(sha256sum "$ARTIFACT_DIR/$tarball" | cut -d' ' -f1)"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "Packed $tarball (sha256 $sha256)"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_DIR }}/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  install-matrix:
+    name: Install and run (${{ matrix.runner }})
+    needs: verify
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+          # Keep ARM64 a required gate: the upstream grammar tarballs currently
+          # contain mislabeled x64 binaries. Do not publish across a known gap.
+          - runner: ubuntu-24.04-arm
+          - runner: macos-15-intel
+          - runner: macos-latest
+          - runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_DIR }}
+
+      # Installs the packed tarball into a throwaway prefix and exercises the
+      # published surface: bin shims, offline CLI review, native grammar
+      # extraction (bundled TypeScript, on-demand Python) and the MCP server.
+      - name: Verify the packed package
+        run: node scripts/verify-package.mjs ${{ env.ARTIFACT_DIR }}
+
+  minimums:
+    name: Minimum toolchain (Node 22.18, npm 11.5.1)
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Exactly the floor declared in package.json engines and the oldest npm
+      # that can exchange an OIDC token.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.18.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install the oldest supported npm
+        run: npm install --global npm@${{ env.NPM_MIN_VERSION }}
+
+      - name: Check the toolchain
+        run: |
+          set -euo pipefail
+          node --version
+          [ "$(npm --version)" = "$NPM_MIN_VERSION" ] || { echo "::error::expected npm $NPM_MIN_VERSION, got $(npm --version)"; exit 1; }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_DIR }}
+
+      - name: Verify the packed package on the minimum toolchain
+        run: node scripts/verify-package.mjs ${{ env.ARTIFACT_DIR }}
+
+  publish:
+    name: Publish to npm (trusted publishing)
+    needs: [verify, install-matrix, minimums]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The only privileged permission in this workflow: GitHub mints a
+      # short-lived OIDC token, npm exchanges it for a publish token.
+      id-token: write
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install an npm CLI that can exchange an OIDC token
+        run: npm install --global npm@^${{ env.NPM_MIN_VERSION }}
+
+      - name: Check the npm CLI version
+        run: |
+          set -euo pipefail
+          echo "npm $(npm --version)"
+          if [ "$(printf '%s\n%s\n' "$NPM_MIN_VERSION" "$(npm --version)" | sort -V | head -n1)" != "$NPM_MIN_VERSION" ]; then
+            echo "::error::npm $(npm --version) is older than $NPM_MIN_VERSION, which trusted publishing requires"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_DIR }}
+
+      # Publish exactly the bytes that passed every check above. npm only runs
+      # lifecycle scripts for directory publishes, so this uploads the tarball
+      # as verified instead of rebuilding it here.
+      - name: Confirm the artifact matches the verified digest
+        run: |
+          set -euo pipefail
+          echo "${{ needs.verify.outputs.sha256 }}  ${{ env.ARTIFACT_DIR }}/${{ needs.verify.outputs.tarball }}" | sha256sum --check --strict
+
+      - name: Publish
+        # No NPM_TOKEN, no NODE_AUTH_TOKEN: authentication is the OIDC exchange
+        # above. Provenance is generated automatically for public packages in
+        # public repositories, so --provenance is not passed.
+        run: npm publish "./${{ env.ARTIFACT_DIR }}/${{ needs.verify.outputs.tarball }}"

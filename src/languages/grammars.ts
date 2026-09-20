@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 /**
  * Loaded tree-sitter grammar package surface.
@@ -106,6 +106,30 @@ function requireGrammar(
   }
 }
 
+/**
+ * On Windows, npm.cmd is a shell script, not an executable. Run npm's JS entry
+ * with Node instead: cache paths (including spaces and percent signs) remain
+ * literal argv values rather than being interpreted by cmd.exe.
+ */
+export function npmSpawnSpec(
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (platform !== "win32") return { file: "npm", args };
+  const directories = [
+    ...(process.env.PATH ?? "").split(";"),
+    dirname(process.execPath),
+  ];
+  for (const raw of directories) {
+    const directory = raw.trim().replace(/^"|"$/g, "");
+    // Never resolve executables from the repository being reviewed.
+    if (!isAbsolute(directory)) continue;
+    const cli = join(directory, "node_modules", "npm", "bin", "npm-cli.js");
+    if (existsSync(cli)) return { file: process.execPath, args: [cli, ...args] };
+  }
+  throw new Error("Cannot locate npm's npm-cli.js. Install Node.js with npm and add its directory to PATH.");
+}
+
 function installSpecFor(npmPackage: string): string {
   switch (npmPackage) {
     case "tree-sitter-c-sharp":
@@ -150,23 +174,20 @@ export function loadGrammarPackage(npmPackage: string): GrammarModule {
   const cacheDir = grammarCacheDir();
   if (!packageInstalled(cacheDir, npmPackage)) {
     ensureCachePackageJson(cacheDir);
-    execFileSync(
-      "npm",
-      [
-        "install",
-        "--prefix",
-        cacheDir,
-        "--no-save",
-        "--no-fund",
-        "--no-audit",
-        "--legacy-peer-deps",
-        installSpecFor(npmPackage),
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: process.env,
-      },
-    );
+    const npm = npmSpawnSpec([
+      "install",
+      "--prefix",
+      cacheDir,
+      "--no-save",
+      "--no-fund",
+      "--no-audit",
+      "--legacy-peer-deps",
+      installSpecFor(npmPackage),
+    ]);
+    execFileSync(npm.file, npm.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
   }
 
   const require = createRequire(join(cacheDir, "package.json"));
