@@ -1,10 +1,11 @@
 # diffninja
 
-`diffninja` ships two front ends over one review engine: the `diffninja` CLI
-(writes HTML + JSON reports) and `diffninja-mcp`, a stdio MCP server exposing
-the single `review_diff` tool (writes no report files; the report is the tool result).
-Both send diff hunks to TypeSafe's Jev (typed Choice/Score/Noul questions, one
-call per hunk) and rank them by a weighted priority in code. The call-flow
+`diffninja` ships two front ends: the `diffninja` CLI and `diffninja-mcp`,
+a stdio MCP server exposing the single `review_diff` tool. PR links select a
+connected, human-authored GitHub review via `gh`; CLI opens the loopback page,
+MCP returns its URL. Static diff/range analysis sends hunks to TypeSafe's Jev
+(typed Choice/Score/Noul questions, one call per hunk) and ranks them in code.
+CLI static mode writes HTML + JSON; MCP writes no report files. The call-flow
 engine underneath is forked from `calldiff` (Tanishq Kancharla, MIT, see
 LICENSE and the attribution section in README.md). See `README.md` for usage.
 
@@ -30,28 +31,44 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - `input.ts` (diff parsing + git range), `jev.ts` (TypeSafe client + mock),
     `pipeline.ts` (deterministic checks, routing, weighted ranking),
     `html.ts` (report), `types.ts` (`ReviewReport` and friends).
-  - `cli.ts` — argument parsing plus HTML/JSON file output only.
+  - `cli.ts` — argument parsing, connected auto-open, static HTML/JSON output.
+    `pr-input.ts` — shared PR-link detection and canonicalization.
+    `github.ts` / `connected.ts` — snapshot-bound review and loopback transport.
   - `mcp.ts` — `createReviewServer()`: builds an `McpServer` and registers
     `review_diff`. `mcp-cli.ts` — executable entry that connects the server to
     `StdioServerTransport`; it accepts no arguments and must keep stdout
     reserved for the protocol (diagnostics go to stderr).
 - `review_diff` invariants (see `src/review/mcp.ts`; README documents the
   user-facing contract):
-  - Strict input object: `diff?`, `repo?`, `from?`, `to?`, `mock?`. Exactly one
-    of `diff` or `from`+`to`; `repo` is required and must be absolute for a
-    range; `mock` is per-call and never implied.
-  - Success returns `structuredContent` equal to the `ReviewReport` plus the
-    same report as JSON text in `content`. Failures return `isError: true`
+  - Strict input object: `diff?`, `repo?`, `from?`, `to?`, `mock?`, `pr?`, `input?`,
+    `mode?` (`auto`/`connected`/`static`; default auto).
+    Auto and connected detect PR links in input string fields before static
+    validation. Connected requires a link, never falling back to diff/range.
+    Static skips detection, treats links as source, and rejects pr/input.
+    Static analysis requires exactly one of `diff` or `from`+`to`; `repo` must
+    be absolute for a range. In auto, `pr`/`input` require a PR link.
+  - Static success returns `structuredContent` equal to the `ReviewReport`.
+    Connected success returns `{ mode: "connected", url, pr, snapshot }`.
+    Both include the same JSON in text `content`. Failures return `isError: true`
     with the message as text and no partial report.
-  - No output files, no CLI flags, no key arguments: live mode reads
-    `TYPESAFE_API_KEY` from the server process environment.
+  - Connected pages belong to the MCP connection and close on disconnect.
+    Repeated calls for one PR reuse its page; no review is submitted by the tool.
+  - No output files, no CLI flags, no key arguments: live static analysis reads
+    `TYPESAFE_API_KEY` from the server process environment; connected uses `gh`.
   - Keep `readOnlyHint: false` and `destructiveHint: false`: git-range analysis
     can install missing grammars into calldiff's cache through npm, including
     in mock mode. It does not edit repository source.
-- Live mode needs `TYPESAFE_API_KEY` in the environment. `--mock` / `mock: true`
-  uses placeholder judgments and is never a real review. Inline mock diffs
-  are fully offline; ranges may need npm for missing call-flow grammars.
-  Never commit a real API key.
+- Live static analysis needs `TYPESAFE_API_KEY`. `--mock` / `mock: true` uses
+  placeholder judgments, never a real assessment. Inline mock diffs are offline;
+  ranges may need npm for missing grammars. PR inputs still read authenticated
+  `gh` even with mock. CLI `--static` / `--export` explicitly exports a PR report
+  rather than serving it. Never commit a real API key.
+- CLI `--connected` requires one PR link and conflicts with --static/--export.
+  Invocation resolution is deterministic; never use Jev to guess a PR or intent.
+  Missing/ambiguous references ask for one full link without echoing pasted text.
+- Keep connected safeguards: immutable snapshot binding, canonical line anchors,
+  stale-snapshot and duplicate-submit blocking, loopback-only Host/Origin/CSRF
+  checks, and no general GitHub/command proxy.
 - Tests live in `test/` and run with `vitest`. `review-pipeline.test.ts` covers
   the deterministic checks, routing, ranking, and Jev request shape;
   `review-input.test.ts`, `review-html.test.ts`, and `review-cli.test.ts` cover
