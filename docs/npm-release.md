@@ -320,6 +320,17 @@ toolchain and Python. The obsolete unscoped `tree-sitter-zig@0.2.0` is a
 different package (nan-era, no install script, no prebuilds); `src/languages/zig.ts`
 deliberately requests the scoped `@tree-sitter-grammars/tree-sitter-zig`.
 
+Prebuilds do not imply a registry-only installation. `tree-sitter-swift@0.7.1`
+also depends on `tree-sitter-cli@^0.23`; that dependency's install script
+downloads an executable from GitHub Releases. In this workstation's network
+environment, the 0.23.2 downloader hung through the proxy and failed with
+`EPROTO` without it. The first Swift test hit its existing 90-second subprocess
+limit; subsequent Swift tests passed after the native grammar was available.
+This is an additional cold-install/network limitation, not a missing Swift
+native prebuild. The grammar can load from an already populated cache without
+that CLI executable, but a complete on-demand install needs the GitHub download
+to succeed. No dependency installer or product runtime was patched here.
+
 Two grammars are pinned by `installSpecFor` and a manual preinstall must use the
 same spec: `tree-sitter-c-sharp@0.23.1` and
 `@tree-sitter-grammars/tree-sitter-lua@0.2.0`; everything else installs at its
@@ -410,6 +421,13 @@ first manual publish). Linux ARM64 is not gated and is not expected to pass.
 
 When `/tmp` is a small tmpfs, set `TMPDIR` to a scratch directory with enough
 disk space before running the consumer script. It removes its own sandbox.
+
+For concurrent local test runs, use a private `TMPDIR`: the existing test setup
+names its grammar caches by worker number beneath that directory, not by
+worktree. Native source builds in this sandbox also used
+`npm_config_nodedir=/usr` to reuse the matching installed Node 24 headers.
+That header path is machine-specific; do not apply it to a different Node
+version or assume it exists on another platform.
 
 ## Primary references
 
