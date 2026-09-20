@@ -96,11 +96,9 @@ function collectExpr(
       n.type === "let_binding" ||
       n.type === "module_definition"
     ) {
-      // let_expression contains value_definition for `let x = e in body` —
-      // we still need to walk the bound expression and body, but not index nested lets as functions.
-      if (n.type === "let_binding" || n.type === "value_definition") return;
-      if (n.type === "fun_expression" || n.type === "function_expression") return;
-      if (n.type === "module_definition") return;
+      // Nested lets/functions/modules are not attributed to the outer caller;
+      // `let x = e in body` is handled separately below.
+      return;
     }
 
     if (n.type === "let_expression") {
@@ -261,12 +259,8 @@ function handleLetBinding(
   // Only treat as function if it has parameters or is clearly a fun
   const hasParams = namedChildren(binding).some((c) => c.type === "parameter");
   const body = bindingBody(binding);
-  if (!hasParams && body?.type === "fun_expression") {
-    // let f = fun x -> ...
-  } else if (!hasParams) {
-    // plain value binding — skip (not a callable)
-    return;
-  }
+  // `let f = fun x -> ...` is callable; any other binding without parameters is not.
+  if (!hasParams && body?.type !== "fun_expression") return;
   const key = moduleName ? `${moduleName}.${name}` : name;
   const funBody =
     body?.type === "fun_expression"

@@ -326,8 +326,7 @@ function handleFunctionDefinition(
 
   const params = childByType(node, "parameters");
   const body = childByType(node, "block");
-  const methodExported =
-    className !== null ? exported && !isPrivateName(name) : exported && !isPrivateName(name);
+  const methodExported = exported && !isPrivateName(name);
 
   pushFunction(
     file,
@@ -351,9 +350,6 @@ function handleLambdaAssignment(
   const id = childByType(assignment, "identifier");
   const lambda = childByType(assignment, "lambda");
   if (!id || !lambda) return;
-  if (isPrivateName(id.text) && className === null) {
-    // still index, but not exported
-  }
   const params = childByType(lambda, "lambda_parameters");
   // lambda body is last named child that isn't params
   const body =
@@ -368,21 +364,6 @@ function handleLambdaAssignment(
     body,
     functions,
   );
-}
-
-function hasPropertyDecorator(decorated: SyntaxNode): boolean {
-  for (const child of namedChildren(decorated)) {
-    if (child.type !== "decorator") continue;
-    const id =
-      childByType(child, "identifier") ??
-      childByType(childByType(child, "attribute") ?? child, "identifier");
-    // @property or @x.property / @foo.setter — treat name "property" / "setter" / "getter"
-    if (child.text.includes("property") || child.text.includes("setter")) {
-      return true;
-    }
-    void id;
-  }
-  return false;
 }
 
 function handleClass(
@@ -401,7 +382,6 @@ function handleClass(
       const fn = childByType(stmt, "function_definition");
       if (fn) {
         // @property methods are still indexed (like TS getters)
-        void hasPropertyDecorator(stmt);
         handleFunctionDefinition(
           file,
           fn,

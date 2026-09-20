@@ -333,12 +333,9 @@ function collectStatements(
       const rhs = kids[1] ?? null;
       if (rhs) {
         if (rhs.type === "identifier") {
-          const key = bareCallKey(rhs, null); // free-call style on RHS
-          // Prefer free name for top-level helpers assigned into locals
-          if (key) {
-            // If className set, bareCallKey prefixes — for assignment RHS use free name
-            addCall(rhs.text, rhs);
-          }
+          // Assignment RHS is a free call, never a receiver method.
+          const key = bareCallKey(rhs, null);
+          if (key) addCall(key, rhs);
         } else {
           walk(rhs, false);
         }
