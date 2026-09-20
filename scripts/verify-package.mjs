@@ -15,7 +15,10 @@ const tarballs = input.endsWith(".tgz") ? [input]
   : readdirSync(input).filter(name => name.endsWith(".tgz")).map(name => join(input, name));
 assert.equal(tarballs.length, 1, "Expected exactly one tarball");
 const windows = process.platform === "win32";
-const sandbox = mkdtempSync(join(tmpdir(), "diffninja package "));
+// No spaces: ARM64 Linux rebuilds mislabeled tree-sitter prebuilds from source,
+// and node-gyp generated Makefiles break on spaces in the path. Spaces in
+// paths are still exercised via the grammar cache directory below.
+const sandbox = mkdtempSync(join(tmpdir(), "diffninja-package-"));
 const prefix = join(sandbox, "prefix");
 const packageDir = join(prefix, windows ? "node_modules" : "lib/node_modules", "diffninja");
 const isolatedEnv = { ...process.env, npm_config_cache: join(sandbox, "npm cache") };
@@ -34,8 +37,9 @@ const removeDir = directory => {
     } catch (error) {
       const retryable = ["EPERM", "EBUSY", "ENOTEMPTY"].includes(error?.code);
       if (!retryable || attempt >= 9) throw error;
-      const start = Date.now();
-      while (Date.now() - start < 500) { /* back off, then retry */ }
+      // Blocking sleep done right: Atomics.wait instead of a Date.now() spin
+      // loop. This is a throwaway verification script, not the shipped server.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
     }
   }
 };
@@ -109,12 +113,11 @@ try {
   const client = new Client({ name: "package-verification", version: "1.0.0" });
   try {
     // Start through the installed command shim, not just its JavaScript target.
-    // PowerShell must invoke .cmd explicitly on hosts that block .ps1 scripts.
-    const command = windows ? "powershell.exe" : join(binDir, "diffninja-mcp");
-    const args = windows
-      ? ["-NoProfile", "-NonInteractive", "-Command", `& '${join(binDir, "diffninja-mcp.cmd").replaceAll("'", "''")}'; exit $LASTEXITCODE`]
-      : [];
-    await client.connect(new StdioClientTransport({ command, args, stderr: "inherit", cwd: sandbox }));
+    // Name the .cmd explicitly so PATHEXT can never resolve npm's .ps1 shim,
+    // which is blocked on hosts with a restricted execution policy. The SDK
+    // spawns .cmd files through cmd.exe, the same path real MCP clients use.
+    const command = join(binDir, windows ? "diffninja-mcp.cmd" : "diffninja-mcp");
+    await client.connect(new StdioClientTransport({ command, stderr: "inherit", cwd: sandbox }));
     assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["review_diff"]);
     const result = await client.callTool({ name: "review_diff", arguments: { diff: patch, mock: true } });
     assert(!result.isError);
