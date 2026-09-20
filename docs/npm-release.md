@@ -45,6 +45,13 @@ metadata/documentation. Grammar support comes from npm dependencies:
   --legacy-peer-deps <spec>`. A grammar already present in the cache is loaded
   from disk without npm running at all.
 
+JavaScript is a transitive dependency, not a direct dependency of diffninja.
+If npm nests it under `tree-sitter-typescript`, the loader cannot resolve it
+directly and instead installs `tree-sitter-javascript` into the grammar cache.
+The local `npm ci` layout exercised this fallback. Thus JavaScript/JSX can
+require on-demand installation too; on Windows preinstall it with `npm.cmd`
+using the same cache recipe as other on-demand grammars.
+
 ## npm-side configuration (required before the workflow can publish)
 
 Trusted publishing is a relationship between the npm package and this
@@ -215,9 +222,9 @@ are unaffected because `npm` is an executable script there.
 
 Consequences and the workaround:
 
-- Call flows for languages whose grammar is not one of the two package
-  dependencies (TypeScript/TSX and JavaScript load from `node_modules` and are
-  fine) cannot be installed automatically on Windows.
+- TypeScript/TSX loads from its direct package dependency. Missing grammars for
+  other languages cannot be installed automatically on Windows, including
+  JavaScript/JSX when its transitive dependency is not directly resolvable.
 - A grammar already present in `CALLDIFF_GRAMMAR_CACHE` is loaded from disk and
   never invokes npm, so the preinstall command in README.md — run with
   `npm.cmd` — is the supported Windows workaround.

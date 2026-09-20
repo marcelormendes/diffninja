@@ -111,6 +111,12 @@ used, and the packed tarball contains no `node_modules` at all. Grammars for
 every other language are fetched on demand into the grammar cache described
 below.
 
+JavaScript's transitive package is not guaranteed to be directly resolvable by
+the loader: npm can nest it beneath `tree-sitter-typescript`. In that layout,
+JavaScript/JSX also falls back to the on-demand grammar cache. Windows users
+should preinstall `tree-sitter-javascript` there when reviewing JavaScript,
+using the `npm.cmd` cache recipe below; TypeScript/TSX is a direct dependency.
+
 ### From this checkout (works today)
 
 ```bash
