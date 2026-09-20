@@ -1,5 +1,14 @@
 # Release pipeline for the diffninja npm package.
 #
+# `pull_request` and `workflow_dispatch` run the same pipeline as a
+# verification-only dry run: `verify`, `install-matrix` and `minimums` behave
+# exactly as they do for a release, and only `publish` is skipped because it
+# requires a pushed `v<version>` tag. That is how a release is proved before
+# anything reaches npm — the Windows and macOS consumers included — and it
+# covers the first release, which must be a manual `npm publish` because npm
+# cannot configure trusted publishing for a package that does not exist yet
+# (see docs/npm-release.md).
+#
 # Pushing a validated `v<version>` tag runs the whole gate first — clean
 # install, build, lint, tests, pack — and only then publishes the exact tarball
 # that was verified. Authentication is npm trusted publishing (OpenID Connect):
@@ -8,7 +17,8 @@
 # One workflow file on purpose. npm binds a trusted publisher to a workflow
 # filename, and OIDC validation of workflows reached through `workflow_call` is
 # checked against the calling workflow's name, so the publish step stays in the
-# same file as the checks it depends on.
+# same file as the checks it depends on. The extra triggers do not widen what
+# can publish: the publish job is gated on the event being a tag push.
 #
 # See docs/npm-release.md for the npm-side configuration this depends on.
 
@@ -20,6 +30,14 @@ on:
       # GitHub tag filters are globs; the exact v<major>.<minor>.<patch> shape
       # and its match against package.json version are checked below.
       - "v*"
+  # Verification only: the publish job requires `github.ref_type == 'tag'` and
+  # a push event, so neither of these triggers can reach the registry.
+  # `pull_request` proves every change headed for main, `workflow_dispatch`
+  # covers on-demand checks such as re-verifying the Windows consumer before
+  # the first manual publish.
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 # Least privilege by default; only the publish job adds id-token: write.
 permissions:
@@ -40,28 +58,56 @@ env:
 
 jobs:
   verify:
-    name: Verify tag and package
+    name: Verify package
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      version: ${{ steps.tag.outputs.version }}
+      # `release` is true only for a pushed tag; it is what unlocks publishing.
+      release: ${{ steps.meta.outputs.release }}
+      version: ${{ steps.meta.outputs.version }}
       tarball: ${{ steps.pack.outputs.tarball }}
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
-      # Full history: the ancestry check below needs the release branch graph.
+      # Full history: the tag gate below needs the release branch graph.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Validate the release tag
-        id: tag
+      - name: Validate the package metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          package_name="$(node -p "require('./package.json').name")"
+
+          if [ "$package_name" != "diffninja" ]; then
+            echo "::error::refusing to release '$package_name': the trusted publisher is bound to 'diffninja'"
+            exit 1
+          fi
+
+          # A pushed tag is the only event that may publish. Everything else —
+          # pull requests and manual dispatches — stops after verification.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "Release run for ${GITHUB_REF_NAME}; the publish job runs if every gate passes"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Verification-only run (${GITHUB_EVENT_NAME} on ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}); publish will be skipped"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The publish preconditions. A tag can point anywhere, so publishing also
+      # requires the tagged commit to be part of the release branch, not just
+      # any commit that got tagged.
+      - name: Gate the release tag
+        if: github.ref_type == 'tag'
         env:
           RELEASE_BRANCH: main
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          version="$(node -p "require('./package.json').version")"
-          package_name="$(node -p "require('./package.json').name")"
+          version="${{ steps.meta.outputs.version }}"
 
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::package.json version '$version' is not a plain X.Y.Z release version"
@@ -71,17 +117,11 @@ jobs:
             echo "::error::tag '$tag' does not match package.json version '$version' (expected 'v$version')"
             exit 1
           fi
-          if [ "$package_name" != "diffninja" ]; then
-            echo "::error::refusing to publish '$package_name': the trusted publisher is bound to 'diffninja'"
-            exit 1
-          fi
           if [ "$(node -p "require('./package.json').private === true")" = "true" ]; then
             echo "::error::package.json still sets \"private\": true, which blocks npm publish"
             exit 1
           fi
 
-          # A tag can point anywhere. Publishing requires the tagged commit to be
-          # part of the release branch, not just any commit that got tagged.
           # checkout with fetch-depth: 0 already brings the branch refs; fetch
           # only when it did not, so this step never needs the network twice.
           branch_ref="refs/remotes/origin/$RELEASE_BRANCH"
@@ -93,7 +133,6 @@ jobs:
             exit 1
           fi
 
-          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Releasing diffninja@$version from $tag ($GITHUB_SHA), contained in $RELEASE_BRANCH"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -137,8 +176,8 @@ jobs:
             if (files.length !== 1) throw new Error(`expected exactly one tarball, found ${files.length}`);
             process.stdout.write(files[0]);
           ')"
-          if [ "$tarball" != "diffninja-${{ steps.tag.outputs.version }}.tgz" ]; then
-            echo "::error::npm pack produced '$tarball', expected 'diffninja-${{ steps.tag.outputs.version }}.tgz'"
+          if [ "$tarball" != "diffninja-${{ steps.meta.outputs.version }}.tgz" ]; then
+            echo "::error::npm pack produced '$tarball', expected 'diffninja-${{ steps.meta.outputs.version }}.tgz'"
             exit 1
           fi
           sha256="$(sha256sum "$ARTIFACT_DIR/$tarball" | cut -d' ' -f1)"
@@ -159,15 +198,24 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # The supported consumer platforms. These are GitHub-hosted runners
+      # because npm's OIDC exchange rejects self-hosted runners, and the release
+      # gate has to mean the same thing as the publish.
+      #
+      # Linux arm64 (`ubuntu-24.04-arm`) is deliberately absent. The bundled
+      # tree-sitter-typescript@0.23.2 and tree-sitter-javascript@0.23.1 tarballs
+      # ship x86-64 code under `prebuilds/linux-arm64`, so a clean install
+      # cannot load native TypeScript extraction there. Making that a hard
+      # release gate would block every release on an upstream packaging defect
+      # this repository cannot fix; Linux arm64 is instead documented as
+      # unsupported (see docs/npm-release.md) and its entry returns here once
+      # the dependency tree carries corrected binaries.
       matrix:
         include:
-          - runner: ubuntu-latest
-          # Keep ARM64 a required gate: the upstream grammar tarballs currently
-          # contain mislabeled x64 binaries. Do not publish across a known gap.
-          - runner: ubuntu-24.04-arm
-          - runner: macos-15-intel
-          - runner: macos-latest
-          - runner: windows-latest
+          - runner: ubuntu-latest # Linux x64
+          - runner: macos-15-intel # macOS x64
+          - runner: macos-latest # macOS arm64
+          - runner: windows-latest # Windows x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -230,6 +278,10 @@ jobs:
   publish:
     name: Publish to npm (trusted publishing)
     needs: [verify, install-matrix, minimums]
+    # The only path to the registry: a pushed v<version> tag whose whole gate
+    # passed. `pull_request` and `workflow_dispatch` runs stop before this job,
+    # and so does a manual dispatch that happens to point at a tag.
+    if: github.ref_type == 'tag' && needs.verify.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
