@@ -1100,8 +1100,14 @@ export const CALL_FLOW_SCRIPT = `
 
   function paintCamera(graph, camera) {
     var info = graphViews.get(graph);
+    // frameGraph replaces info after resize/depth changes, forcing a fresh paint.
+    var previous = info.camera;
+    if (previous && previous.x === camera.x && previous.y === camera.y && previous.scale === camera.scale) return;
+    info.camera = camera;
     state = cfNav.setCamera(state, info.key, camera);
     graph.setAttribute('viewBox', [camera.x, camera.y, info.size.width / camera.scale, info.size.height / camera.scale].join(' '));
+    // Panning does not change the zoom readout or its button bounds.
+    if (previous && previous.scale === camera.scale) return;
     var frame = graph.closest('.cf-graph-frame');
     frame.querySelector('.cf-scale').textContent = Math.round(camera.scale * 100) + '%';
     frame.querySelector('[data-cf-camera="out"]').disabled = camera.scale <= 1;
