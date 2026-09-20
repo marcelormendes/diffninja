@@ -65,8 +65,9 @@ test("falls back to changed non-exported functions", () => {
   const result = host.run(`calldiff diff ${from} ${to}`);
   expect(result.code).toBe(0);
   expect(result.stdout).toContain("worker()");
-  expect(result.stdout).toContain("oldCall()");
-  expect(result.stdout).toContain("newCall()");
+  // Each marker is bound to its side of the change, not just present.
+  expect(result.stdout).toMatch(/^- .*oldCall\(\)/m);
+  expect(result.stdout).toMatch(/^\+ .*newCall\(\)/m);
 });
 
 test("explicit unchanged entries report no callstack changes", () => {

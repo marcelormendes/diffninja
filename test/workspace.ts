@@ -114,8 +114,9 @@ export function workspace(files: Record<string, string> = {}): WorkspaceHost {
         killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],
         env: {
+          // Inherits this worker's CALLDIFF_GRAMMAR_CACHE.
           ...process.env,
-          // Keep grammar cache shared with the vitest env.
+          // Plain stdout, so expectations match byte for byte.
           FORCE_COLOR: "0",
           GIT_TERMINAL_PROMPT: "0",
           GIT_CONFIG_GLOBAL: "/dev/null",

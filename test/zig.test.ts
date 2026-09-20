@@ -264,7 +264,10 @@ test("zig: free function helper expansion", () => {
        fn make() void {
          init();
        }
-       fn init() void {}
+       fn init() void {
+         prime();
+       }
+       fn prime() void {}
     `,
   });
   const to = host.commit("after", {
@@ -273,7 +276,10 @@ test("zig: free function helper expansion", () => {
          init();
          ready();
        }
-       fn init() void {}
+       fn init() void {
+         prime();
+       }
+       fn prime() void {}
        fn ready() void {}
     `,
   });
@@ -281,9 +287,11 @@ test("zig: free function helper expansion", () => {
   const result = host.run(`calldiff diff ${from} ${to} -e make`);
 
   expect(result.code).toBe(0);
+  // init's body proves the callee definition was found, not echoed back.
   expect(result.stdout).toContain(diffOutdent(`
       make()
       ├─ init()
+      │  └─ prime()
     + └─ ready()
   `));
 });

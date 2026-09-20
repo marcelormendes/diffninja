@@ -140,9 +140,11 @@ describe("CLI --file entrypoints", () => {
       `,
       "/packages/b/src/flow.ts": src`
         export function start() {
-          other();
+          viaB();
         }
-        function other() {}
+        function viaB() {
+          notify();
+        }
       `,
       "/packages/a/src/notify.ts": src`
         export function notify() {}
@@ -154,7 +156,9 @@ describe("CLI --file entrypoints", () => {
     );
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("notify()");
-    expect(result.stdout).not.toContain("other()");
+    // b's same-named start also reaches notify, but through viaB: walking it
+    // too would put viaB on the printed path.
+    expect(result.stdout).not.toContain("viaB()");
   });
 
   test("diff --file diffs exports defined in that file", () => {
@@ -166,6 +170,12 @@ describe("CLI --file entrypoints", () => {
         }
         function oldPath() {}
       `,
+      "/src/other.ts": src`
+        export function other() {
+          otherOld();
+        }
+        function otherOld() {}
+      `,
     });
     host.commit("after", {
       "/src/boot.ts": src`
@@ -174,15 +184,23 @@ describe("CLI --file entrypoints", () => {
         }
         function newPath() {}
       `,
+      "/src/other.ts": src`
+        export function other() {
+          otherNew();
+        }
+        function otherNew() {}
+      `,
     });
 
     const result = host.run(`calldiff diff ${before} HEAD --file src/boot.ts`);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("boot()");
-    expect(result.stdout).toContain("oldPath()");
-    expect(result.stdout).toContain("newPath()");
-    expect(result.stdout).toMatch(/^- /m);
-    expect(result.stdout).toMatch(/^\+ /m);
+    // Each marker is bound to the call on its side of the change.
+    expect(result.stdout).toContain("- ├─ oldPath()");
+    expect(result.stdout).toContain("+ └─ newPath()");
+    // The other changed file is not walked: only the named file is diffed.
+    expect(result.stdout).not.toContain("otherOld()");
+    expect(result.stdout).not.toContain("otherNew()");
   }, 30_000);
 
   test("errors when a file entrypoint is ambiguous", () => {

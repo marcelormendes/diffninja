@@ -680,6 +680,11 @@ describe("report call flows", () => {
       // own file still exists in head with a different body.
       expect(node("baseGateway")?.source).toMatchObject({ ref: from, file: "payment.ts" });
       expect(node("baseGateway")?.source?.text).toContain("baseGateway");
+      // The intermediates are checked by name too: the filter below cannot fail
+      // for a node whose source went missing.
+      expect(node("checkout")?.source).toMatchObject({ file: "checkout.ts", ref: from });
+      expect(node("authorizePayment")?.source).toMatchObject({ file: "payment.ts", ref: from });
+      expect(node("authorizePayment")?.source?.text).toContain("baseGateway();");
       // Both snapshots are in play in one report: only removed calls are read
       // from `from`, and the surviving caller is still shown at its head body.
       const sourced = nodes.filter(flat => flat.node.source !== undefined);

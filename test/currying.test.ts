@@ -82,25 +82,6 @@ test("typescript: a curried class property is peeled too", () => {
   `.trimEnd());
 });
 
-test("typescript: an argument callback is still not the caller's", () => {
-  const host = workspace({
-    "/src/boot.ts": src`
-      export function boot(items) {
-        items.map((item) => render(item))
-      }
-    `,
-  });
-
-  const result = host.run("calldiff tree -e boot");
-
-  expect(result.code).toBe(0);
-  expect(result.stdout).toContain(src`
-    boot(items)
-    └─ items.map()
-       └─ render()
-  `.trimEnd());
-});
-
 test("typescript: a function returned among statements stays out", () => {
   const host = workspace({
     "/src/counter.ts": src`

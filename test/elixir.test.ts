@@ -353,7 +353,13 @@ test("elixir: defp helpers still resolve as Module.fun", () => {
            prepare()
          end
       
-         defp prepare, do: :ok
+         defp prepare do
+           prime()
+         end
+      
+         defp prime do
+           :ok
+         end
        end
     `,
   });
@@ -365,8 +371,17 @@ test("elixir: defp helpers still resolve as Module.fun", () => {
            finish()
          end
       
-         defp prepare, do: :ok
-         defp finish, do: :ok
+         defp prepare do
+           prime()
+         end
+      
+         defp prime do
+           :ok
+         end
+      
+         defp finish do
+           :ok
+         end
        end
     `,
   });
@@ -374,9 +389,12 @@ test("elixir: defp helpers still resolve as Module.fun", () => {
   const result = host.run(`calldiff diff ${from} ${to} -e Svc.start`);
 
   expect(result.code).toBe(0);
+  // prepare's own body is printed, so the leaf is a resolved definition and not
+  // just the same key echoed back for an unresolved call.
   expect(result.stdout).toContain(diffOutdent(`
       Svc.start()
       ├─ Svc.prepare()
+      │  └─ Svc.prime()
     + └─ Svc.finish()
   `));
 });

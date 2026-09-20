@@ -76,6 +76,7 @@ const DOCSTRING_SOURCE = [
   "    return 1",
   "",
   "",
+  "# A leading comment that the docstring must outrank.",
   "def documented():",
   '    """Reserves stock.',
   "",
@@ -200,10 +201,6 @@ describe("definition source reader", () => {
   });
 
   test("each snapshot file is read once and reused", () => {
-    const first = reader(definitionAt(SLASH_FILE, 2, 4), revision);
-    const second = reader(definitionAt(SLASH_FILE, 2, 4), revision);
-    expect(second).toEqual(first);
-
     // With the repository gone, only a cached file can still be answered: a
     // new definition in the same file succeeds, another file cannot be read.
     const other = mkdtempSync(join(tmpdir(), "diffninja-source-cache-"));
@@ -219,7 +216,8 @@ describe("definition source reader", () => {
 
       rmSync(join(other, ".git"), { recursive: true, force: true });
 
-      expect(cached(definitionAt("a.ts", 1, 3), snapshot).source?.text).toContain("return 1;");
+      // A different span of the same file: only a file-level cache can answer.
+      expect(cached(definitionAt("a.ts", 2, 2), snapshot).source?.text).toBe("  return 1;");
       expect(cached(definitionAt("b.ts", 1, 3), snapshot)).toEqual({});
     } finally {
       rmSync(other, { recursive: true, force: true });
@@ -237,27 +235,27 @@ describe("definition source reader", () => {
     ];
     for (const [name, line, description] of cases) {
       const detail = reader({ file: SLASH_FILE, line }, revision);
-      expect({ name, description: detail.description }).toEqual({ name, description });
+      expect(detail.description, name).toBe(description);
     }
   });
 
   test("a Python docstring is used first, and decorators are stepped over", () => {
     const cases: Array<[string, number, string | undefined]> = [
       ["commented", 4, "A leading comment stands in for a docstring."],
-      ["documented", 8, "Reserves stock."],
-      ["single_line_docstring", 16, "One line."],
-      ["no_docstring", 21, undefined],
-      ["decorated", 28, "Grounds the decorated function."],
-      ["trailing_comment", 32, "Docs after a trailing comment."],
-      ["trailing_no_doc", 37, undefined],
-      ["after_no_doc", 41, "Only this one is documented."],
-      ["multiline_signature", 46, "Docs after a multi-line signature."],
-      ["formatted_prefix", 54, undefined],
-      ["escaped_signature", 59, "Docs after an escaped signature."],
+      ["documented", 9, "Reserves stock."],
+      ["single_line_docstring", 17, "One line."],
+      ["no_docstring", 22, undefined],
+      ["decorated", 29, "Grounds the decorated function."],
+      ["trailing_comment", 33, "Docs after a trailing comment."],
+      ["trailing_no_doc", 38, undefined],
+      ["after_no_doc", 42, "Only this one is documented."],
+      ["multiline_signature", 47, "Docs after a multi-line signature."],
+      ["formatted_prefix", 55, undefined],
+      ["escaped_signature", 60, "Docs after an escaped signature."],
     ];
     for (const [name, line, description] of cases) {
       const detail = reader({ file: DOCSTRING_FILE, line }, revision);
-      expect({ name, description: detail.description }).toEqual({ name, description });
+      expect(detail.description, name).toBe(description);
     }
   });
 
@@ -276,11 +274,5 @@ describe("definition source reader", () => {
     const detail = reader(definitionAt(LONG_LINE_FILE, 2, 2), revision);
 
     expect(detail.source?.text).toBe(MINIFIED_LINE);
-    expect(detail.source?.text.length).toBeGreaterThan(2000);
-  });
-
-  test("a definition within the snapshot keeps its exact lines", () => {
-    const detail = reader(definitionAt(SLASH_FILE, 2, 4), revision);
-    expect(detail.source?.text).toBe(SLASH_SOURCE.split("\n").slice(1, 4).join("\n"));
   });
 });

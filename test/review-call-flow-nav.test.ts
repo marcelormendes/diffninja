@@ -132,12 +132,16 @@ describe("call-flow navigation", () => {
     expect(graph.depth).toBe(2);
     // Graph -> Tree keeps the same function selected, without a new tab.
     const tree = nav.setMode(graph, "tree");
+    expect(tree.mode).toBe("tree");
     expect(nav.current(tree)).toEqual({ file: 2, path: "0-1-2" });
     expect(tree.trail).toBe(state.trail);
     expect(tree.branch).toEqual({ file: 2, path: "0-1" });
     expect(tree.depth).toBe(2);
     // Sequence -> Tree -> Graph: same occurrence, same frame, same camera.
-    const back = nav.setMode(nav.setMode(tree, "sequence"), "graph");
+    const sequence = nav.setMode(tree, "sequence");
+    expect(sequence.mode).toBe("sequence");
+    const back = nav.setMode(sequence, "graph");
+    expect(back.mode).toBe("graph");
     expect(nav.current(back)).toEqual({ file: 2, path: "0-1-2" });
     expect(back.branch).toEqual({ file: 2, path: "0-1" });
     expect(back.trail.length).toBe(2);
@@ -321,11 +325,15 @@ describe("call-flow navigation", () => {
     expect(moved.cameras[shallow]).toEqual({ x: 900, y: 40, scale: 1 });
     // The mode hands the same cache on, and clear keeps it while dropping the rest.
     expect(nav.setMode(moved, "graph").cameras).toBe(moved.cameras);
-    const cleared = nav.clear(moved);
+    // A non-default frame and depth, so a reset and a preserved value differ.
+    const framed = nav.setDepth(nav.setMode(moved, "graph"), 3);
+    expect(framed.mode).toBe("graph");
+    expect(framed.depth).toBe(3);
+    const cleared = nav.clear(framed);
     expect(cleared.trail).toEqual([]);
     expect(cleared.branch).toBeNull();
     expect(cleared.depth).toBe(CALL_FLOW_DEFAULT_DEPTH);
-    expect(cleared.mode).toBe(moved.mode);
+    expect(cleared.mode).toBe(framed.mode);
     expect(cleared.cameras).toEqual(moved.cameras);
     expect(nav.clear(cleared).cameras).toEqual(moved.cameras);
     // Invalid writes are refused outright.

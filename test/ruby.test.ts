@@ -319,8 +319,11 @@ test("ruby: self.method and underscore helper still expand", () => {
          def unlock
            work
          end
-         def _prep; end
+         def _prep
+           prime
+         end
          def work; end
+         def prime; end
        end
     `,
   });
@@ -335,8 +338,11 @@ test("ruby: self.method and underscore helper still expand", () => {
            work
            audit
          end
-         def _prep; end
+         def _prep
+           prime
+         end
          def work; end
+         def prime; end
          def audit; end
        end
     `,
@@ -351,6 +357,7 @@ test("ruby: self.method and underscore helper still expand", () => {
       │  ├─ Vault.work()
     + │  └─ Vault.audit()
       └─ Vault._prep()
+         └─ Vault.prime()
   `));
 });
 
