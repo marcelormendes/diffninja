@@ -1,8 +1,8 @@
 /**
  * Entrypoint for the multi-file `tree` / `reach` demo.
  * Try:
- *   npm run dev -- tree -e runCheckout -- examples/checkout
- *   npm run dev -- reach -e runCheckout --to sendEmail -- examples/checkout
+ *   node dist/cli.js tree -e runCheckout -- examples/checkout
+ *   node dist/cli.js reach -e runCheckout --to sendEmail -- examples/checkout
  */
 import { Cart } from "./cart.js";
 import { Inventory } from "./inventory.js";
