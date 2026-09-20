@@ -96,26 +96,36 @@ involved.
 
 ### What the tarball contains, and what npm installs
 
-`files` in `package.json` limits the package to `dist/**/*.js` and
-`dist/**/*.d.ts`, plus `package.json`, `README.md` and `LICENSE`. `src`, `test`,
-`scripts`, `tsconfig.json`, `vitest.config.ts` and the lockfile stay out of the
-tarball.
+`files` in `package.json` limits the package to `dist/**/*.js`,
+`dist/**/*.d.ts` and `scripts/ensure-native-grammar.mjs`, plus `package.json`,
+`README.md` and `LICENSE`. `src`, `test`, `tsconfig.json`, `vitest.config.ts`
+and the lockfile stay out of the tarball. That single packaged script is the
+`postinstall` heal below, so it has to travel with the tarball.
 
 TypeScript/TSX and JavaScript grammar support is therefore a normal npm
-dependency, not something copied into the tarball: `tree-sitter@^0.25.1` and
-`tree-sitter-typescript@^0.23.2` are `dependencies`, so npm installs them from
-the registry beside diffninja, and `tree-sitter-javascript@0.23.1` arrives as
+dependency, not something copied into the tarball: `tree-sitter@^0.25.1` is a
+`dependency` and `tree-sitter-typescript@^0.23.2` is an
+`optionalDependency`, so npm installs both from the registry beside
+diffninja, and `tree-sitter-javascript@0.23.1` arrives as
 tree-sitter-typescript's own dependency. npm's `bundleDependencies` (the field
 that would inline a `node_modules` directory into the published package) is not
 used, and the packed tarball contains no `node_modules` at all. Grammars for
 every other language are fetched on demand into the grammar cache described
 below.
 
+The optional declaration is what makes a broken prebuild survivable: npm ignores
+a failed install script for an optional dependency instead of aborting the whole
+`npm install -g diffninja`. A `postinstall` heal
+(`scripts/ensure-native-grammar.mjs`) then loads the binding for real and, when
+that fails, deletes the package's shipped prebuild and compiles the grammar from
+source — see **Linux ARM64 needs a build toolchain** below.
+
 JavaScript's transitive package is not guaranteed to be directly resolvable by
 the loader: npm can nest it beneath `tree-sitter-typescript`. In that layout,
 JavaScript/JSX also falls back to the on-demand grammar cache, which the
 runtime populates automatically on every platform (Windows included);
-TypeScript/TSX is a direct dependency.
+TypeScript/TSX resolves through the installed optional dependency, or through
+its grammar-cache fallback if the heal could not compile it.
 
 ### From this checkout (works today)
 
@@ -168,8 +178,9 @@ setups below use that form.
 Install-time caveats for both paths:
 
 - **Direct dependencies and the peer warning.** The grammar packages diffninja
-  installs declare an *optional* peer of an older parser
-  (`tree-sitter-typescript@0.23.2` wants `tree-sitter@^0.21.0`,
+  installs (`tree-sitter-typescript` as an optional dependency, which pulls
+  `tree-sitter-javascript` in as its own) declare an *optional* peer of an older
+  parser (`tree-sitter-typescript@0.23.2` wants `tree-sitter@^0.21.0`,
   `tree-sitter-javascript@0.23.1` wants `^0.21.1`) while diffninja depends on
   `^0.25.1`. npm's documented behavior for a conflicting
   peer is to resolve it against the nearest non-peer dependency and warn, so a
@@ -182,15 +193,26 @@ Install-time caveats for both paths:
   help consumers: npm honors `overrides` only from the root `package.json`. The
   fix belongs upstream as a widened peer range, so do not paper over it with
   consumer `--force` or `--legacy-peer-deps` flags.
-- **Linux ARM64 needs a build toolchain.** `tree-sitter-typescript@0.23.2` and
-  `tree-sitter-javascript@0.23.1` ship x86-64 code under
+- **Linux ARM64 needs a build toolchain at install time.**
+  `tree-sitter-typescript@0.23.2` ships x86-64 code under
   `prebuilds/linux-arm64/` (the file is byte-identical to the x64 one; its ELF
-  header reads `Advanced Micro Devices X86-64`). diffninja detects the
-  mismatch by reading the binary header and rebuilds the grammar from source
-  in its own grammar cache, so call-flow extraction works, but the first use
-  compiles with node-gyp: Python and a C/C++ toolchain (build-essential) must
-  be installed. The upstream fix (corrected prebuilds) is still worth
-  requesting; evidence is in [docs/npm-release.md](docs/npm-release.md).
+  header reads `Advanced Micro Devices X86-64`), so the binding cannot load
+  there. Because the package is an `optionalDependency`, that failure no longer
+  aborts `npm install -g diffninja`; the `postinstall` heal then probes the
+  binding, deletes the wrong-architecture prebuild and recompiles the grammar
+  from source (`npm rebuild tree-sitter-typescript` with
+  `CXXFLAGS='-std=c++20'`, which the Node 22+ headers require). Python and a
+  C/C++ toolchain (build-essential) must therefore be present while installing.
+  Without them the heal only warns — `npm install` still succeeds — and
+  TypeScript/TSX extraction falls back to the grammar cache, whose first use
+  compiles with node-gyp and needs the same toolchain. Retry with
+  `npm run rebuild:native` inside the installed package, or
+  `npm rebuild --prefix "$(npm root -g)/diffninja" tree-sitter-typescript`.
+  `tree-sitter-javascript@0.23.1`, the transitive copy, carries the same
+  mislabeled binary but diffninja installs its pinned `0.25.0` directly, which
+  is the copy the loader resolves. The upstream fix (corrected prebuilds) is
+  still worth requesting; evidence is in
+  [docs/npm-release.md](docs/npm-release.md).
 - **Linux needs a recent libstdc++.** The `tree-sitter@0.25.1` Linux prebuild
   imports `GLIBCXX_3.4.31` (GCC 13.1+, i.e. libstdc++ from Ubuntu 24.04 or
   newer), so the same binary fails at first use on older distributions instead of

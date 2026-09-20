@@ -202,14 +202,15 @@ jobs:
       # because npm's OIDC exchange rejects self-hosted runners, and the release
       # gate has to mean the same thing as the publish.
       #
-      # Linux arm64 (`ubuntu-24.04-arm`) is deliberately absent. The bundled
-      # tree-sitter-typescript@0.23.2 and tree-sitter-javascript@0.23.1 tarballs
-      # ship x86-64 code under `prebuilds/linux-arm64`, so a clean install
-      # cannot load native TypeScript extraction there. Making that a hard
-      # release gate would block every release on an upstream packaging defect
-      # this repository cannot fix; Linux arm64 is instead documented as
-      # unsupported (see docs/npm-release.md) and its entry returns here once
-      # the dependency tree carries corrected binaries.
+      # Linux arm64 (`ubuntu-24.04-arm`) is deliberately absent from this gate.
+      # The bundled tree-sitter-typescript@0.23.2 tarball ships x86-64 code
+      # under `prebuilds/linux-arm64`, so a clean install there depends on the
+      # postinstall heal compiling the grammar from source, which needs a
+      # build toolchain on the runner. The consumer matrix
+      # (.github/workflows/consumer-matrix.yml) does install that toolchain and
+      # covers Ubuntu ARM64 on Node 22 and 24, so the platform is verified
+      # before release; this publish gate just stays toolchain-free. See
+      # docs/npm-release.md finding 3.
       matrix:
         include:
           - runner: ubuntu-latest # Linux x64

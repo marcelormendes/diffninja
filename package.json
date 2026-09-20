@@ -15,12 +15,15 @@
   },
   "files": [
     "dist/**/*.js",
-    "dist/**/*.d.ts"
+    "dist/**/*.d.ts",
+    "scripts/ensure-native-grammar.mjs"
   ],
   "scripts": {
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
     "build": "npm run clean && tsc",
     "prepack": "npm run build",
+    "postinstall": "node scripts/ensure-native-grammar.mjs",
+    "rebuild:native": "node scripts/ensure-native-grammar.mjs",
     "dev": "tsx src/review/cli.ts",
     "start": "node dist/review/cli.js",
     "lint": "oxlint",
@@ -61,8 +64,10 @@
     "picocolors": "^1.1.1",
     "tree-sitter": "^0.25.1",
     "tree-sitter-javascript": "^0.25.0",
-    "tree-sitter-typescript": "^0.23.2",
     "zod": "^4.6.5"
+  },
+  "optionalDependencies": {
+    "tree-sitter-typescript": "^0.23.2"
   },
   "overrides": {
     "tree-sitter-typescript": {

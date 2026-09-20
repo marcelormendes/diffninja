@@ -15,9 +15,10 @@ const tarballs = input.endsWith(".tgz") ? [input]
   : readdirSync(input).filter(name => name.endsWith(".tgz")).map(name => join(input, name));
 assert.equal(tarballs.length, 1, "Expected exactly one tarball");
 const windows = process.platform === "win32";
-// No spaces: ARM64 Linux rebuilds mislabeled tree-sitter prebuilds from source,
-// and node-gyp generated Makefiles break on spaces in the path. Spaces in
-// paths are still exercised via the grammar cache directory below.
+// No spaces: on ARM64 Linux the postinstall rebuilds the mislabeled
+// tree-sitter-typescript prebuild from source, and node-gyp generated Makefiles
+// break on spaces in the path. Spaces in paths are still exercised via the
+// grammar cache directory below.
 const sandbox = mkdtempSync(join(tmpdir(), "diffninja-package-"));
 const prefix = join(sandbox, "prefix");
 const packageDir = join(prefix, windows ? "node_modules" : "lib/node_modules", "diffninja");
@@ -52,7 +53,7 @@ try {
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
   assert.equal(manifest.name, "diffninja");
   assert.deepEqual(manifest.bin, { diffninja: "dist/review/cli.js", "diffninja-mcp": "dist/review/mcp-cli.js" });
-  assert.deepEqual(readdirSync(packageDir).sort(), ["LICENSE", "README.md", "dist", "node_modules", "package.json"]);
+  assert.deepEqual(readdirSync(packageDir).sort(), ["LICENSE", "README.md", "dist", "node_modules", "package.json", "scripts"]);
 
   // Each source owns exactly two emitted files. Catch stale output of any name,
   // not just the tmp-report.js leak that originally prompted this release gate.

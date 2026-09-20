@@ -8,8 +8,9 @@ name: consumer-matrix
 #
 # Runs on pull requests and on demand. The release workflow keeps its own
 # install matrix as the publish gate; this workflow is the wider pre-release
-# check, including Linux ARM64 (mislabeled prebuilds are repaired in the
-# grammar cache by building from source, which needs the toolchain below).
+# check, including Linux ARM64 (the install-time postinstall rebuilds the
+# mislabeled tree-sitter-typescript prebuild from source, which needs the
+# toolchain below).
 
 on:
   workflow_dispatch:
@@ -52,9 +53,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
-      # Linux ARM64: the tree-sitter-typescript/javascript prebuilds ship
-      # x86-64 bytes as linux-arm64. diffninja detects the mismatch and
-      # rebuilds from source in its grammar cache, which needs a toolchain.
+      # Linux ARM64: tree-sitter-typescript@0.23.2 ships x86-64 bytes as its
+      # linux-arm64 prebuild. diffninja's postinstall detects that the binding
+      # does not load and compiles the grammar from source, which needs a
+      # toolchain at install time.
       - name: Install build toolchain (Linux ARM64)
         if: matrix.os == 'ubuntu-24.04-arm'
         run: sudo apt-get update && sudo apt-get install -y build-essential python3

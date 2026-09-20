@@ -32,9 +32,16 @@ then the trusted-publisher configuration, then tags. Two consequences follow:
 The published tarball carries compiled JavaScript, type declarations and package
 metadata/documentation. Grammar support comes from npm dependencies:
 
-- `tree-sitter@^0.25.1` and `tree-sitter-typescript@^0.23.2` are direct
-  `dependencies`; `tree-sitter-javascript@0.23.1` is tree-sitter-typescript's
-  own dependency. npm installs all three from the registry next to diffninja.
+- `tree-sitter@^0.25.1` is a direct `dependency`; `tree-sitter-typescript@^0.23.2`
+  is an `optionalDependency`; `tree-sitter-javascript@0.23.1` is
+  tree-sitter-typescript's own dependency. npm installs all three from the
+  registry next to diffninja.
+- Declaring tree-sitter-typescript optional is what keeps a broken prebuild from
+  aborting the install: npm ignores the failure of an optional dependency's
+  install script instead of exiting non-zero. The `postinstall` heal
+  (`scripts/ensure-native-grammar.mjs`, shipped in the tarball) then loads the
+  binding for real and, on failure, deletes the package's shipped prebuild
+  directory and recompiles the grammar from source — see finding 3.
 - npm's `bundleDependencies`/`bundleDependencies: true` — which would inline a
   `node_modules` tree into the published package — is not used, and the packed
   tarball contains no `node_modules` entries. "Bundled grammar" in older drafts
@@ -239,7 +246,7 @@ browser exists it logs `diffninja: could not open the browser` and still exits
 JSON path. The consumer matrix runs a `--open` smoke on Windows to prove the
 opener path executes without crashing.
 
-### 3. Linux ARM64: mislabeled grammar prebuilds (fixed in the cache)
+### 3. Linux ARM64: mislabeled grammar prebuilds (repaired at install time)
 
 In `tree-sitter-typescript@0.23.2` and `tree-sitter-javascript@0.23.1`,
 `prebuilds/linux-arm64/*.node` is byte-identical to the x64 file (the ELF
@@ -247,15 +254,31 @@ header reports `Advanced Micro Devices X86-64`). The defect is in the two
 upstream grammar packages; `tree-sitter@0.25.1` itself ships a correct
 `AArch64` Linux prebuild.
 
-Fixed: `src/languages/grammars.ts` now reads the prebuild's binary header
-(ELF/Mach-O/PE machine type) before trusting it. When the platform's prebuild
-exists but targets another CPU, the loader removes the bad artifact from
-diffninja's own grammar cache and lets node-gyp-build fall back to compiling
-from source. The app's own installed copy is never modified: a broken direct
-dependency falls through to the cache path, which repairs its own copy. First
-use on Linux ARM64 therefore needs Python and a C/C++ toolchain
-(build-essential); the consumer matrix installs the toolchain and gates Linux
-ARM64 as a passing platform.
+Fixed twice over, on purpose:
+
+- **Install time (this release).** `tree-sitter-typescript` is an
+  `optionalDependency`, so the upstream install-script failure — `node-gyp-build`
+  falls back to `node-gyp rebuild`, which under Node 22 dies on a malformed
+  generated Makefile — no longer aborts `npm install -g diffninja`. The
+  `postinstall` in `scripts/ensure-native-grammar.mjs` probes the binding end to
+  end (require parser, `setLanguage`, `parse`), and when that fails deletes
+  `prebuilds/` and `build/` inside the installed package and runs
+  `npm rebuild tree-sitter-typescript` with `CXXFLAGS='-std=c++20'` (the Node 22+
+  headers require C++20 and `binding.gyp` does not request it). Because
+  node-gyp-build prefers `build/Release` over any prebuild, the corrected binary
+  is the one loaded afterwards. The script is a heal, not a gate: it always exits
+  0, warns when no toolchain is available, and never touches a platform whose
+  prebuild loads.
+- **First use (existing).** `src/languages/grammars.ts` reads a prebuild's binary
+  header (ELF/Mach-O/PE machine type) before trusting it. When the platform's
+  prebuild exists but targets another CPU, the loader removes the bad artifact
+  from diffninja's own grammar cache and lets node-gyp-build fall back to
+  compiling from source. The installed copy is never modified by this path.
+
+Linux ARM64 therefore needs Python and a C/C++ toolchain (build-essential) at
+install time; the consumer matrix installs it and gates Linux ARM64 as a passing
+platform. A host without the toolchain still completes the install and only
+loses native TypeScript/TSX extraction.
 
 The upstream fix (corrected `prebuilds/linux-arm64/*.node` in the two grammar
 packages) is still worth requesting, and would remove the compile step.
@@ -348,14 +371,14 @@ exited 0, wrote both report files, and warned per revision.
 Enumerated from the installed packages and registry tarballs on Linux x64, then
 header-checked (ELF/Mach-O/PE machine type): file inventory plus each `.node`
 header. Nothing in this table executed on macOS, Windows or ARM64 Linux. The
-linux-arm64 mislabeling above is now repaired at load time (see finding 3):
-the loader detects the wrong-CPU header and rebuilds from source in the
-grammar cache.
+linux-arm64 mislabeling above is now repaired before first use (see finding 3):
+the install-time postinstall rebuilds the grammar from source, and the loader's
+wrong-CPU header check still repairs the on-demand grammar cache.
 
 | Package | linux x64 | linux arm64 | macOS x64 | macOS arm64 | win x64 | win arm64 |
 |---|---|---|---|---|---|---|
 | `tree-sitter` 0.25.1 (direct dependency) | prebuild, **loads** | prebuild (AArch64 ELF) | prebuild (Mach-O x86-64) | prebuild (Mach-O arm64) | prebuild (PE x64) | prebuild (PE arm64) |
-| `tree-sitter-typescript` 0.23.2 (direct dependency) | prebuild, **loads** | **prebuild is x86-64 code** | prebuild (Mach-O x86-64) | prebuild (Mach-O arm64) | prebuild (PE x64) | prebuild (PE arm64) |
+| `tree-sitter-typescript` 0.23.2 (optional dependency) | prebuild, **loads** | **prebuild is x86-64 code** | prebuild (Mach-O x86-64) | prebuild (Mach-O arm64) | prebuild (PE x64) | prebuild (PE arm64) |
 | `tree-sitter-javascript` 0.23.1 (dependency of the above) | prebuild, **loads** | **prebuild is x86-64 code** | prebuild (Mach-O x86-64) | prebuild (Mach-O arm64) | prebuild (PE x64) | prebuild (PE arm64) |
 | `tree-sitter` 0.21.1 (added only by a consumer resolver, see finding 5) | prebuild | none — builds from source | prebuild | prebuild | prebuild | none — builds from source |
 
@@ -380,8 +403,10 @@ for MCP, so a successful start waits for protocol input rather than a banner.
 
 - **Upstream fixes to request:** corrected `prebuilds/linux-arm64/*.node` in
   `tree-sitter-typescript@0.23.2` and `tree-sitter-javascript@0.23.1` (diffninja
-  now works around the mislabeled binaries, but a correct prebuild would skip
-  the source compile); widened `tree-sitter` peer ranges in those packages;
+  rebuilds the mislabeled TypeScript grammar during `postinstall`, but a correct
+  prebuild would skip the source compile); a `binding.gyp` that requests C++20,
+  which the Node 22+ headers require; widened `tree-sitter` peer ranges in those
+  packages;
   prebuilds (or an explicit "source build" note) for `tree-sitter-perl`,
   `tree-sitter-kotlin` and the ARM64 gaps in
   `@tree-sitter-grammars/tree-sitter-lua@0.2.0`.
@@ -403,9 +428,11 @@ node scripts/verify-package.mjs dist-pack
 
 `scripts/verify-package.mjs` performs a real global install with an isolated
 temporary prefix and npm cache; it does not modify the user's global npm
-installation or populate the user's npm cache. It checks the compiled file list
-against current sources (catching stale output), the installed package layout,
-both bin shims (plus `.cmd`, `.ps1` and shell shims on Windows) and the absence
+installation or populate the user's npm cache. The install runs the tarball's
+own `postinstall` heal, so the ARM64 repair path is part of what it exercises.
+It checks the compiled file list against current sources (catching stale
+output), the installed package layout, both bin shims (plus `.cmd`, `.ps1` and
+shell shims on Windows) and the absence
 of a `calldiff` bin, a mock CLI HTML/JSON report, a `--open` smoke, native
 TypeScript extraction, on-demand grammar extraction into a cache path
 containing spaces (on every platform, proving the Windows npm invocation),
