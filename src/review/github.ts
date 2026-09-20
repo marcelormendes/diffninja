@@ -225,7 +225,10 @@ function githubErrorText(stdout: string): string | null {
   if (!isGhObject(decoded)) return null;
   const parts: string[] = [];
   const message = textField(decoded, "message");
-  if (message !== null && sanitizeText(message) !== "") parts.push(sanitizeText(message));
+  if (message !== null) {
+    const cleaned = sanitizeText(message);
+    if (cleaned !== "") parts.push(cleaned);
+  }
   const errors = decoded["errors"];
   if (Array.isArray(errors)) {
     for (const entry of errors) {
@@ -270,7 +273,7 @@ function classifyGhFailure(rawError: Error, subject: RejectionSubject): Error {
   if (status === 408 || /timed out|timeout/i.test(detail)) {
     return new Error("gh did not answer in time; the request did not complete. Check the network, then try again.");
   }
-  if (/was not found/i.test(detail) && status === null) return new Error("The GitHub CLI (gh) was not found on PATH. Install gh 2.45.0 or newer from https://cli.github.com, then run `gh auth login --hostname github.com` and try again.");
+  if (/was not found/i.test(detail) && status === null) return new Error(`The GitHub CLI (gh) was not found on PATH. Install gh ${MIN_GH_VERSION} or newer from https://cli.github.com, then run \`gh auth login --hostname github.com\` and try again.`);
   if (/unknown json field|unknown flag|unknown shorthand|unknown command/i.test(detail)) {
     return new Error(`The installed gh does not support the flags diffninja needs. Update gh to ${MIN_GH_VERSION} or newer.`);
   }
@@ -525,6 +528,11 @@ function incompleteProblem(path: string): string {
   return `GitHub returned an incomplete diff for ${where}; diffninja will not review a partial diff.`;
 }
 
+/** A diff that cannot be reviewed: no files, no lines, and no anchor to comment on. */
+function failedDiff(problem: string): ParsedDiff {
+  return { files: [], lines: [], anchors: new Set(), problem };
+}
+
 /**
  * Parse the canonical diff as strictly as it can be parsed: every hunk header
  * must account for exactly its line counts, and anything GitHub would not
@@ -532,11 +540,9 @@ function incompleteProblem(path: string): string {
  * instead of silently dropping reviewable lines.
  */
 function parseCanonicalDiff(rawDiff: string): ParsedDiff {
-  const empty: ParsedDiff = { files: [], lines: [], anchors: new Set(), problem: null };
-  const fatal = (problem: string): ParsedDiff => ({ ...empty, problem });
   const text = rawDiff.replace(/\r\n/g, "\n");
-  if (text.trim() === "") return fatal(EMPTY_PROBLEM);
-  if (text.trimStart().startsWith("<")) return fatal(HTML_PROBLEM);
+  if (text.trim() === "") return failedDiff(EMPTY_PROBLEM);
+  if (text.trimStart().startsWith("<")) return failedDiff(HTML_PROBLEM);
   const rows = text.split("\n");
   const files: ParsedFile[] = [];
   const lines: SnapshotLine[] = [];
@@ -546,7 +552,7 @@ function parseCanonicalDiff(rawDiff: string): ParsedDiff {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (row === "") continue;
-    if (row.startsWith("diff --cc ") || row.startsWith("diff --combined ")) return fatal(COMBINED_PROBLEM);
+    if (row.startsWith("diff --cc ") || row.startsWith("diff --combined ")) return failedDiff(COMBINED_PROBLEM);
     if (row.startsWith("diff --git ")) {
       const names = /^diff --git (.*) (.*)$/.exec(row);
       current = { path: unquotePath(names?.[2] ?? ""), oldPath: unquotePath(names?.[1] ?? ""), patch: [], hunks: 0, special: null };
@@ -554,8 +560,8 @@ function parseCanonicalDiff(rawDiff: string): ParsedDiff {
       continue;
     }
     if (current === null) {
-      if (row.startsWith("@@")) return fatal(COMBINED_PROBLEM);
-      return fatal(UNPARSED_PROBLEM);
+      if (row.startsWith("@@")) return failedDiff(COMBINED_PROBLEM);
+      return failedDiff(UNPARSED_PROBLEM);
     }
     if (row === "GIT binary patch" || row.startsWith("Binary files ") || row.startsWith("Binary file ")) {
       current.special = "binary";
@@ -573,9 +579,9 @@ function parseCanonicalDiff(rawDiff: string): ParsedDiff {
       continue;
     }
     if (row.startsWith("@")) {
-      if (!row.startsWith("@@ ")) return fatal(COMBINED_PROBLEM);
+      if (!row.startsWith("@@ ")) return failedDiff(COMBINED_PROBLEM);
       const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(row);
-      if (header === null) return fatal(UNPARSED_PROBLEM);
+      if (header === null) return failedDiff(UNPARSED_PROBLEM);
       let oldLine = Number(header[1]);
       let newLine = Number(header[3]);
       let oldLeft = header[2] === undefined ? 1 : Number(header[2]);
@@ -583,7 +589,7 @@ function parseCanonicalDiff(rawDiff: string): ParsedDiff {
       const body: string[] = [row];
       while (oldLeft > 0 || newLeft > 0) {
         const next = rows[++i];
-        if (next === undefined || next === "") return fatal(incompleteProblem(current.path));
+        if (next === undefined || next === "") return failedDiff(incompleteProblem(current.path));
         if (next === NO_NEWLINE_MARKER) {
           body.push(next);
           continue;
@@ -592,7 +598,7 @@ function parseCanonicalDiff(rawDiff: string): ParsedDiff {
         if (next.startsWith("+")) parsed = { kind: "add", text: next.slice(1) };
         else if (next.startsWith("-")) parsed = { kind: "delete", text: next.slice(1) };
         else if (next.startsWith(" ")) parsed = { kind: "context", text: next.slice(1) };
-        else return fatal(incompleteProblem(current.path));
+        else return failedDiff(incompleteProblem(current.path));
         body.push(next);
         if (parsed.kind === "add") {
           lines.push({ path: current.path, line: newLine, side: "RIGHT", text: parsed.text, kind: "add" });
@@ -613,21 +619,20 @@ function parseCanonicalDiff(rawDiff: string): ParsedDiff {
           oldLeft--;
           newLeft--;
         }
-        if (oldLeft < 0 || newLeft < 0) return fatal(incompleteProblem(current.path));
+        if (oldLeft < 0 || newLeft < 0) return failedDiff(incompleteProblem(current.path));
       }
       if (rows[i + 1] === NO_NEWLINE_MARKER) body.push(rows[++i]);
       current.patch.push(...body);
       current.hunks++;
       continue;
     }
-    if (row.startsWith("@@@") || row.startsWith("@@")) return fatal(COMBINED_PROBLEM);
-    return fatal(UNPARSED_PROBLEM);
+    return failedDiff(UNPARSED_PROBLEM);
   }
 
-  if (files.length === 0) return fatal(EMPTY_PROBLEM);
-  if (files.some((file) => file.special === "binary")) return fatal(BINARY_PROBLEM);
-  if (files.some((file) => file.special === "link")) return fatal(LINK_PROBLEM);
-  if (files.some((file) => file.path === "")) return fatal(UNPARSED_PROBLEM);
+  if (files.length === 0) return failedDiff(EMPTY_PROBLEM);
+  if (files.some((file) => file.special === "binary")) return failedDiff(BINARY_PROBLEM);
+  if (files.some((file) => file.special === "link")) return failedDiff(LINK_PROBLEM);
+  if (files.some((file) => file.path === "")) return failedDiff(UNPARSED_PROBLEM);
   return { files, lines, anchors, problem: null };
 }
 
@@ -698,10 +703,10 @@ function checkCoverage(files: ParsedFile[], listing: GhJson): string | null {
 
 function validateCanonicalDiff(rawDiff: string, listing: GhJson): ParsedDiff {
   const parsed = parseCanonicalDiff(rawDiff);
-  if (parsed.problem !== null) return { files: [], lines: [], anchors: new Set(), problem: parsed.problem };
+  // A rejected parse already carries no files, lines, or anchors of its own.
+  if (parsed.problem !== null) return parsed;
   const coverage = checkCoverage(parsed.files, listing);
-  if (coverage !== null) return { files: [], lines: [], anchors: new Set(), problem: coverage };
-  return parsed;
+  return coverage === null ? parsed : failedDiff(coverage);
 }
 
 /* ------------------------------------------------------------------ session */
@@ -907,12 +912,17 @@ export class ConnectedReview {
     return decodePages(result.stdout, "file list");
   }
 
-  private async readReviewIds(coordinates: PullCoordinates): Promise<Set<number>> {
+  /** Every review row of a pull request, across pages. */
+  private async readReviews(coordinates: PullCoordinates): Promise<GhJson[]> {
     const result = await this.call([
       "api", "--hostname", GITHUB_HOST, "--paginate", "-H", ACCEPT_JSON, `${apiPath(coordinates, "reviews")}?per_page=100`,
     ]);
+    return decodePages(result.stdout, "review list");
+  }
+
+  private async readReviewIds(coordinates: PullCoordinates): Promise<Set<number>> {
     const ids = new Set<number>();
-    for (const row of decodePages(result.stdout, "review list")) {
+    for (const row of await this.readReviews(coordinates)) {
       const id = isGhObject(row) ? numberField(row, "id") : null;
       if (id !== null) ids.add(id);
     }
@@ -1103,11 +1113,8 @@ export class ConnectedReview {
   }
 
   private async findMatchingReview(meta: PrMetadata, payload: ReviewPayload, identity: ConnectedIdentity): Promise<ConnectedReceipt | null> {
-    const list = await this.call([
-      "api", "--hostname", GITHUB_HOST, "--paginate", "-H", ACCEPT_JSON, `${apiPath(meta, "reviews")}?per_page=100`,
-    ]);
     const wanted = REVIEW_STATE[payload.event];
-    for (const entry of decodePages(list.stdout, "review list")) {
+    for (const entry of await this.readReviews(meta)) {
       if (!isGhObject(entry)) continue;
       const id = numberField(entry, "id");
       const url = textField(entry, "html_url");

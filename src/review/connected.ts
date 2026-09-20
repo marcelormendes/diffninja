@@ -16,7 +16,7 @@ export interface ConnectedSession { server: Server; url: string }
 interface ErrorResponse { error: string; state?: ConnectedState }
 type ApiResponse = ConnectedState | ReviewPayload | ErrorResponse;
 
-async function body(req: IncomingMessage): Promise<string> {
+async function readBody(req: IncomingMessage): Promise<string> {
   if (req.headers["content-type"] !== "application/json") throw new Error("Expected application/json.");
   const chunks: Buffer[] = [];
   let length = 0;
@@ -26,6 +26,18 @@ async function body(req: IncomingMessage): Promise<string> {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Loopback-only guard. The request must name this session's exact host, must
+ * not carry a foreign `Origin`, and must not announce a cross-site fetch. A
+ * browser page on another origin can produce none of these headers honestly.
+ */
+function requestIsTrusted(req: IncomingMessage, origin: string): boolean {
+  if (req.headers.host !== new URL(origin).host) return false;
+  if (req.headers.origin !== undefined && req.headers.origin !== origin) return false;
+  const site = req.headers["sec-fetch-site"];
+  return !site || ["same-origin", "none"].includes(String(site));
 }
 
 /** A single ephemeral session; never exposes a general GitHub API proxy. */
@@ -39,9 +51,7 @@ export async function serveConnected(review = new ConnectedReview()): Promise<Co
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${csrf}'; style-src 'nonce-${csrf}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
     const json = (code: number, value: ApiResponse) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(value)); };
-    if (req.headers.host !== new URL(origin).host || (req.headers.origin !== undefined && req.headers.origin !== origin) || (req.headers["sec-fetch-site"] && !["same-origin", "none"].includes(String(req.headers["sec-fetch-site"])))) {
-      json(403, { error: "Untrusted Host or Origin." }); return;
-    }
+    if (!requestIsTrusted(req, origin)) { json(403, { error: "Untrusted Host or Origin." }); return; }
     if (req.method === "GET" && req.url === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); res.end(renderConnectedPage(csrf)); return;
     }
@@ -53,7 +63,7 @@ export async function serveConnected(review = new ConnectedReview()): Promise<Co
       json(403, { error: "Invalid session or CSRF token." }); return;
     }
     try {
-      const text = await body(req);
+      const text = await readBody(req);
       let result: ConnectedState | ReviewPayload;
       switch (req.url) {
         case "/api/load": result = await review.load(loadSchema.parse(JSON.parse(text)).url); break;
