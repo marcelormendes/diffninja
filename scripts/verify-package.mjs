@@ -24,6 +24,21 @@ const run = (file, args, options = {}) => execFileSync(file, args, {
 });
 const filesUnder = directory => readdirSync(directory, { recursive: true, withFileTypes: true })
   .filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name));
+const removeDir = directory => {
+  // Windows often holds a handle briefly after a child exits (or while AV
+  // scans), so rmSync can fail with EPERM/EBUSY/ENOTEMPTY on a first attempt.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const retryable = ["EPERM", "EBUSY", "ENOTEMPTY"].includes(error?.code);
+      if (!retryable || attempt >= 9) throw error;
+      const start = Date.now();
+      while (Date.now() - start < 500) { /* back off, then retry */ }
+    }
+  }
+};
 
 try {
   // setup-node and official Node distributions keep npm's JS entry here on Windows.
@@ -111,5 +126,5 @@ try {
   }
   console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, both command shims, CLI, --open, native TypeScript/Python, MCP stdio`);
 } finally {
-  rmSync(sandbox, { recursive: true, force: true });
+  removeDir(sandbox);
 }
