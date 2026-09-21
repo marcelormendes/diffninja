@@ -23,6 +23,24 @@ No install needed, the published package runs as an MCP command too:
 (`-p diffninja` selects the package; `diffninja-mcp` is the binary name. Pin
 a version with `-p diffninja@0.1.0` when you want a fixed release.)
 
+## One-command setup
+
+```bash
+npx -y diffninja setup
+```
+
+Detects Claude Code, Codex, OMP, and pi on your machine and registers the MCP
+server in each one's user config. It installs the package globally first
+(`npm install -g diffninja`) so the registration points at a permanent
+binary; if that install fails it registers an `npx`-based entry instead and
+tells you. Flags: `--cli claude,codex` to pick CLIs, `--dry-run` to preview,
+`--uninstall` to remove, `--no-install` to skip the global install. The
+TypeSafe API key is never written into config files; each entry references it
+from the environment that launches the CLI, so export `TYPESAFE_API_KEY` in
+your shell for live reviews.
+
+The sections below are the manual equivalents, one CLI at a time.
+
 ## `review_diff` arguments
 
 | Argument | Type | Meaning |

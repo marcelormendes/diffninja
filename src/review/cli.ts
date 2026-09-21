@@ -9,6 +9,7 @@ import { renderReview } from "./html.js";
 import { serveConnected, type ConnectedSession } from "./connected.js";
 import { ConnectedReview } from "./github.js";
 import { detectPullRequest } from "./pr-input.js";
+import { runSetup, setupHelp } from "./setup.js";
 
 const help = `diffninja. Focused local PR review.
 
@@ -18,6 +19,8 @@ const help = `diffninja. Focused local PR review.
   diffninja <pr-url>          Connected, human-authored review of a GitHub PR.
   diffninja <pr-url> --static [--mock] [--out review.html]
   diffninja serve [<pr-url>] [--open]   Advanced connected-review alias.
+  diffninja setup [--cli claude,codex,omp,pi] [--uninstall]
+                                       Register the MCP server on every detected CLI.
 
 A github.com pull request URL may appear anywhere: as an argument, inside pasted
 or quoted text, or as --pr URL. It selects connected review, which reads the pull
@@ -81,6 +84,22 @@ async function servePullRequest(url: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === "setup") {
+    const args = process.argv.slice(3);
+    const { values, positionals } = parseArgs({ args, options: {
+      cli: { type: "string" }, uninstall: { type: "boolean" },
+      "dry-run": { type: "boolean" }, "no-install": { type: "boolean" }, help: { type: "boolean" },
+    }, strict: true, allowPositionals: true });
+    if (values.help) { console.log(setupHelp); return; }
+    if (positionals.length > 0) throw new Error("setup takes no positional arguments. Use --help.");
+    await runSetup({
+      clis: values.cli === undefined ? undefined : values.cli.split(",").map((part) => part.trim()).filter((part) => part !== ""),
+      uninstall: values.uninstall === true,
+      dryRun: values["dry-run"] === true,
+      noInstall: values["no-install"] === true,
+    });
+    return;
+  }
   if (process.argv[2] === "serve") {
     const args = process.argv.slice(3);
     const { values, positionals } = parseArgs({ args, options: {
