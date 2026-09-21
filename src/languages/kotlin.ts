@@ -2,8 +2,10 @@
  * Kotlin callable extraction (tree-sitter-kotlin).
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
+  declaredParamsOf,
   collapseWs,
   locFromNode,
   namedChildren,
@@ -110,6 +112,7 @@ function collectStatements(
     if (children && children.length > 0) {
       step.children = children;
     }
+    step.syntax = heuristicCallSyntax(node, key);
     steps.push(step);
   };
 
@@ -302,6 +305,7 @@ function handleFunction(
   functions.push({
     key,
     label: `${key}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps: collectStatements(file, statementsOf(body), className),
     exported: !isPrivate(node),
@@ -321,6 +325,7 @@ function handleSecondaryConstructor(
   const info: FunctionInfo = {
     key: `${className}.constructor`,
     label: `${className}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps: collectStatements(file, stmts ? namedChildren(stmts) : [], className),
     exported: !isPrivate(node),

@@ -372,7 +372,7 @@ test("python: try/except/finally and match/case as branches", () => {
   `));
 });
 
-test("python: super().method labeled as Class.method; ignores subscript calls", () => {
+test("python: super().method labeled as Class.method; keeps subscript calls as dynamic nodes", () => {
   const host = workspace();
   const from = host.commit("before", {
     "/super.py": src`
@@ -404,6 +404,7 @@ test("python: super().method labeled as Class.method; ignores subscript calls", 
   expect(result.stdout).toContain(diffOutdent(`
       Child.start(self)
       ├─ Child.setup()
+      ├─ obj[key]()
       ├─ obj.known()
     + └─ work()
   `));

@@ -511,6 +511,293 @@ describe("manual-review fallbacks", () => {
   });
 });
 
+/** The serialized size the cap is measured against, for one unit's state. */
+function stateCharsOf(unit: ReviewUnit): number {
+  return JSON.stringify(buildJevState(unit)).length;
+}
+
+/** One standalone call block as the context builder supplies it, `chars` long. */
+function callFlowBlock(index: number, chars: number): string {
+  const head = `call callee${index} @ src/app.ts:${index + 1}\n  snapshot=after target=lexical\n  mapping=positional\n  arg[1] -> param1: "`;
+  return `${head}${"a".repeat(chars - head.length)}"`;
+}
+
+/** A flow too large to send whole, ending in the builder's aggregate omission marker. */
+function oversizedFlow(): string[] {
+  const blocks = Array.from({ length: 30 }, (_value, index) => callFlowBlock(index, 900));
+  blocks.push("[call-flow context omitted: unrelated trees and snippets beyond the depth limit]");
+  return blocks;
+}
+
+/**
+ * A hunk whose state with no call flow, and therefore the no-flow note, is exactly
+ * `chars` characters. The diff tail is a quote, so the fixture measures JSON
+ * escaping rather than raw diff length. Throws rather than silently testing a
+ * different size.
+ */
+function unitAtEssentialChars(chars: number): ReviewUnit {
+  const file = "src/boundary.ts";
+  const probe = stateCharsOf(makeUnit({ id: "boundary", file, diff: hunkWithFiller(0) }));
+  // Each filler character costs exactly one serialized character.
+  return unitAssertingChars(
+    makeUnit({ id: "boundary", file, diff: hunkWithFiller(chars - probe) }),
+    chars,
+  );
+}
+
+/**
+ * A hunk whose state, with every supplied call-flow entry included, is exactly
+ * `chars` characters. Only meaningful at or under the cap with a flow small enough
+ * to fit whole; a larger flow would be pruned and the size would not be linear.
+ */
+function unitAtFullFlowChars(chars: number, callFlow: readonly string[]): ReviewUnit {
+  const file = "src/boundary.ts";
+  const probe = stateCharsOf(makeUnit({ id: "boundary", file, diff: hunkWithFiller(0), callFlow }));
+  return unitAssertingChars(
+    makeUnit({ id: "boundary", file, diff: hunkWithFiller(chars - probe), callFlow }),
+    chars,
+  );
+}
+
+/** The unit when its state is exactly `chars` characters; a thrown error when it is not. */
+function unitAssertingChars(unit: ReviewUnit, chars: number): ReviewUnit {
+  const actual = stateCharsOf(unit);
+  if (actual !== chars) throw new Error(`fixture is ${actual} serialized characters, not ${chars}`);
+  return unit;
+}
+
+/** The shared hunk plus `filler` unescaped filler characters and one closing quote. */
+function hunkWithFiller(filler: number): string {
+  return `${CODE_HUNK}\n+${"x".repeat(filler)}"`;
+}
+
+describe("serialized state budget", () => {
+  test("prunes optional call-flow context instead of routing the hunk to a human", async () => {
+    const flow = oversizedFlow();
+    expect(flow.join("").length).toBeGreaterThan(MAX_STATE_CHARS);
+    const unit = makeUnit({ id: "flow", diff: CODE_HUNK, callFlow: flow });
+    const host = scriptedFetch({ "src/app.ts": { risk: 1, bug: 0.2, category: "refactor" } });
+
+    const result = await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
+
+    // A call flow that cannot fit whole is optional context: the hunk is judged live.
+    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+    const item = result.items[0];
+    expect(item.judgment?.category).toBe("refactor");
+    expect(item.status).toBe("low");
+    expect(item.routing).toBeUndefined();
+    // The item still carries the full context the extraction side supplied, for the report.
+    expect(item.callFlow).toEqual(flow);
+
+    const state = host.log[0].request.state;
+    expect(state.file).toBe("src/app.ts");
+    expect(state.hunk).toBe(unit.header);
+    expect(state.diff).toBe(CODE_HUNK);
+    expect(JSON.stringify(state).length).toBeLessThanOrEqual(MAX_STATE_CHARS);
+
+    const sent = state.callFlow ?? [];
+    const keptEntries = flow.filter((entry) => sent.includes(entry));
+    expect(keptEntries.length).toBeGreaterThan(0);
+    expect(keptEntries.length).toBeLessThan(flow.length);
+    // Whole entries, in the supplied priority order, never reordered or spliced.
+    expect(sent.slice(0, keptEntries.length)).toEqual(keptEntries);
+    // One trailing marker reports the count of dropped entries, excluding itself.
+    expect(sent).toHaveLength(keptEntries.length + 1);
+    expect(sent[keptEntries.length]).toMatch(
+      new RegExp(`omitted to fit the size limit: ${flow.length - keptEntries.length} of ${flow.length}\\b`, "u"),
+    );
+    // The note already states the omission for the whole state, whatever the marker says.
+    expect(state.contextNote).toMatch(/omitted/u);
+    expect(item.reasons.join(" ")).toMatch(/trimmed/u);
+    expect(item.reasons.join(" ")).toContain(`${keptEntries.length} of ${flow.length}`);
+  });
+
+  test("marks every omitted entry even where the count marker cannot fit", async () => {
+    // Two entries fill the state to one character under the cap, so a third cannot
+    // fit beside them and the count marker has no room either.
+    const fitting = [callFlowBlock(0, 400), callFlowBlock(1, 400)];
+    const pruned = callFlowBlock(2, 400);
+    const filled = unitAtFullFlowChars(MAX_STATE_CHARS - 1, fitting);
+    const unit = makeUnit({ id: "filled", file: filled.file, diff: filled.diff, callFlow: [...fitting, pruned] });
+    const host = scriptedFetch({ [filled.file]: { risk: 1, bug: 0.2, category: "refactor" } });
+
+    const result = await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
+    const state = host.log[0].request.state;
+    const sent = state.callFlow ?? [];
+
+    expect(sent).toEqual(fitting);
+    expect(JSON.stringify(state)).toHaveLength(MAX_STATE_CHARS - 1);
+    // No room for the count, so the note alone carries the omission — and it does.
+    expect(sent.some((entry) => entry.includes("omitted to fit the size limit"))).toBe(false);
+    expect(state.contextNote).toMatch(/every call-flow entry not listed in this state is omitted/u);
+    expect(result.items[0].judgment).toBeDefined();
+    expect(result.items[0].routing).toBeUndefined();
+    expect(result.items[0].reasons.join(" ")).toContain(`2 of 3 entries were sent`);
+  });
+
+  test("judges with the hunk alone when no call-flow entry can fit at all", async () => {
+    // The essentials fit the cap under the short no-flow note, and only under that
+    // note: the enriched note is longer than the remaining room. With every entry
+    // too big to fit, the state must fall back to the smaller note and still be
+    // judged, so choosing that note never by itself forces a manual review.
+    const wide = unitAtEssentialChars(MAX_STATE_CHARS - 10);
+    const flow = [callFlowBlock(0, MAX_STATE_CHARS + 1_000)];
+    const unit = makeUnit({ id: "wide", file: wide.file, diff: wide.diff, callFlow: flow });
+    // The essentials are ten characters under the cap, so there is no room for any
+    // entry — nor for the enriched note that carrying one would select. Both must
+    // give way and leave a state that still fits and is still judged.
+    const small = buildJevState(
+      makeUnit({ id: "wide", file: wide.file, diff: wide.diff, callFlow: [callFlowBlock(1, 200)] }),
+    );
+    expect(small.contextNote).toBe(buildJevState(wide).contextNote);
+    expect(small.callFlow).toBeUndefined();
+    const host = scriptedFetch({ [wide.file]: { risk: 1, bug: 0.2, category: "refactor" } });
+
+    const result = await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
+
+    // One entry larger than the whole budget is dropped whole; the hunk is still
+    // judged on its diff rather than sent to a human for optional context.
+    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+    const state = host.log[0].request.state;
+    expect(state.callFlow).toBeUndefined();
+    expect(state.contextNote).toBe(buildJevState(wide).contextNote);
+    expect(state.diff).toBe(wide.diff);
+    expect(JSON.stringify(state)).toHaveLength(MAX_STATE_CHARS - 10);
+    expect(result.items[0].judgment).toBeDefined();
+    expect(result.items[0].routing).toBeUndefined();
+    expect(result.items[0].callFlow).toEqual(flow);
+    expect(result.items[0].reasons.join(" ")).toContain(`0 of ${flow.length} entries were sent`);
+  });
+
+  test("uses remaining space after skipping a block that cannot fit at all", async () => {
+    const retained = callFlowBlock(1, 120);
+    const unit = makeUnit({ id: "caller", diff: CODE_HUNK, callFlow: [callFlowBlock(0, MAX_STATE_CHARS), retained] });
+    const host = scriptedFetch({ "src/app.ts": { risk: 1, bug: 0.2, category: "refactor" } });
+    const result = await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
+    expect(host.log[0].request.state.callFlow?.[0]).toBe(retained);
+    expect(JSON.stringify(host.log[0].request.state).length).toBeLessThanOrEqual(MAX_STATE_CHARS);
+    expect(result.items[0].routing).toBeUndefined();
+    expect(result.items[0].reasons.join(" ")).toContain("1 of 2 entries were sent");
+  });
+
+  test("caps on the serialized JSON, so escaping counts, at an exact boundary", async () => {
+    const entry = callFlowBlock(0, 120);
+    const atCap = unitAtFullFlowChars(MAX_STATE_CHARS, [entry]);
+    const overCap = unitAtEssentialChars(MAX_STATE_CHARS + 1);
+    const host = installFetch(() => new Response(answerBody({ risk: 1, bug: 0.2, category: "refactor" })));
+
+    const inside = await reviewUnits([atCap], { apiKey: "k", fetch: host.fetch });
+    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+    // Exactly at the cap every entry and the richer note survive: nothing is pruned.
+    expect(JSON.stringify(host.log[0].request.state)).toHaveLength(MAX_STATE_CHARS);
+    expect(host.log[0].request.state.callFlow).toEqual([entry]);
+    expect(inside.items[0].judgment).toBeDefined();
+    expect(inside.items[0].routing).toBeUndefined();
+
+    const beyond = await reviewUnits([overCap], { apiKey: "k", fetch: host.fetch });
+    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+    expect(beyond.modelCalls).toBe(0);
+    expect(beyond.items[0].judgment).toBeUndefined();
+    // One character more than the cap is over the cap, and the item says by how much.
+    expect(beyond.items[0].routing).toEqual({
+      evaluation: "not_evaluated",
+      reasonCode: "context_limit_exceeded",
+      requiredChars: MAX_STATE_CHARS + 1,
+      limitChars: MAX_STATE_CHARS,
+    });
+
+    // Same raw diff length as the hunk that does not fit, but its tail is quotes:
+    // escaped in the JSON the model would receive, so it is over the cap by more.
+    const quotes = makeUnit({
+      id: "boundary",
+      file: "src/boundary.ts",
+      diff: overCap.diff.replaceAll("x", '"'),
+    });
+    expect(quotes.diff).toHaveLength(overCap.diff.length);
+    expect(quotes.diff.length).toBeLessThan(stateCharsOf(quotes));
+    expect(stateCharsOf(quotes)).toBeGreaterThan(MAX_STATE_CHARS);
+
+    const rejected = await reviewUnits([quotes], { apiKey: "k", fetch: host.fetch });
+    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+    expect(rejected.items[0].routing?.requiredChars).toBe(stateCharsOf(quotes));
+  });
+
+  test("measures an essential overflow as the no-flow state, not the supplied context", async () => {
+    const withoutFlow = unitAtEssentialChars(MAX_STATE_CHARS + 2_000);
+    const withFlow = makeUnit({
+      id: "boundary",
+      file: "src/boundary.ts",
+      diff: withoutFlow.diff,
+      callFlow: oversizedFlow(),
+    });
+    const host = installFetch(() => {
+      throw new Error("the model must not be called for this hunk");
+    });
+
+    const result = await reviewUnits([withFlow], { apiKey: "k", fetch: host.fetch });
+
+    expect(host.log).toHaveLength(0);
+    // Every optional entry is omitted before the state is measured, so neither the
+    // extra context nor the longer enriched note inflates the reported size.
+    expect(stateCharsOf(withFlow)).toBe(MAX_STATE_CHARS + 2_000);
+    expect(stateCharsOf(withFlow)).toBe(stateCharsOf(withoutFlow));
+    const state = buildJevState(withFlow);
+    expect(state.callFlow).toBeUndefined();
+    expect(result.items[0].routing).toEqual({
+      evaluation: "not_evaluated",
+      reasonCode: "context_limit_exceeded",
+      requiredChars: stateCharsOf(withoutFlow),
+      limitChars: MAX_STATE_CHARS,
+    });
+    expect(result.items[0].reasons.join(" ")).toMatch(/every optional call-flow entry was omitted/u);
+  });
+
+  test("sends an essential overflow to exactly one human item, with no key and no model fields", async () => {
+    const restore = withMissingApiKeyEnv();
+    try {
+      const oversized = unitAtEssentialChars(MAX_STATE_CHARS + 1);
+      const binary = makeUnit({
+        id: "binary",
+        file: "assets/logo.png",
+        diff: "Binary files differ",
+        special: "binary",
+      });
+      const host = installFetch(() => {
+        throw new Error("neither hunk may reach the model");
+      });
+
+      // No apiKey and no environment key: nothing here needs the model at all.
+      const result = await reviewUnits([binary, oversized], { fetch: host.fetch });
+
+      expect(host.log).toHaveLength(0);
+      expect(result.modelCalls).toBe(0);
+      expect(result.items).toHaveLength(2);
+      const routed = result.items.filter((item) => item.routing !== undefined);
+      expect(routed).toHaveLength(1);
+      expect(routed[0].id).toBe("boundary");
+      expect(itemById(result.items, "binary").routing).toBeUndefined();
+
+      const item = routed[0];
+      expect(item.status).toBe("uncertain");
+      // Not evaluated means no judgment at all: nothing is invented for a hunk the
+      // model never saw, and no confidence or needs-human field appears.
+      expect(Object.hasOwn(item, "judgment")).toBe(false);
+      expect(JSON.stringify(item)).not.toMatch(/"judgment"|"confidence"|"needsHuman"/u);
+      expect(item.routing).toEqual({
+        evaluation: "not_evaluated",
+        reasonCode: "context_limit_exceeded",
+        requiredChars: stateCharsOf(oversized),
+        limitChars: MAX_STATE_CHARS,
+      });
+      expect(item.routing?.requiredChars).toBe(MAX_STATE_CHARS + 1);
+      expect(item.reasons.join(" ")).toContain(String(MAX_STATE_CHARS));
+      expect(item.reasons.join(" ")).not.toMatch(/needs human|confidence/iu);
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe("uncertainty gates", () => {
   test("uncertain context cannot be auto-passed despite a low bug score", async () => {
     const host = installFetch(() => new Response(answerBody({ risk: 0, bug: 0.05, category: "refactor", needsHuman: 0.5 })));

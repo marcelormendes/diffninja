@@ -2,8 +2,10 @@
  * Go callable extraction (tree-sitter-go).
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
+  declaredParamsOf,
   collapseWs,
   locFromNode,
   namedChildren,
@@ -136,7 +138,14 @@ function collectStatements(
     const mark = `${key}:${node.startIndex}`;
     if (seen.has(mark)) return;
     seen.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node), children });
+    const step: CallStep = {
+      type: "call",
+      key,
+      ...locFromNode(file, node),
+      children,
+    };
+    step.syntax = heuristicCallSyntax(node, key);
+    steps.push(step);
   };
 
   const walk = (node: SyntaxNode): void => {
@@ -300,6 +309,7 @@ function handleFunction(
   const info: FunctionInfo = {
     key: name,
     label: `${name}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps: body ? collectStatements(file, statementsOf(body), null, null) : [],
     exported: isExported(name),
@@ -341,6 +351,7 @@ function handleMethod(
   functions.push({
     key,
     label: `${key}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps: body
       ? collectStatements(file, statementsOf(body), typeName, receiverName)

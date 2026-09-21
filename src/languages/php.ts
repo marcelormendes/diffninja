@@ -2,8 +2,10 @@
  * PHP callable extraction (tree-sitter-php).
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
+  declaredParamsOf,
   collapseWs,
   locFromNode,
   namedChildren,
@@ -101,7 +103,9 @@ function collectStatements(
     const mark = `${key}:${node.startIndex}`;
     if (seen.has(mark)) return;
     seen.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node) });
+    const step: CallStep = { type: "call", key, ...locFromNode(file, node) };
+    step.syntax = heuristicCallSyntax(node, key);
+    steps.push(step);
   };
 
   const walk = (node: SyntaxNode): void => {
@@ -382,6 +386,7 @@ function handleFunction(
   functions.push({
     key: name,
     label: `${name}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps: body ? collectStatements(file, namedChildren(body), null) : [],
     exported: true,
@@ -406,6 +411,7 @@ function handleMethod(
   const info: FunctionInfo = {
     key,
     label: `${label}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps: body ? collectStatements(file, namedChildren(body), className) : [],
     exported: !isPrivate(node),
@@ -418,6 +424,7 @@ function handleMethod(
       ...info,
       key: `new ${className}`,
       label: `${className}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     });
   }
 }

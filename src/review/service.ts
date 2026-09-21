@@ -3,7 +3,8 @@ import { runDiff } from "../run.js";
 import type { DiffNode, DiffTreeResult, Snapshot } from "../types.js";
 import { parseDiff, gitDiff } from "./input.js";
 import { reviewUnits } from "./pipeline.js";
-import { buildCallFlows, reportOrderedTextHunkFiles, treeTouchesFile, CALL_FLOW_MAX_DEPTH } from "./call-flow.js";
+import { buildCallFlows, reportOrderedTextHunkFiles, CALL_FLOW_MAX_DEPTH } from "./call-flow.js";
+import { buildCallContext } from "./call-context.js";
 import type { CallFlowNodeDetail } from "./call-flow.js";
 import { definitionReader } from "./source.js";
 import type { DefinitionDetail } from "./source.js";
@@ -30,12 +31,18 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   let callFlowAvailability: CallFlowAvailability = snapshots ? "no-changes" : "needs-git-range";
   if (snapshots && units.length) {
     try {
-      const flow = runDiff({ cwd: cwd!, from: snapshots.from, to: snapshots.to, maxDepth: CALL_FLOW_MAX_DEPTH, color: false, locs: true });
+      const flow = runDiff({
+        cwd: cwd!, from: snapshots.from, to: snapshots.to, maxDepth: CALL_FLOW_MAX_DEPTH, color: false, locs: true,
+        onIndexes(before, after) {
+          const context = buildCallContext(units, before, after);
+          for (const unit of units) unit.callFlow = context.get(unit.id);
+        },
+      });
       trees = flow.trees;
       callFlow.push(...trees.map(tree => tree.ascii));
-      for (const unit of units) unit.callFlow = trees.filter(tree => treeTouchesFile(tree.tree, unit.file)).map(tree => tree.ascii);
       warnings.push("Call flows are syntactic, not a type checker. Dynamic calls and parse failures may be absent. An empty flow is not evidence of safety.");
     } catch {
+      for (const unit of units) delete unit.callFlow;
       callFlowAvailability = "failed";
       warnings.push("Call-flow analysis failed. Review is based on the diff only. Inspect repository context manually.");
     }

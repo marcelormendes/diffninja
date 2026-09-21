@@ -2,6 +2,7 @@
  * Haskell callable extraction (tree-sitter-haskell).
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
   collapseWs,
@@ -83,7 +84,9 @@ function collectExpr(file: string, node: SyntaxNode): CallStep[] {
     const mark = `${key}:${node.startIndex}`;
     if (seen.has(mark)) return;
     seen.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node) });
+    const step: CallStep = { type: "call", key, ...locFromNode(file, node) };
+    step.syntax = heuristicCallSyntax(node, key);
+    steps.push(step);
   };
 
   const walk = (n: SyntaxNode): void => {

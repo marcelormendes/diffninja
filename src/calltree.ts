@@ -4,8 +4,15 @@ import {
   fileScopedKey,
   type FunctionIndex,
 } from "./extract.js";
+import { callContextFromSyntax, type CallResolution } from "./languages/call-syntax.js";
 import { pickLoc } from "./loc.js";
-import type { CallNode, CallStep, FunctionInfo, SourceLoc } from "./types.js";
+import type {
+  CallContext,
+  CallNode,
+  CallStep,
+  FunctionInfo,
+  SourceLoc,
+} from "./types.js";
 
 /** Normalize user-facing paths for entry matching (`\` → `/`, strip `./`). */
 export function normalizeEntryPath(entry: string): string {
@@ -121,6 +128,42 @@ function resolveCall(
   return index.get(key);
 }
 
+/** Never borrow a same-named definition's parameters for a lexical binding. */
+function callResolution(info: FunctionInfo | undefined, step?: Extract<CallStep, { type: "call" }>): CallResolution {
+  const declared = step?.syntax?.params;
+  return {
+    resolved: info !== undefined,
+    lexical: info !== undefined && step?.file === info.file && declared?.start !== undefined &&
+      declared.start === info.params?.start && declared.end === info.params?.end,
+  };
+}
+
+/**
+ * Context for one call node: the target expression and arguments as written,
+ * paired with the callee's declared parameters, plus what this expansion left
+ * unvisited.
+ */
+function callContextFor(
+  step: CallStep | undefined,
+  info: FunctionInfo | undefined,
+  resolution: CallResolution,
+  omittedChildren?: number,
+  omittedInlineChildren?: number,
+): CallContext | undefined {
+  if (step?.type !== "call" || !step.syntax) return undefined;
+  const context = callContextFromSyntax(step.syntax, info?.params, resolution);
+  // Counts are written only when something was actually left unexpanded.
+  if (omittedChildren) context.omittedChildren = omittedChildren;
+  if (omittedInlineChildren) context.omittedInlineChildren = omittedInlineChildren;
+  return context;
+}
+
+/** Attach an extracted context without an empty spread. */
+function withContext(node: CallNode, context: CallContext | undefined): CallNode {
+  if (context) node.context = context;
+  return node;
+}
+
 function displayCallLabel(
   key: string,
   index: FunctionIndex,
@@ -172,6 +215,9 @@ function expandSteps(
   });
 }
 
+/** A written call step: positional source text, plus the AST material for it. */
+type CallSiteStep = Extract<CallStep, { type: "call" }>;
+
 /** Definition location for a resolved call, or nothing when unresolved. */
 function definitionLoc(info: FunctionInfo | undefined): SourceLoc | undefined {
   if (!info || info.line == null) return undefined;
@@ -194,7 +240,7 @@ function expandCall(
   maxDepth: number,
   visiting: Set<string>,
   inlineChildren?: CallStep[],
-  callSite?: { file?: string; line?: number; endLine?: number },
+  callSite?: CallSiteStep,
   /** When set, expand this body even if another definition owns the bare key. */
   infoOverride?: FunctionInfo,
   /** Definition this call was read from, used to scope call resolution. */
@@ -214,12 +260,32 @@ function expandCall(
       ? pickLoc({ file: info.file, line: info.line })
       : pickLoc(callSite);
 
+  // Body steps a further expansion would have produced; the caller can tell a
+  // depth cut from an unresolvable callee by their presence.
+  const bodySteps = info?.steps.length;
+
   if (depth >= maxDepth) {
-    return withDefinition({ key, label, kind: "call", ...loc, children: [] }, definition);
+    return withContext(
+      withDefinition({ key, label, kind: "call", ...loc, children: [] }, definition),
+      callContextFor(
+        callSite,
+        info,
+        callResolution(info, callSite),
+        bodySteps,
+        inlineChildren?.length,
+      ),
+    );
   }
 
   if (!info && !inlineChildren?.length) {
-    return withDefinition({ key, label, kind: "call", ...loc, children: [] }, definition);
+    return withContext(
+      withDefinition({ key, label, kind: "call", ...loc, children: [] }, definition),
+      callContextFor(
+        callSite,
+        info,
+        callResolution(info, callSite),
+      ),
+    );
   }
 
   if (info && visiting.has(token)) {
@@ -227,13 +293,22 @@ function expandCall(
     const callSiteChildren = inlineChildren?.length
       ? expandSteps(inlineChildren, index, depth + 1, maxDepth, visiting, owner)
       : [];
-    return withDefinition({
-      key,
-      label: `${label} ⇄`,
-      kind: "call",
-      ...loc,
-      children: callSiteChildren,
-    }, definition);
+    return withContext(
+      withDefinition({
+        key,
+        label: `${label} ⇄`,
+        kind: "call",
+        ...loc,
+        children: callSiteChildren,
+      }, definition),
+      callContextFor(
+        callSite,
+        info,
+        callResolution(info, callSite),
+        bodySteps,
+        inlineChildren?.length,
+      ),
+    );
   }
 
   if (info) visiting.add(token);
@@ -245,13 +320,20 @@ function expandCall(
     : [];
   if (info) visiting.delete(token);
 
-  return withDefinition({
-    key,
-    label,
-    kind: "call",
-    ...loc,
-    children: [...bodyChildren, ...callSiteChildren],
-  }, definition);
+  return withContext(
+    withDefinition({
+      key,
+      label,
+      kind: "call",
+      ...loc,
+      children: [...bodyChildren, ...callSiteChildren],
+    }, definition),
+    callContextFor(
+      callSite,
+      info,
+      callResolution(info, callSite),
+    ),
+  );
 }
 
 /**
@@ -287,12 +369,43 @@ export function buildCallTreeFromInfo(
   );
 }
 
+/**
+ * Every call site written in `info`'s own body as a one-level node: the callee's
+ * definition is attached, but nothing is expanded below it. Branch nesting and
+ * inline calls (arguments, callbacks, JSX) are flattened into the same list, so
+ * a consumer that walks definitions itself sees each site exactly once and can
+ * order them by source position.
+ */
+export function buildCallSitesFromInfo(
+  info: FunctionInfo,
+  index: FunctionIndex,
+): CallNode[] {
+  const sites: CallNode[] = [];
+  const visiting = new Set([fileScopedKey(info.file, info.key)]);
+
+  const walk = (steps: CallStep[]): void => {
+    for (const step of steps) {
+      if (step.type === "branch") {
+        walk(step.children);
+        continue;
+      }
+      sites.push(
+        expandCall(step.key, index, 1, 1, visiting, undefined, step, undefined, info),
+      );
+      // Inline calls belong to the same body; emit them as sites too.
+      if (step.children?.length) walk(step.children);
+    }
+  };
+
+  walk(info.steps);
+  return sites;
+}
+
 export function resolveEntry(
   entry: string,
   index: FunctionIndex,
 ): string | null {
   if (index.has(entry)) return entry;
-
   const stripped = entry.replace(/\(\)$/, "");
   if (index.has(stripped)) return stripped;
 

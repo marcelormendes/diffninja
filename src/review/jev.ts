@@ -31,9 +31,16 @@ export const JEV_API_KEY_ENV = "TYPESAFE_API_KEY";
 /** Independent judgments averaged for each live hunk; must be a positive integer. */
 export const JUDGMENT_RUNS = 3;
 /**
- * Largest serialized state we will send. This conservative character cap is not
- * a tokenizer or a guarantee about the API's token limits. Oversized hunks go to
- * manual review without truncation.
+ * Largest serialized state we will send, measured as `JSON.stringify(state).length`
+ * so escaping counts. This conservative character cap is not a tokenizer or a
+ * guarantee about the API's token limits.
+ *
+ * The budget is spent essentials first: `file`, `hunk`, `diff`, and `contextNote`
+ * are never trimmed. Optional call-flow entries are then admitted whole, highest
+ * retention priority first, and an entry that does not fit is dropped whole rather
+ * than truncated. Optional context alone therefore never sends a hunk to manual
+ * review: only a state whose essentials cannot fit at any trim is oversized, and
+ * even that state is returned intact.
  */
 export const MAX_STATE_CHARS = 24_000;
 /**
@@ -252,28 +259,108 @@ export interface JevRequest {
 }
 
 /**
- * State for one hunk: the diff, the file, and the calldiff call flow when the
- * caller captured one. Nothing else is sent, because unrelated detail in the
+ * Note sent with call-flow entries. It describes what those entries are, what they
+ * cannot establish, and — independently of any size marker — that every entry the
+ * state does not list is omitted, so a pruned state is never presented as complete.
+ */
+const FLOW_CONTEXT_NOTE =
+  "callFlow contains selected static, syntactic call context from trees touching this file, not " +
+  "necessarily this hunk. Argument expressions and parameter declarations are source text, not " +
+  "runtime values. Mappings describe supported argument-binding syntax only; they are not data-flow " +
+  "analysis or proof of the runtime target. Candidate definitions are heuristic, and unknown " +
+  "mappings must not be inferred. Entries identify their source snapshot: after describes " +
+  "resulting code; before describes prior or removed code. Do not combine evidence across " +
+  "snapshots as one execution. Context is depth- and size-limited: unavailable extraction and " +
+  "truncated expressions are marked, and every call-flow entry not listed in this state is omitted. " +
+  "Dynamic calls, higher-order invocation, overload resolution, implicit arguments, unsupported " +
+  "syntax or languages, and parse failures may leave relevant context absent. These entries are " +
+  "not complete caller contracts. Missing context establishes neither safety nor a defect; " +
+  "needs_human concerns missing information necessary to assess this change.";
+
+/**
+ * Note sent when the state carries no call-flow entry. It says what a missing call
+ * flow cannot establish instead of implying the changed code was reached by nobody,
+ * and it stays within the cap's smallest essential state.
+ */
+const NO_FLOW_CONTEXT_NOTE =
+  "No call flow is included. Any supplied call-flow entries have been omitted. Caller arguments, parameter mappings, and caller contracts may be " +
+  "unavailable. This state does not establish complete caller coverage or runtime values. Absence " +
+  "of call-flow evidence establishes neither safety nor a defect; needs_human concerns missing " +
+  "information necessary to assess this change.";
+
+/** The fields a hunk must carry whole; no trim and no note ever costs them room. */
+interface EssentialState {
+  readonly file: string;
+  readonly hunk: string;
+  readonly diff: string;
+}
+
+/** One state candidate: an empty entry list omits `callFlow` rather than sending `[]`. */
+function stateOf(
+  essential: EssentialState,
+  entries: readonly string[],
+  contextNote: string,
+): JevState {
+  return {
+    file: essential.file,
+    hunk: essential.hunk,
+    diff: essential.diff,
+    callFlow: entries.length > 0 ? entries : undefined,
+    contextNote,
+  };
+}
+
+/** Admit whole blocks in priority order, accounting for their actual JSON escaping. */
+function fittingFlowEntries(essential: EssentialState, supplied: readonly string[]): string[] {
+  const retained: string[] = [];
+  // Serialize the complete envelope once; every admitted JSON string and comma
+  // adds exactly its serialized length, without repeatedly copying a large hunk.
+  let chars = JSON.stringify({ ...stateOf(essential, [], FLOW_CONTEXT_NOTE), callFlow: [] }).length;
+  for (const entry of supplied) {
+    const added = JSON.stringify(entry).length + (retained.length > 0 ? 1 : 0);
+    if (chars + added > MAX_STATE_CHARS) continue;
+    retained.push(entry);
+    chars += added;
+  }
+  return retained;
+}
+
+/**
+ * State for one hunk: the diff, the file, and the call-flow entries when the
+ * caller captured any. Nothing else is sent, because unrelated detail in the
  * state costs accuracy, and the changed-line counts the adapter already knows are
  * not fields any question asks about.
  *
- * The call flow is per file, not per hunk: calldiff matches a call tree to a file
- * when the file appears anywhere in that tree, so the note says so and a judgment
- * never claims hunks-exact context it was not given. Without a call flow the note
- * says that too.
+ * Selection is hunk-focused where source locations are available, not proof of
+ * complete caller coverage. Snapshot and binding provenance remain in each block.
+ *
+ * The essentials are laid out first and the optional entries are then admitted
+ * whole, in the priority order the caller supplied them, while the serialized
+ * state fits {@link MAX_STATE_CHARS}. Entries that do not fit are left out rather
+ * than truncated, and the only state this function returns above the cap is one
+ * whose essentials already exceed it, which is what routing reports as
+ * never-evaluated. When no entry fits, the state is the smaller no-flow one, so
+ * choosing the richer note can never by itself cost a hunk its model call.
  */
 export function buildJevState(unit: ReviewUnit): JevState {
-  const callFlow = unit.callFlow ?? [];
-  return {
-    file: unit.file,
-    hunk: unit.header,
-    diff: unit.diff,
-    callFlow: callFlow.length > 0 ? callFlow : undefined,
-    contextNote:
-      callFlow.length > 0
-        ? "callFlow contains syntactic call trees touching this file, not necessarily this hunk. Trees are depth-limited and may omit dynamic calls or parse failures; they are not complete caller contracts."
-        : "No call flow was supplied. Absence of call-flow evidence does not establish safety or a defect.",
-  };
+  const essential: EssentialState = { file: unit.file, hunk: unit.header, diff: unit.diff };
+  const supplied = unit.callFlow ?? [];
+  const base = stateOf(essential, [], NO_FLOW_CONTEXT_NOTE);
+  if (JSON.stringify(base).length > MAX_STATE_CHARS || supplied.length === 0) return base;
+
+  const retained = fittingFlowEntries(essential, supplied);
+  const kept = retained.length;
+  if (kept === 0) return base;
+  if (kept === supplied.length) return stateOf(essential, retained, FLOW_CONTEXT_NOTE);
+
+  // Factual notice of what the limit dropped, appended after the entries that were
+  // kept. It is left out when it does not fit: the note above states the same
+  // omission for the whole state, so the marker only adds the count.
+  const marker = `[call-flow entries omitted to fit the size limit: ${supplied.length - kept} of ${supplied.length}]`;
+  const marked = stateOf(essential, [...retained, marker], FLOW_CONTEXT_NOTE);
+  return JSON.stringify(marked).length <= MAX_STATE_CHARS
+    ? marked
+    : stateOf(essential, retained, FLOW_CONTEXT_NOTE);
 }
 
 /** The JSON data model, used to validate untrusted answer payloads field by field. */

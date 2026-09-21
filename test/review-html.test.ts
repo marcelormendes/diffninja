@@ -135,6 +135,23 @@ describe("review HTML", () => {
     }
   });
 
+  test("distinguishes a context-limit skip from a judged uncertain hunk without extra counts", () => {
+    const skipped = item({
+      id: "caller", file: "caller.ts", diff: "@@ -1 +1 @@\n-callee(arg);\n+callee(arg + 1);",
+      status: "uncertain", priority: 70, reasons: [],
+      routing: { evaluation: "not_evaluated", reasonCode: "context_limit_exceeded", requiredChars: 25000, limitChars: 24000 },
+    });
+    const judged = item({ ...skipped, id: "callee", routing: undefined,
+      judgment: { risk: 1, bug: 0.5, needsHuman: 0.8, confidence: 0.9, category: "logic" } });
+    const rendered = visible(renderReview(report([skipped, judged])));
+    const found = cards(rendered);
+    expect(found).toHaveLength(2);
+    expect(found[0].html).toContain("Not evaluated:");
+    expect(found[0].html).toContain("25000");
+    expect(found[0].html).toContain("24000");
+    expect(found[1].html).not.toContain("Not evaluated:");
+  });
+
   test("both gutters advance from the numbers in the hunk header", () => {
     const diff = [
       "@@ -10,3 +20,4 @@",

@@ -87,12 +87,28 @@ export interface Judgment {
   /** Mean of each run's lower risk/category confidence, 0..1; informational only. */
   confidence: number;
 }
+/**
+ * Why a hunk was never evaluated, with the exact size that forced it. Only an
+ * essential state (file, hunk, diff, and context note) that cannot fit the limit
+ * sets this: dropping optional call-flow context never does, and an item that
+ * carries it has no model judgment behind it.
+ */
+export interface ReviewRouting {
+  evaluation: "not_evaluated";
+  reasonCode: "context_limit_exceeded";
+  /** `JSON.stringify` length of the essential state that could not fit the limit. */
+  requiredChars: number;
+  /** The serialized-state limit those characters exceeded. */
+  limitChars: number;
+}
 export interface ReviewItem extends ReviewUnit {
   status: ReviewStatus;
   priority: number; // 0..100
   /** Fixed templates over returned values and this adapter's own rubric text; no model-authored text is quoted. */
   reasons: string[];
   judgment?: Judgment;
+  /** Present only when the model was never called because of this hunk's own size. */
+  routing?: ReviewRouting;
 }
 export interface ReviewReport {
   title: string;

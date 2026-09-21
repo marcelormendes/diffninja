@@ -51,6 +51,8 @@ export type DiffRunOptions = {
   color?: boolean;
   /** When true, append file:line suffixes in ascii. Default: false */
   locs?: boolean;
+  /** Reuse parsed snapshots for contextual analysis, even without structural changes. */
+  onIndexes?: (before: FunctionIndex, after: FunctionIndex) => void;
 };
 
 export type TreeRunOptions = {
@@ -230,6 +232,7 @@ export function runDiff(options: DiffRunOptions = {}): DiffResult {
   const before = loadIndex(cwd, from, resolvedPaths, extractionCache);
   const after = loadIndex(cwd, to, resolvedPaths, extractionCache);
   extractionCache.clear();
+  options.onIndexes?.(before, after);
 
   const fromLabel = describeSnapshot(from);
   const toLabel = describeSnapshot(to);
