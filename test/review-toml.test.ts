@@ -157,7 +157,7 @@ describe("upsertTomlTable", () => {
     );
   });
 
-  it("refuses a subtree that is split across the file", () => {
+  it("refuses to rewrite a subtree that is split across the file", () => {
     const before = [
       "[mcp_servers.diffninja]",
       'command = "stale"',
@@ -172,7 +172,6 @@ describe("upsertTomlTable", () => {
     expect(() => upsertTomlTable(before, LABEL, TARGET, VALUES)).toThrow(
       /Cannot rewrite config\.toml: mcp_servers\.diffninja is split across the file/,
     );
-    expect(() => removeTomlTable(before, LABEL, TARGET)).toThrow(/is split across the file/u);
   });
 
   it("reports malformed input instead of editing it", () => {
@@ -196,6 +195,13 @@ describe("upsertTomlTable", () => {
     const edit = upsertTomlTable("", LABEL, TARGET, values);
     expect(edit.text).toContain('"C:\\\\Program Files\\\\nodejs\\\\node.exe"');
     expect(serverOf(edit.text)).toEqual(values);
+  });
+
+  it("writes into a document holding values only smol-toml accepts", () => {
+    const before = 'ratio = nan\nlast_updated = 2026-09-21 12:00:00Z\n';
+    const edit = upsertTomlTable(before, LABEL, TARGET, VALUES);
+    expect(edit.text).toBe(`${before}\n${BLOCK}`);
+    expect(serverOf(edit.text)).toEqual(VALUES);
   });
 });
 
@@ -252,5 +258,83 @@ describe("removeTomlTable", () => {
     const before = '[mcp_servers.diffninja]\ncommand = "node"\n\n[mcp_servers.diffninja-tools]\ncommand = "tools"\n';
     const edit = removeTomlTable(before, LABEL, TARGET);
     expect(edit.text).toBe("[mcp_servers.diffninja-tools]\ncommand = \"tools\"\n");
+  });
+
+  it("removes descendants that unrelated tables sit between", () => {
+    const before = [
+      "[mcp_servers.diffninja]",
+      'command = "node"',
+      "",
+      "[mcp_servers.other]",
+      'command = "other"',
+      "",
+      "[mcp_servers.diffninja.env]",
+      'FAKE_KEY = "value"',
+      "",
+    ].join("\n");
+    const edit = removeTomlTable(before, LABEL, TARGET);
+    expect(edit.changed).toBe(true);
+    expect(edit.text).toBe('[mcp_servers.other]\ncommand = "other"\n');
+  });
+
+  it("removes dotted keys that unrelated keys sit between", () => {
+    const before = 'mcp_servers.diffninja.command = "old"\nmodel = "gpt"\nmcp_servers.diffninja.args = []\n';
+    const edit = removeTomlTable(before, LABEL, TARGET);
+    expect(edit.changed).toBe(true);
+    expect(edit.text).toBe('model = "gpt"\n');
+    const underHeader = '[mcp_servers]\ndiffninja.command = "old"\nother = "x"\ndiffninja.args = []\n';
+    expect(removeTomlTable(underHeader, LABEL, TARGET).text).toBe('[mcp_servers]\nother = "x"\n');
+  });
+
+  it("removes an inline parent table's entry and keeps its siblings", () => {
+    const before = 'mcp_servers = { diffninja = { command = "old" }, other = { command = "o" } }\n';
+    const edit = removeTomlTable(before, LABEL, TARGET);
+    expect(edit.changed).toBe(true);
+    expect(edit.text).toBe('mcp_servers = { other = { command = "o" } }\n');
+    const alone = 'mcp_servers = { diffninja = { command = "old" } }\n';
+    expect(removeTomlTable(alone, LABEL, TARGET).text).toBe("mcp_servers = {}\n");
+  });
+
+  it("removes a dotted entry of an inline parent table", () => {
+    const before = 'mcp_servers = { diffninja.command = "old", other = "o" }\n';
+    const edit = removeTomlTable(before, LABEL, TARGET);
+    expect(edit.text).toBe('mcp_servers = { other = "o" }\n');
+  });
+
+  it("removes an entry nested inside an inline parent table", () => {
+    const before = 'mcp_servers = { diffninja = { env = { A = "b" } }, keep = { command = "o" } }\n';
+    const edit = removeTomlTable(before, LABEL, [...TARGET, "env"]);
+    expect(edit.changed).toBe(true);
+    expect(edit.text).toBe('mcp_servers = { diffninja = {}, keep = { command = "o" } }\n');
+  });
+
+  it("leaves an inline table that belongs to another table alone", () => {
+    const before = '[other]\nmcp_servers = { diffninja = { command = "old" } }\n';
+    const edit = removeTomlTable(before, LABEL, TARGET);
+    expect(edit.changed).toBe(false);
+    expect(edit.text).toBe(before);
+  });
+
+  it("removes the table from a document holding values only smol-toml accepts", () => {
+    const values = [
+      "ratio = nan",
+      "high = inf",
+      "low = -inf",
+      "day = 1979-05-27",
+      "wake = 07:32:00",
+      "opened = 1979-05-27 07:32:00",
+      "shifted = 1979-05-27 00:32:00.999999-07:00",
+      "last_updated = 2026-09-21 12:00:00Z # set by the tool",
+    ];
+    const before = [...values, "", "[mcp_servers.diffninja]", 'command = "node"', ""].join("\n");
+    const edit = removeTomlTable(before, LABEL, TARGET);
+    expect(edit.changed).toBe(true);
+    expect(edit.text).toBe(`${values.join("\n")}\n`);
+    // SAFETY: the document holds exactly the values written above.
+    const parsed = parse(edit.text) as { high: number; low: number; ratio: number; last_updated: Date };
+    expect(parsed.ratio).toBeNaN();
+    expect(parsed.high).toBe(Infinity);
+    expect(parsed.low).toBe(-Infinity);
+    expect(parsed.last_updated).toBeInstanceOf(Date);
   });
 });

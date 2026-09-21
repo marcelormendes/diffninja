@@ -10,11 +10,12 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync, type Stats } from "node:fs";
+import { lstat, mkdir, open, readFile, readlink, realpath, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { npmCliPath, npmSpawnSpec } from "../languages/grammars.js";
 import { removeTomlTable, upsertTomlTable, type TomlTable } from "./toml.js";
@@ -105,8 +106,16 @@ export function npxEntry(platform: NodeJS.Platform = process.platform): McpEntry
  * that spawns without a shell cannot launch. Running npm's JS entry point with
  * Node keeps every path a literal argv value, quotes and spaces included; the
  * installed npm CLI is the fallback when Node has no npm beside it.
+ *
+ * `cliPath` maps a shim name to npm's JS entry point (`npx` →
+ * `npx-cli.js`); production searches the npm install, tests pass a stub.
  */
-export function windowsCliEntry(name: string, args: readonly string[], npmCli = npmCliPath(`${name}-cli.js`)): McpEntry {
+export function windowsCliEntry(
+  name: string,
+  args: readonly string[],
+  cliPath: (entryName: string) => string | undefined = npmCliPath,
+): McpEntry {
+  const npmCli = cliPath(`${name}-cli.js`);
   if (npmCli === undefined) {
     return { command: process.env["ComSpec"] ?? "cmd.exe", args: ["/d", "/s", "/c", name, ...args] };
   }
@@ -249,6 +258,22 @@ export interface FileEdit {
   changed: boolean;
 }
 
+interface TemporaryFile {
+  writeFile(text: string): Promise<void>;
+  chmod(mode: number): Promise<void>;
+  close(): Promise<void>;
+}
+
+/** Filesystem operations used to stage and commit an atomic update. */
+export interface UpdateFileIO {
+  open(path: string, flags: string, mode: number): Promise<TemporaryFile>;
+  stat(path: string): Promise<Stats>;
+  rename(from: string, to: string): Promise<void>;
+}
+
+const fileIO: UpdateFileIO = { open, stat, rename };
+const missingFileError = z.object({ code: z.literal("ENOENT") });
+
 interface FileState {
   mode: number;
   size: number;
@@ -256,77 +281,192 @@ interface FileState {
   ino: number;
 }
 
-async function fileState(path: string): Promise<FileState | undefined> {
+async function fileState(path: string, io: UpdateFileIO): Promise<FileState | undefined> {
   try {
-    const info = await stat(path);
+    const info = await io.stat(path);
     return { mode: info.mode & 0o777, size: info.size, mtimeMs: info.mtimeMs, ino: info.ino };
-  } catch {
+  } catch (error) {
+    if (!missingFileError.safeParse(error).success) throw error;
     return undefined;
   }
 }
 
+/** A concurrent chmod is as much a change as a concurrent write. */
 function sameFile(left: FileState | undefined, right: FileState | undefined): boolean {
   if (left === undefined || right === undefined) return left === right;
-  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
+  return left.mode === right.mode && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
+}
+
+async function sameContents(path: string, text: string | undefined): Promise<boolean> {
+  try {
+    return (await readFile(path, "utf8")) === text;
+  } catch (error) {
+    if (!missingFileError.safeParse(error).success) throw error;
+    return text === undefined;
+  }
+}
+
+/** Names one process has already proposed, so no two commits ask for the same temporary. */
+let tempAttempts = 0;
+
+/** Rounds of link chasing allowed before a chain is called too long. */
+const MAX_LINK_HOPS = 40;
+
+/**
+ * Stage `text` beside `path` under a name no other writer can hold: `wx`
+ * creates the file or fails, and a name already taken is never opened, so a
+ * file belonging to someone else is never truncated. Once the name is ours a
+ * failure mid-write is cleaned up here; a failure to create it means the name
+ * was never ours and there is nothing of ours to remove.
+ */
+async function createTemp(path: string, text: string, mode: number, io: UpdateFileIO): Promise<string> {
+  tempAttempts += 1;
+  // The pid and the counter place the name; the random tag keeps a recycled
+  // pid from inheriting one a previous process left behind.
+  const tag = randomBytes(6).toString("hex");
+  const temporary = join(dirname(path), `.${basename(path)}.diffninja-${process.pid}-${tempAttempts}-${tag}.tmp`);
+  const handle = await io.open(temporary, "wx", mode);
+  try {
+    await handle.writeFile(text);
+    await handle.chmod(mode);
+    await handle.close();
+  } catch (error) {
+    // The name is ours, so the partial file is ours to remove: left behind it
+    // would sit beside the user's config for good.
+    await handle.close().catch(() => undefined);
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return temporary;
 }
 
 /**
  * Write `text` through a temporary file beside `path` and rename it into
  * place, so a reader (or a crash) never sees a half-written config. The
  * temporary inherits the mode of the file it replaces.
+ *
+ * The file is checked immediately before the rename — contents first, then
+ * state, so the last look before the rename covers both — because a write
+ * landing between the merge and the rename would otherwise be dropped by the
+ * rename without anyone noticing. A check that fails removes the temporary and
+ * reports the file as changed; only the temporary this call staged is removed.
  */
-async function commitFile(path: string, text: string, mode: number | undefined): Promise<void> {
-  const temporary = join(dirname(path), `.${basename(path)}.diffninja-${process.pid}.tmp`);
-  const permissions = mode ?? 0o600;
+async function commitFile(
+  path: string,
+  text: string,
+  current: string | undefined,
+  expected: FileState | undefined,
+  io: UpdateFileIO,
+): Promise<boolean> {
+  const temporary = await createTemp(path, text, expected?.mode ?? 0o600, io);
+  let renamed = false;
   try {
-    await writeFile(temporary, text, { mode: permissions });
-    await chmod(temporary, permissions);
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
+    if (!(await sameContents(path, current)) || !sameFile(expected, await fileState(path, io))) return false;
+    await io.rename(temporary, path);
+    renamed = true;
+    return true;
+  } finally {
+    if (!renamed) await rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 
 /**
  * The file a write should land in: a config that is symlinked (dotfile
- * managers do this) keeps its link, so the link target is what gets replaced.
+ * managers do this) keeps its link, so the link's destination is what gets
+ * replaced.
+ *
+ * A path that exists is canonicalized with `realpath`, which is how two
+ * aliases of one file resolve together, a link reached through a symlinked
+ * directory included. A destination that does not exist yet — what a dangling
+ * link points at — has no canonical path to ask for, so the chain is followed
+ * by hand: each link is read and its destination composed against the link's
+ * own directory, and the missing name is resolved against the nearest existing
+ * ancestor, so the destination is created rather than the link swapped for a
+ * file. Only a missing entry counts as absent; a permission or loop error is
+ * reported, never read as "nothing there".
  */
 async function resolveTarget(path: string): Promise<string> {
-  try {
-    return await realpath(path);
-  } catch {
-    return path;
+  let current = resolve(path);
+  const tail: string[] = [];
+  const seen = new Set<string>();
+  let hops = 0;
+  for (;;) {
+    const info = await lstat(current).catch((error) => {
+      if (missingFileError.safeParse(error).success) return undefined;
+      throw error;
+    });
+    if (info === undefined) {
+      // Nothing here yet: keep the name and canonicalize the parent instead.
+      tail.unshift(basename(current));
+      const parent = dirname(current);
+      if (parent === current) return join(current, ...tail);
+      current = parent;
+      continue;
+    }
+    if (!info.isSymbolicLink()) {
+      const canonical = await realpath(current);
+      return tail.length === 0 ? canonical : join(canonical, ...tail);
+    }
+    if (hops >= MAX_LINK_HOPS) throw new Error(`Cannot update ${path}: too many levels of symbolic links.`);
+    if (seen.has(current)) throw new Error(`Cannot update ${path}: its symlinks form a cycle.`);
+    seen.add(current);
+    hops += 1;
+    current = resolve(dirname(current), await readlink(current));
   }
 }
 
 /**
- * Read `path`, apply `merge` to its contents, and commit the result. Another
- * writer between the read and the commit is detected by re-reading the file
- * and re-running `merge` against the new contents; after `attempts` the write
- * is abandoned with the file untouched.
+ * Updates in flight in this process, one chain per resolved file. Two of them
+ * would otherwise both merge the contents they read, and the later rename
+ * would drop the earlier edit with both writers reporting success.
+ */
+const inFlight = new Map<string, Promise<void>>();
+
+async function withFileLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = inFlight.get(key) ?? Promise.resolve();
+  const result = previous.then(run);
+  const chain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  inFlight.set(key, chain);
+  try {
+    return await result;
+  } finally {
+    if (inFlight.get(key) === chain) inFlight.delete(key);
+  }
+}
+
+/**
+ * Read `path`, apply `merge` to its contents, and commit the result. Updates
+ * in this process are serialized per file, so two of them cannot drop each
+ * other's edits. A writer in another process is caught by re-reading the
+ * contents and state immediately before the rename, which re-runs `merge`
+ * against what that writer left behind; after `attempts` the write is
+ * abandoned with the file untouched. That re-read narrows the window between
+ * the read and the rename but cannot close it: only another in-process update
+ * is excluded by construction.
  */
 export async function updateFile(
   path: string,
   merge: (current: string | undefined) => FileEdit,
   attempts = 3,
+  io: UpdateFileIO = fileIO,
 ): Promise<FileEdit & { path: string }> {
   const target = await resolveTarget(path);
-  for (let attempt = 1; ; attempt++) {
-    const before = await fileState(target);
-    const current = before === undefined ? undefined : await readFile(target, "utf8");
-    const edit = merge(current);
-    if (!edit.changed) return { ...edit, path };
-    if (!sameFile(before, await fileState(target))) {
+  return withFileLock(target, async () => {
+    for (let attempt = 1; ; attempt++) {
+      const before = await fileState(target, io);
+      const current = before === undefined ? undefined : await readFile(target, "utf8");
+      const edit = merge(current);
+      if (!edit.changed) return { ...edit, path };
+      await mkdir(dirname(target), { recursive: true });
+      if (await commitFile(target, edit.text, current, before, io)) return { ...edit, path };
       if (attempt >= attempts) {
         throw new Error(`Cannot update ${path}: it changed while diffninja was writing. Re-run the command.`);
       }
-      continue;
     }
-    await mkdir(dirname(target), { recursive: true });
-    await commitFile(target, edit.text, before?.mode);
-    return { ...edit, path };
-  }
+  });
 }
 
 /** Apply an edit, or preview it under `--dry-run`, where nothing is written. */

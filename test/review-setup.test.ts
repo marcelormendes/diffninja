@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { parse } from "smol-toml";
 import { describe, expect, it } from "vitest";
 import {
   CLI_NAMES,
@@ -58,7 +59,7 @@ function fakeNpm(home: string, installed = true): FakeNpm {
 }
 
 function options(home: string, extra: Partial<SetupOptions> = {}): SetupOptions {
-  return { homeDir: home, pathDirs: [], quiet: true, ...extra };
+  return { homeDir: home, pathDirs: [], quiet: true, ...extra, env: { HOME: home, CODEX_HOME: "", ...extra.env } };
 }
 
 describe("entries", () => {
@@ -79,13 +80,13 @@ describe("entries", () => {
 
   it("prefers npm's JS entry point on Windows, keeping paths as single arguments", () => {
     const cli = join("C:\\Program Files\\nodejs", "node_modules", "npm", "bin", "npx-cli.js");
-    const entry = windowsCliEntry("npx", ["-y", "-p", "diffninja", "diffninja-mcp"], cli);
+    const entry = windowsCliEntry("npx", ["-y", "-p", "diffninja", "diffninja-mcp"], () => cli);
     expect(entry).toEqual({ command: process.execPath, args: [cli, "-y", "-p", "diffninja", "diffninja-mcp"] });
   });
 
   it("falls back to the shim through cmd.exe when npm has no JS entry", () => {
     const args = ["-y", "-p", "diffninja", "diffninja-mcp"];
-    const entry = windowsCliEntry("npx", args, undefined);
+    const entry = windowsCliEntry("npx", args, () => undefined);
     expect(entry.args).toEqual(["/d", "/s", "/c", "npx", ...args]);
     expect(entry.command).toBe(process.env["ComSpec"] ?? "cmd.exe");
   });
@@ -97,8 +98,11 @@ describe("entries", () => {
       mkdirSync(bin, { recursive: true });
       const cli = join(bin, "npx-cli.js");
       writeFileSync(cli, "console.log(JSON.stringify(process.argv.slice(2)))\n");
-      const entry = windowsCliEntry("npx", ["-y", "-p", "diffninja", "diffninja-mcp"], cli);
-      const received: unknown = JSON.parse(execFileSync(entry.command, entry.args, { encoding: "utf8" }));
+      const entry = windowsCliEntry("npx", ["-y", "-p", "diffninja", "diffninja-mcp"], () => cli);
+      const received: unknown = JSON.parse(execFileSync(entry.command, entry.args, {
+        encoding: "utf8",
+        env: { HOME: home, CODEX_HOME: "" },
+      }));
       expect(received).toEqual(["-y", "-p", "diffninja", "diffninja-mcp"]);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -130,7 +134,7 @@ describe("createNpm", () => {
       writeFileSync(join(bin, "npm"), `#!/bin/sh\nif [ "$1" = "root" ]; then printf '%s\\n' '${root}'; fi\n`, {
         mode: 0o755,
       });
-      const npm = createNpm({ env: { ...process.env, PATH: `${bin}${delimiter}${process.env["PATH"] ?? ""}` } });
+      const npm = createNpm({ env: { HOME: home, CODEX_HOME: "", PATH: `${bin}${delimiter}/usr/bin${delimiter}/bin` } });
       expect(await npm.rootG()).toBe(root);
       expect(await npm.installG()).toBe(true);
     } finally {
@@ -253,13 +257,42 @@ describe("runSetup", () => {
     }
   });
 
+  it.each([
+    {
+      name: "inline parent",
+      text: 'mcp_servers = { diffninja = { command = "old" }, other = { command = "keep" } }\n',
+    },
+    {
+      name: "separated descendant",
+      text: '[mcp_servers.diffninja]\ncommand = "old"\n[mcp_servers.other]\ncommand = "keep"\n[mcp_servers.diffninja.env]\nTOKEN = "old"\n',
+    },
+    {
+      name: "interleaved dotted keys",
+      text: '[mcp_servers]\ndiffninja.command = "old"\nother.command = "keep"\ndiffninja.env.TOKEN = "old"\n',
+    },
+  ])("fully uninstalls Codex registration with $name", async ({ text }) => {
+    const home = fakeHome();
+    try {
+      const config = join(home, ".codex", "config.toml");
+      mkdirSync(dirname(config), { recursive: true });
+      writeFileSync(config, text);
+      const report = await runSetup(options(home, { clis: ["codex"], uninstall: true }));
+      expect(report.clis[0]!.action).toBe("removed");
+      expect(parse(readFileSync(config, "utf8"))).toEqual({ mcp_servers: { other: { command: "keep" } } });
+      const again = await runSetup(options(home, { clis: ["codex"], uninstall: true }));
+      expect(again.clis[0]!.action).toBe("already-configured");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("detects, installs, and removes through CODEX_HOME", async () => {
     const home = fakeHome();
     try {
       const codexHome = join(home, "codex home");
       mkdirSync(codexHome, { recursive: true });
       writeFileSync(join(codexHome, "config.toml"), 'model = "gpt"\n');
-      const env = { ...process.env, CODEX_HOME: codexHome };
+      const env = { HOME: home, CODEX_HOME: codexHome };
       const npm = fakeNpm(home);
 
       const report = await runSetup(options(home, { clis: ["codex"], env }), { npm });
