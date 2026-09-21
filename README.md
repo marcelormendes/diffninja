@@ -21,15 +21,26 @@ background. It never writes review text. You stay the reviewer.
 
 ## Install
 
+Try it without installing anything:
+
+```bash
+npx -y diffninja https://github.com/OWNER/REPO/pull/123
+```
+
+Or install it globally:
+
 ```bash
 npm install -g diffninja
 ```
 
+Both `diffninja` (CLI) and `diffninja-mcp` (MCP server) ship in the package.
+`npx` fetches the latest published version on first run; if a cached copy
+feels stale, pin it explicitly (`npx -y diffninja@latest ...`).
+
 `0.1.0` is packaged and heading to the registry; until it lands, build from
 the checkout (`npm install && npm run build`) and use
 `node /absolute/path/to/diffninja/dist/review/cli.js` wherever the examples
-below say `diffninja`. Both `diffninja` (CLI) and `diffninja-mcp` (MCP server)
-ship in the package.
+below say `diffninja`.
 
 ## Review a pull request
 

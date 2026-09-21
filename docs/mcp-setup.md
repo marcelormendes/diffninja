@@ -14,6 +14,15 @@ from a checkout `/absolute/path/to/diffninja/dist/review/mcp-cli.js`:
 node /absolute/path/to/diffninja/dist/review/mcp-cli.js
 ```
 
+No install needed, the published package runs as an MCP command too:
+
+```json
+{ "command": "npx", "args": ["-y", "-p", "diffninja", "diffninja-mcp"] }
+```
+
+(`-p diffninja` selects the package; `diffninja-mcp` is the binary name. Pin
+a version with `-p diffninja@0.1.0` when you want a fixed release.)
+
 ## `review_diff` arguments
 
 | Argument | Type | Meaning |
