@@ -64,6 +64,27 @@ function ensureCachePackageJson(cacheDir: string): void {
 }
 
 /**
+ * Absolute path to one of npm's JS entry points (`npm-cli.js`, `npx-cli.js`),
+ * or undefined when npm is not installed beside Node.
+ */
+export function npmCliPath(
+  cli: string,
+  directories: readonly string[] = [
+    ...(process.env.PATH ?? "").split(";"),
+    dirname(process.execPath),
+  ],
+): string | undefined {
+  for (const raw of directories) {
+    const directory = raw.trim().replace(/^"|"$/g, "");
+    // Never resolve executables from the repository being reviewed.
+    if (!isAbsolute(directory)) continue;
+    const path = join(directory, "node_modules", "npm", "bin", cli);
+    if (existsSync(path)) return path;
+  }
+  return undefined;
+}
+
+/**
  * On Windows, npm.cmd is a shell script, not an executable. Run npm's JS entry
  * with Node instead: cache paths (including spaces and percent signs) remain
  * literal argv values rather than being interpreted by cmd.exe.
@@ -73,20 +94,13 @@ export function npmSpawnSpec(
   platform: NodeJS.Platform = process.platform,
 ) {
   if (platform !== "win32") return { file: "npm", args };
-  const directories = [
-    ...(process.env.PATH ?? "").split(";"),
-    dirname(process.execPath),
-  ];
-  for (const raw of directories) {
-    const directory = raw.trim().replace(/^"|"$/g, "");
-    // Never resolve executables from the repository being reviewed.
-    if (!isAbsolute(directory)) continue;
-    const cli = join(directory, "node_modules", "npm", "bin", "npm-cli.js");
-    if (existsSync(cli)) return { file: process.execPath, args: [cli, ...args] };
+  const cli = npmCliPath("npm-cli.js");
+  if (cli === undefined) {
+    throw new Error(
+      "Cannot locate npm's npm-cli.js. Install Node.js with npm and add its directory to PATH.",
+    );
   }
-  throw new Error(
-    "Cannot locate npm's npm-cli.js. Install Node.js with npm and add its directory to PATH.",
-  );
+  return { file: process.execPath, args: [cli, ...args] };
 }
 
 /**

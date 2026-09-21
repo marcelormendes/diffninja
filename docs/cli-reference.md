@@ -183,12 +183,15 @@ diffninja setup --uninstall [--cli codex]
 ```
 
 Supported CLIs: Claude Code (`~/.claude.json`), Codex
-(`~/.codex/config.toml`), OMP (`~/.omp/agent/mcp.json`), pi
-(`~/.pi/agent/mcp.json`, needs `pi-mcp-extension`). The setup installs the
+(`~/.codex/config.toml`, or `$CODEX_HOME/config.toml` when `CODEX_HOME` is
+set), OMP (`~/.omp/agent/mcp.json`), pi (`~/.pi/agent/mcp.json`, needs
+`pi-mcp-extension`). The setup installs the
 package globally first so each entry points at a permanent `node` plus
 `mcp-cli.js`; without a working global install it falls back to `npx`
-entries. `--dry-run` previews, `--no-install` skips the global install,
-`--uninstall` removes the entries. The API key is referenced from the
+entries (on Windows, npm's JS entry point run by `node`, since a client that
+spawns without a shell cannot launch `npx.cmd`). `--dry-run` previews and
+changes nothing, not even the global install; `--no-install` skips the global
+install; `--uninstall` removes the entries. The API key is referenced from the
 launching environment, never stored in the files.
 
 ## Install-time notes

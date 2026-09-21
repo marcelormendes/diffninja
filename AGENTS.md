@@ -34,6 +34,9 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - `input.ts` (diff parsing + git range), `jev.ts` (TypeSafe client + mock),
     `pipeline.ts` (deterministic checks, routing, weighted ranking),
     `html.ts` (report), `types.ts` (`ReviewReport` and friends).
+  - `setup.ts` — `runSetup()` for `diffninja setup`: CLI detection, config
+    writes (atomic, conflict-aware), and `updateFile()`. `toml.ts` — parses
+    and edits one TOML table in place by key path, for Codex's config.
   - `cli.ts` — argument parsing, connected auto-open, static HTML/JSON output.
     `pr-input.ts` — shared PR-link detection and canonicalization.
     `github.ts` / `connected.ts` — snapshot-bound review and loopback transport.
@@ -79,6 +82,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   `reviewDiff` path). `review-mcp.test.ts` covers the MCP tool through
   `createReviewServer()`: input validation, the structured report, its JSON
   text twin, and error cases — assert the outward result, not internal wiring.
+  `review-setup.test.ts` covers `runSetup()` (detection, dry-run, entry
+  resolution, atomic writes) and `review-toml.test.ts` the TOML table editor.
 - Verify changes by running the built artifacts (`node dist/review/cli.js …`,
   `node dist/review/mcp-cli.js` driven over stdio) or the targeted vitest file,
   not by re-reading the diff.

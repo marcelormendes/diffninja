@@ -33,8 +33,10 @@ Detects Claude Code, Codex, OMP, and pi on your machine and registers the MCP
 server in each one's user config. It installs the package globally first
 (`npm install -g diffninja`) so the registration points at a permanent
 binary; if that install fails it registers an `npx`-based entry instead and
-tells you. Flags: `--cli claude,codex` to pick CLIs, `--dry-run` to preview,
-`--uninstall` to remove, `--no-install` to skip the global install. The
+tells you. Flags: `--cli claude,codex` to pick CLIs, `--dry-run` to preview
+(no install, no writes), `--uninstall` to remove, `--no-install` to skip the
+global install. Codex is written to `~/.codex/config.toml`, or to
+`$CODEX_HOME/config.toml` when that variable is set. The
 TypeSafe API key is never written into config files; each entry references it
 from the environment that launches the CLI, so export `TYPESAFE_API_KEY` in
 your shell for live reviews.
@@ -143,7 +145,8 @@ starts Claude Code.
 
 ### Codex
 
-`~/.codex/config.toml` (or `.codex/config.toml` in a trusted project):
+`~/.codex/config.toml`, or `$CODEX_HOME/config.toml` when `CODEX_HOME` is set
+(a project-local `.codex/config.toml` in a trusted project also works):
 
 ```toml
 [mcp_servers.diffninja]
