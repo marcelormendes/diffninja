@@ -89,11 +89,16 @@ pi) and the tool's arguments: [docs/mcp-setup.md](docs/mcp-setup.md).
 
 1. **Deterministic checks first.** No-op hunks and blank-only changes are
    settled in code, with no model call.
-2. **One Jev judgment per hunk.** Four typed questions (impact scope, bug
-   likelihood, change category, missing context). Answers are numbers and
+2. **Three Jev runs per hunk.** Each asks four typed questions (impact scope, bug
+   likelihood, change category, missing context). Category options are shuffled
+   independently on every request; ordinal impact levels keep their order.
+   Probability vectors are averaged by option name. Answers are numbers and
    categories only — no generated prose.
-3. **Ranked in code.** The answers combine into a 0–100 priority. Low
-   confidence fails closed to `uncertain`; it never degrades into a pass.
+3. **Ranked in code.** The averaged answers combine into a 0–100 priority.
+   A category or impact-level top probability below 0.6, or run-to-average
+   total-variation distance at or above 0.35, routes to `uncertain`, alongside
+   the bug-probability and missing-context gates. Vendor confidence is
+   informational only. Failed or malformed runs fail closed for the whole hunk.
 
 ## Good to know
 

@@ -84,7 +84,7 @@ export interface Judgment {
   needsHuman: number; // 0..1, validated end to end
   /** One of `REVIEW_CATEGORIES`; the closed set is checked before the answer is believed. */
   category: string;
-  /** Lower of the risk and category answer confidences, 0..1. */
+  /** Mean of each run's lower risk/category confidence, 0..1; informational only. */
   confidence: number;
 }
 export interface ReviewItem extends ReviewUnit {

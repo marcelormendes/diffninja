@@ -1,8 +1,8 @@
 /**
  * Jev (TypeSafe "System One") adapter for hunk review.
  *
- * One judgment per nontrivial hunk at the documented evaluation endpoint
- * (https://api.typesafe.ai/v1/systemone) carrying four atomic questions:
+ * Repeated judgments per nontrivial hunk at the documented evaluation endpoint
+ * (https://api.typesafe.ai/v1/systemone), each carrying four atomic questions:
  * an impact-risk score, a likely-bug noul, a category choice, and an
  * insufficient-context noul. Every one of the four is consumed by routing, so
  * none of them is speculative. Answers are validated (declared type, 0..1
@@ -19,6 +19,7 @@
  * the boundary, so no generated text can reach a review reason.
  */
 
+import { randomInt } from "node:crypto";
 import type { Judgment, ReviewOptions, ReviewUnit } from "./types.js";
 
 /** Documented evaluation endpoint. */
@@ -27,6 +28,8 @@ export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const JEV_MODEL = "jev-1.13.0";
 /** Environment variable the TypeSafe SDKs read; used when `options.apiKey` is empty. */
 export const JEV_API_KEY_ENV = "TYPESAFE_API_KEY";
+/** Independent judgments averaged for each live hunk; must be a positive integer. */
+export const JUDGMENT_RUNS = 3;
 /**
  * Largest serialized state we will send. This conservative character cap is not
  * a tokenizer or a guarantee about the API's token limits. Oversized hunks go to
@@ -216,6 +219,22 @@ export const JEV_QUESTIONS: JevQuestions = {
     },
   },
 };
+
+/** Fisher-Yates over unordered categories only; ordinal risk levels stay untouched. */
+function shuffledQuestions(randomIntImpl: (max: number) => number): JevQuestions {
+  const categories = [...REVIEW_CATEGORIES];
+  for (let index = categories.length - 1; index > 0; index -= 1) {
+    const swap = randomIntImpl(index + 1);
+    [categories[index], categories[swap]] = [categories[swap], categories[index]];
+  }
+  return {
+    ...JEV_QUESTIONS,
+    category: {
+      ...JEV_QUESTIONS.category,
+      criteria: Object.fromEntries(categories.map((category) => [category, CATEGORY_RUBRIC[category]])),
+    },
+  };
+}
 
 /** One unit of work sent to the model. */
 export interface JevState {
@@ -576,31 +595,78 @@ export function parseAnswers(text: string): JevAnswers {
 /** A validated judgment plus the distribution evidence routing needs. */
 export interface JevAssessment {
   readonly judgment: Judgment;
-  /** Highest probability the model gave any single risk level; low means a split vote. */
+  /** Highest averaged probability of any single risk level; low means a split vote. */
   readonly riskTopProbability: number;
-  /** Highest probability the model gave any single category; low means none stands out. */
+  /** Highest averaged probability of any single category; low means none stands out. */
   readonly categoryTopProbability: number;
+  readonly riskProbabilities: Readonly<Record<string, number>>;
+  readonly categoryProbabilities: Readonly<Record<string, number>>;
+  /** Maximum total variation from a run to its mean, across category and risk. */
+  readonly divergence: number;
 }
 
-/** Combine validated answers into the shared Judgment shape. */
-export function toAssessment(answers: JevAnswers): JevAssessment {
+/** Average by option name, treating omitted zero-probability options as zero. */
+function averageProbabilities(
+  distributions: readonly Readonly<Record<string, number>>[],
+  keys: readonly string[],
+): Readonly<Record<string, number>> {
+  return Object.fromEntries(keys.map((key) => [
+    key,
+    distributions.reduce((sum, probabilities) => sum + (probabilities[key] ?? 0), 0) / distributions.length,
+  ]));
+}
+
+function maxDivergence(
+  distributions: readonly Readonly<Record<string, number>>[],
+  average: Readonly<Record<string, number>>,
+): number {
+  let maximum = 0;
+  for (const probabilities of distributions) {
+    let distance = 0;
+    for (const [key, probability] of Object.entries(average)) {
+      distance += Math.abs((probabilities[key] ?? 0) - probability);
+    }
+    maximum = Math.max(maximum, distance / 2);
+  }
+  return maximum;
+}
+
+/** Combine validated runs into one judgment; ties use the canonical category order. */
+export function toAssessment(answers: readonly JevAnswers[]): JevAssessment {
+  if (answers.length === 0) throw new RangeError("At least one judgment run is required");
+  const riskDistributions = answers.map((answer) => answer.impactRisk.probabilities);
+  const categoryDistributions = answers.map((answer) => answer.category.probabilities);
+  const riskProbabilities = averageProbabilities(riskDistributions, RISK_LEVEL_KEYS);
+  const categoryProbabilities = averageProbabilities(categoryDistributions, REVIEW_CATEGORIES);
+  let category: ReviewCategory = REVIEW_CATEGORIES[0];
+  for (const option of REVIEW_CATEGORIES) {
+    if (categoryProbabilities[option] > categoryProbabilities[category]) category = option;
+  }
+  const mean = (value: (answer: JevAnswers) => number): number =>
+    answers.reduce((sum, answer) => sum + value(answer), 0) / answers.length;
   return {
     judgment: {
-      risk: answers.impactRisk.score,
-      bug: answers.likelyBug.noul,
-      needsHuman: answers.needsHuman.noul,
-      category: answers.category.choice,
-      // Both distributions have to look settled before the answer is trusted.
-      confidence: Math.min(answers.impactRisk.confidence, answers.category.confidence),
+      risk: mean((answer) => answer.impactRisk.score),
+      bug: mean((answer) => answer.likelyBug.noul),
+      needsHuman: mean((answer) => answer.needsHuman.noul),
+      category,
+      // Vendor confidence is informational only, never a routing gate.
+      confidence: mean((answer) => Math.min(answer.impactRisk.confidence, answer.category.confidence)),
     },
-    riskTopProbability: Math.max(...Object.values(answers.impactRisk.probabilities)),
-    categoryTopProbability: Math.max(...Object.values(answers.category.probabilities)),
+    riskTopProbability: Math.max(...Object.values(riskProbabilities)),
+    categoryTopProbability: categoryProbabilities[category],
+    riskProbabilities,
+    categoryProbabilities,
+    divergence: Math.max(
+      maxDivergence(riskDistributions, riskProbabilities),
+      maxDivergence(categoryDistributions, categoryProbabilities),
+    ),
   };
 }
 
-/** Result of one HTTP attempt: a validated judgment, or a transient failure. */
+/** Result of one HTTP attempt: validated answers, or a transient failure. */
 type AttemptOutcome =
-  | { readonly kind: "answer"; readonly assessment: JevAssessment }
+  | { readonly kind: "answer"; readonly answers: JevAnswers }
   | { readonly kind: "transient"; readonly error: JevRequestError; readonly retryAfterMs: number | null };
 
 /**
@@ -612,6 +678,7 @@ export class JevClient {
   private readonly apiKey: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly waitImpl: (ms: number) => Promise<void>;
+  private readonly randomIntImpl: (max: number) => number;
   private attempts = 0;
 
   /** Total HTTP requests attempted by this run's client, including failed retries. */
@@ -623,30 +690,39 @@ export class JevClient {
     apiKey: string,
     fetchImpl: typeof globalThis.fetch,
     waitImpl: (ms: number) => Promise<void> = defaultWait,
+    randomIntImpl: (max: number) => number = randomInt,
   ) {
     this.apiKey = apiKey;
     this.fetchImpl = fetchImpl;
     this.waitImpl = waitImpl;
+    this.randomIntImpl = randomIntImpl;
   }
 
   /**
-   * Ask the four questions about one hunk state. Retries the documented transient
-   * failures with backoff, then throws once the attempts are used up; a definitive
-   * failure (bad key, rejected body) or an unusable answer throws immediately.
-   * Either way the hunk fails closed; every HTTP attempt contributes to requestCount.
+   * Average independent runs sequentially, keeping the caller's concurrency cap.
+   * Each run retries transient failures within one shared judgment deadline.
+   * Any definitive failure or unusable answer discards the whole judgment;
+   * every HTTP attempt contributes to requestCount.
    */
   async judge(state: JevState): Promise<JevAssessment> {
     if (this.apiKey.trim() === "") {
       throw missingApiKeyError(1);
     }
-    const request: JevRequest = { state, model: JEV_MODEL, questions: JEV_QUESTIONS };
-    const body = JSON.stringify(request);
     const deadline = Date.now() + JEV_RETRY.totalTimeoutMs;
+    const answers: JevAnswers[] = [];
+    for (let run = 0; run < JUDGMENT_RUNS; run += 1) {
+      answers.push(await this.judgeRun(state, deadline));
+    }
+    return toAssessment(answers);
+  }
+
+  private async judgeRun(state: JevState, deadline: number): Promise<JevAnswers> {
     for (let attempt = 1; ; attempt += 1) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new JevRequestError("The judgment deadline expired. Response body withheld.");
-      const outcome = await this.attempt(body, Math.min(JEV_TIMEOUT_MS, remaining));
-      if (outcome.kind === "answer") return outcome.assessment;
+      const request: JevRequest = { state, model: JEV_MODEL, questions: shuffledQuestions(this.randomIntImpl) };
+      const outcome = await this.attempt(JSON.stringify(request), Math.min(JEV_TIMEOUT_MS, remaining));
+      if (outcome.kind === "answer") return outcome.answers;
       if (attempt >= JEV_RETRY.maxAttempts) {
         throw new JevRequestError(
           `${outcome.error.message} Giving up after ${attempt} attempts.`,
@@ -706,7 +782,7 @@ export class JevClient {
         retryAfterMs: null,
       };
     }
-    return { kind: "answer", assessment: toAssessment(parseAnswers(responseBody)) };
+    return { kind: "answer", answers: parseAnswers(responseBody) };
   }
 }
 
@@ -785,5 +861,5 @@ export function mockAssessment(unit: ReviewUnit): JevAssessment {
       needs_human: { type: "noul", noul: 0.25 },
     },
   };
-  return toAssessment(parseAnswers(JSON.stringify(payload)));
+  return toAssessment([parseAnswers(JSON.stringify(payload))]);
 }

@@ -1,22 +1,28 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  CATEGORY_RUBRIC,
   JEV_API_KEY_ENV,
   JEV_ENDPOINT,
   JEV_MODEL,
   JEV_RETRY,
+  JUDGMENT_RUNS,
   JevClient,
   JevRequestError,
   MAX_STATE_CHARS,
   REVIEW_CATEGORIES,
+  RISK_LEVELS,
   buildJevState,
   type JevObject,
   type JevRequest,
   type ReviewCategory,
 } from "../src/review/jev.js";
 import {
+  DIVERGENCE_THRESHOLD,
   MAX_CONCURRENT_REQUESTS,
   MOCK_MODE_WARNING,
   reviewUnits,
+  TOP_CATEGORY_PROBABILITY_FLOOR,
+  TOP_LEVEL_PROBABILITY_FLOOR,
 } from "../src/review/pipeline.js";
 import type { ReviewItem, ReviewUnit } from "../src/review/types.js";
 
@@ -59,12 +65,10 @@ interface AnswerSpec {
   readonly confidence?: number;
   /** Weight on the most likely risk level; below 0.6 the vote reads as split. */
   readonly topLevelProbability?: number;
-  /**
-   * Weight on the most likely category. Defaults to `confidence`, but a case
-   * that isolates the confidence gate needs a settled category vote and a low
-   * confidence at the same time.
-   */
+  /** Weight on the most likely category, independent of vendor confidence. */
   readonly categoryProbability?: number;
+  readonly riskProbabilities?: Readonly<Record<string, number>>;
+  readonly categoryProbabilities?: Readonly<Record<string, number>>;
 }
 
 /** Weighted-style distribution: the chosen level holds `top`, the rest share the remainder. */
@@ -80,7 +84,7 @@ function distribution(chosen: string, keys: readonly string[], top: number): Rec
  */
 function answersOf(spec: AnswerSpec): JevObject {
   const confidence = spec.confidence ?? 0.9;
-  const riskProbabilities = distribution(
+  const riskProbabilities = spec.riskProbabilities ?? distribution(
     String(Math.round(spec.risk)),
     RISK_LEVEL_KEYS,
     spec.topLevelProbability ?? 0.7,
@@ -100,7 +104,7 @@ function answersOf(spec: AnswerSpec): JevObject {
     category: {
       type: "choice",
       choice: spec.category,
-      probabilities: distribution(spec.category, REVIEW_CATEGORIES, spec.categoryProbability ?? confidence),
+      probabilities: spec.categoryProbabilities ?? distribution(spec.category, REVIEW_CATEGORIES, spec.categoryProbability ?? 0.9),
       confidence,
     },
     needs_human: { type: "noul", noul: spec.needsHuman ?? 0.2 },
@@ -199,13 +203,13 @@ describe("reviewUnits ranking and requests", () => {
 
     const result = await reviewUnits(units, { apiKey: "test-key", fetch: host.fetch });
 
-    expect(result.modelCalls).toBe(3);
+    expect(result.modelCalls).toBe(units.length * JUDGMENT_RUNS);
     expect(result.items.map((item) => item.id)).toEqual(["high", "mid", "clean"]);
     expect(result.items.map((item) => item.status)).toEqual(["attention", "low", "low"]);
     // Scores 2.4 / 1.2 / 0.6 x 50 + bug x 30 + needs-human x 20 + the category boost.
     expect(result.items.map((item) => item.priority)).toEqual([79, 30, 15]);
 
-    expect(host.log).toHaveLength(3);
+    expect(host.log).toHaveLength(units.length * JUDGMENT_RUNS);
     expect(host.log[0].url).toBe(JEV_ENDPOINT);
     expect(host.log[0].method).toBe("POST");
     expect(host.log[0].authorization).toBe("Bearer test-key");
@@ -266,7 +270,184 @@ describe("reviewUnits ranking and requests", () => {
     expect(judged.judgment?.category).toBe("refactor");
     expect(judged.reasons.join("\n")).toMatch(/routed to low/);
     expect(units).toEqual(snapshot);
-    expect(host.log).toHaveLength(1);
+    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+  });
+});
+
+describe("multi-run judgments", () => {
+  /** Return named probabilities in request order, as a choice API may do. */
+  function runFetch(runs: readonly AnswerSpec[]): FetchHost {
+    let next = 0;
+    return installFetch((request) => {
+      const spec = runs[next];
+      next += 1;
+      if (spec === undefined) throw new Error("no scripted judgment run");
+      const probabilities = spec.categoryProbabilities ??
+        distribution(spec.category, REVIEW_CATEGORIES, spec.categoryProbability ?? 0.9);
+      const ordered = Object.fromEntries(
+        Object.keys(request.questions.category.criteria)
+          .filter((option) => Object.hasOwn(probabilities, option))
+          .map((option) => [option, probabilities[option]]),
+      );
+      return new Response(answerBody({ ...spec, categoryProbabilities: ordered }));
+    });
+  }
+
+  test("shuffles all ten options afresh on every attempt without changing ordinal risk levels", async () => {
+    const categories = [...REVIEW_CATEGORIES];
+    const levels = [...RISK_LEVELS];
+    const host = installFetch(() => host.log.length === 1
+      ? new Response("", { status: 429, headers: { "retry-after": "0" } })
+      : new Response(answerBody({ risk: 1, bug: 0.1, category: "refactor" })));
+    // Distinct entropy per attempt makes freshness deterministic, including retries.
+    const client = new JevClient("k", host.fetch, undefined, (max) => host.log.length % max);
+    const state = buildJevState(makeUnit({ id: "caller", diff: CODE_HUNK }));
+    for (let index = 0; index < 12; index += 1) await client.judge(state);
+
+    expect(host.log).toHaveLength(12 * JUDGMENT_RUNS + 1);
+    const orders = host.log.map(({ request }) => Object.keys(request.questions.category.criteria));
+    for (const { request } of host.log) {
+      expect(Object.keys(request).sort()).toEqual(["model", "questions", "state"]);
+      expect(Object.keys(request.questions.category.criteria).sort()).toEqual([...categories].sort());
+      expect(request.questions.category.criteria).toEqual(CATEGORY_RUBRIC);
+      expect(request.questions.impact_risk.criteria).toEqual(levels);
+    }
+    expect(new Set(orders.slice(0, JUDGMENT_RUNS + 1).map((order) => order.join(","))).size)
+      .toBe(JUDGMENT_RUNS + 1);
+    expect(new Set(orders.map((order) => order.join(","))).size).toBeGreaterThan(10);
+    expect(REVIEW_CATEGORIES).toEqual(categories);
+    expect(RISK_LEVELS).toEqual(levels);
+  });
+
+  test("averages probability vectors by name, not permutation or winning votes", async () => {
+    const host = runFetch([
+      {
+        risk: 0, bug: 0.1, needsHuman: 0.2, confidence: 0.2, category: "refactor",
+        riskProbabilities: { "0": 1 },
+        categoryProbabilities: { refactor: 0.55, security: 0.45 },
+      },
+      {
+        risk: 3, bug: 0.2, needsHuman: 0.4, confidence: 0.4, category: "refactor",
+        riskProbabilities: { "3": 1 },
+        categoryProbabilities: { refactor: 0.55, security: 0.45 },
+      },
+      {
+        risk: 3, bug: 0.3, needsHuman: 0.6, confidence: 0.6, category: "security",
+        riskProbabilities: { "0": 0.5, "3": 0.5 },
+        categoryProbabilities: { security: 1 },
+      },
+    ]);
+    const client = new JevClient("k", host.fetch, undefined, (max) => host.log.length % max);
+    const result = await client.judge(
+      buildJevState(makeUnit({ id: "caller", diff: CODE_HUNK })),
+    );
+
+    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+    expect(new Set(host.log.map(({ request }) =>
+      Object.keys(request.questions.category.criteria).join(","))).size).toBe(JUDGMENT_RUNS);
+    for (const category of REVIEW_CATEGORIES) {
+      const expected = category === "security" ? 1.9 / 3 : category === "refactor" ? 1.1 / 3 : 0;
+      expect(result.categoryProbabilities[category]).toBeCloseTo(expected);
+    }
+    expect(result.riskProbabilities).toEqual({ "0": 0.5, "1": 0, "2": 0, "3": 0.5 });
+    expect(result.judgment.category).toBe("security");
+    expect(result.judgment.risk).toBeCloseTo(1.5);
+    expect(result.judgment.bug).toBeCloseTo(0.2);
+    expect(result.judgment.needsHuman).toBeCloseTo(0.4);
+    expect(result.judgment.confidence).toBeCloseTo(0.4);
+    expect(result.categoryTopProbability).toBeCloseTo(1.9 / 3);
+    expect(result.riskTopProbability).toBeCloseTo(0.5);
+    expect(result.divergence).toBeCloseTo(0.5);
+  });
+
+  test.each(["category", "risk"] as const)(
+    "routes strongly divergent %s runs to uncertain even when the mean clears both floors",
+    async (question) => {
+      const agreed: AnswerSpec = {
+        risk: 3, bug: 0.8, category: "security", topLevelProbability: 1, categoryProbability: 1,
+      };
+      const runs = Array<AnswerSpec>(JUDGMENT_RUNS).fill(agreed);
+      const stable = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
+        apiKey: "k", fetch: runFetch(runs).fetch,
+      });
+      runs[JUDGMENT_RUNS - 1] = question === "category"
+        ? { ...agreed, category: "refactor" }
+        : { ...agreed, risk: 0 };
+      const assessment = await new JevClient("k", runFetch(runs).fetch).judge(
+        buildJevState(makeUnit({ id: "caller", diff: CODE_HUNK })),
+      );
+      const unstable = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
+        apiKey: "k", fetch: runFetch(runs).fetch,
+      });
+
+      // One outlier leaves a clear aggregate winner, but must not be hidden by it.
+      const majority = (JUDGMENT_RUNS - 1) / JUDGMENT_RUNS;
+      expect(assessment.categoryTopProbability).toBeGreaterThanOrEqual(TOP_CATEGORY_PROBABILITY_FLOOR);
+      expect(assessment.riskTopProbability).toBeGreaterThanOrEqual(TOP_LEVEL_PROBABILITY_FLOOR);
+      expect(assessment.divergence).toBeGreaterThanOrEqual(DIVERGENCE_THRESHOLD);
+      expect(stable.items[0].status).toBe("attention");
+      expect(unstable.items[0].status).toBe("uncertain");
+      expect(unstable.items[0].judgment?.category).toBe("security");
+      expect(unstable.items[0].judgment?.risk).toBeCloseTo(question === "risk" ? 3 * majority : 3);
+    },
+  );
+
+  test.each(["category", "risk"] as const)(
+    "routes an averaged %s probability below its floor to uncertain despite high confidence",
+    async (question) => {
+      const runs = [0.65, 0.55, 0.57].map((top): AnswerSpec => ({
+        risk: 3, bug: 0.8, category: "security", confidence: 0.99,
+        categoryProbability: question === "category" ? top : 0.9,
+        topLevelProbability: question === "risk" ? top : 0.9,
+      }));
+      const result = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
+        apiKey: "k", fetch: runFetch(runs).fetch,
+      });
+      expect(result.items[0].judgment?.confidence).toBeCloseTo(0.99);
+      expect(result.items[0].status).toBe("uncertain");
+    },
+  );
+
+  test("does not treat modest distribution variation as unstable", async () => {
+    const host = runFetch([0.9, 0.65, 0.55].map((top): AnswerSpec => ({
+      risk: 3, bug: 0.8, category: "security", categoryProbability: top,
+    })));
+    const result = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+    expect(result.items[0].status).toBe("attention");
+  });
+
+  test.each(["rejection", "malformed"] as const)("discards earlier runs after a later %s", async (failure) => {
+    const host = installFetch(() => host.log.length === 1
+      ? new Response(answerBody({ risk: 3, bug: 0.8, category: "security" }))
+      : new Response("{}", { status: failure === "rejection" ? 401 : 200 }));
+    const result = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+    expect(result.modelCalls).toBe(2);
+    expect(result.items[0].status).toBe("uncertain");
+    expect(result.items[0].judgment).toBeUndefined();
+    expect(result.warnings).toHaveLength(1);
+  });
+
+  test("shares the existing total deadline across successful runs", async () => {
+    let now = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const host = installFetch(() => {
+      now += JEV_RETRY.totalTimeoutMs;
+      return new Response(answerBody({ risk: 3, bug: 0.8, category: "security" }));
+    });
+    try {
+      const result = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
+        apiKey: "k", fetch: host.fetch,
+      });
+      expect(result.modelCalls).toBe(1);
+      expect(result.items[0].status).toBe("uncertain");
+      expect(result.items[0].judgment).toBeUndefined();
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 
@@ -277,7 +458,7 @@ describe("deterministic passes", () => {
       makeUnit({ id: "operators", diff: "@@ -1 +1 @@\n---counter;\n+++counter;", added: 1, removed: 1 }),
     ], { apiKey: "test-key", fetch: host.fetch });
     expect(result.items[0].status).toBe("attention");
-    expect(result.modelCalls).toBe(1);
+    expect(result.modelCalls).toBe(JUDGMENT_RUNS);
   });
   test("passes exact no-ops and blank-only text documents, and judges everything else", async () => {
     const units = [
@@ -299,10 +480,10 @@ describe("deterministic passes", () => {
     expect(itemById(result.items, "blank-ts").status).toBe("low");
     expect(itemById(result.items, "comment").status).toBe("low");
     expect(host.log.map((entry) => entry.request.state.file).sort()).toEqual([
-      "src/blank.ts",
-      "src/comment.ts",
+      ...Array<string>(JUDGMENT_RUNS).fill("src/blank.ts"),
+      ...Array<string>(JUDGMENT_RUNS).fill("src/comment.ts"),
     ]);
-    expect(result.modelCalls).toBe(2);
+    expect(result.modelCalls).toBe(2 * JUDGMENT_RUNS);
   });
 });
 
@@ -336,7 +517,7 @@ describe("uncertainty gates", () => {
     const result = await reviewUnits([makeUnit({ id: "context", diff: CODE_HUNK })], { apiKey: "test-key", fetch: host.fetch });
     expect(result.items[0].status).toBe("uncertain");
   });
-  test("fires on low confidence, a gray-band bug probability, a split risk vote, and insufficient context", async () => {
+  test("uses raw probability floors, gray bands, and insufficient context rather than vendor confidence", async () => {
     const units = [
       makeUnit({ id: "conf", file: "src/conf.ts", diff: CODE_HUNK, added: 1 }),
       makeUnit({ id: "gray", file: "src/gray.ts", diff: CODE_HUNK, added: 1 }),
@@ -345,7 +526,11 @@ describe("uncertainty gates", () => {
       makeUnit({ id: "attn", file: "src/attn.ts", diff: CODE_HUNK, added: 1 }),
     ];
     const host = scriptedFetch({
-      "src/conf.ts": { risk: 3, bug: 0.8, category: "security", confidence: 0.4, categoryProbability: 0.95 },
+      "src/conf.ts": {
+        risk: 3, bug: 0.8, category: "security", confidence: 0.4,
+        categoryProbability: TOP_CATEGORY_PROBABILITY_FLOOR,
+        topLevelProbability: TOP_LEVEL_PROBABILITY_FLOOR,
+      },
       "src/gray.ts": { risk: 2, bug: 0.5, category: "bug-risk" },
       "src/split.ts": { risk: 2, bug: 0.8, category: "bug-risk", topLevelProbability: 0.35 },
       "src/human.ts": { risk: 3, bug: 0.8, category: "api-change", needsHuman: 0.8 },
@@ -354,7 +539,7 @@ describe("uncertainty gates", () => {
 
     const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
 
-    expect(itemById(result.items, "conf").status).toBe("uncertain");
+    expect(itemById(result.items, "conf").status).toBe("attention");
     expect(itemById(result.items, "gray").status).toBe("uncertain");
     expect(itemById(result.items, "split").status).toBe("uncertain");
     expect(itemById(result.items, "human").status).toBe("uncertain");
@@ -362,7 +547,7 @@ describe("uncertainty gates", () => {
     expect(result.items[0].id).toBe("attn");
     expect(result.items.map((item) => item.status)).toEqual([
       "attention",
-      "uncertain",
+      "attention",
       "uncertain",
       "uncertain",
       "uncertain",
@@ -392,7 +577,7 @@ describe("uncertainty gates", () => {
     const item = itemById(result.items, "mixed");
     expect(item.status).toBe("uncertain");
     // The judgment is still reported: escalation changes the route, not the answers.
-    expect(item.judgment?.category).toBe("security");
+    expect(item.judgment?.bug).toBeCloseTo(0.9);
   });
 });
 
@@ -646,7 +831,7 @@ describe("live request bounds", () => {
 
     const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
 
-    expect(result.modelCalls).toBe(files.length);
+    expect(result.modelCalls).toBe(files.length * JUDGMENT_RUNS);
     expect(result.items).toHaveLength(files.length);
     expect(peak).toBe(MAX_CONCURRENT_REQUESTS);
   });
@@ -670,18 +855,17 @@ describe("transient failures", () => {
     });
   }
 
-  test("retries a rate-limited hunk while counting both HTTP attempts", async () => {
+  test("retries a rate-limited hunk while counting retries and independent runs", async () => {
     const host = transientFetch(429, 200);
     const units = [makeUnit({ id: "limited", file: "src/limited.ts", diff: CODE_HUNK, added: 1 })];
 
     const result = await reviewUnits(units, { apiKey: KEY, fetch: host.fetch });
 
-    expect(host.log).toHaveLength(2);
-    expect(result.modelCalls).toBe(2);
+    expect(host.log).toHaveLength(JUDGMENT_RUNS + 1);
+    expect(result.modelCalls).toBe(JUDGMENT_RUNS + 1);
     expect(result.warnings).toEqual([]);
     expect(itemById(result.items, "limited").status).toBe("attention");
-    // The retry repeats the same request; the key stays in the header, not the body.
-    expect(JSON.stringify(host.log[0].request)).toBe(JSON.stringify(host.log[1].request));
+    // Every attempt keeps the key in the header, never in the body.
     for (const entry of host.log) {
       expect(entry.authorization).toBe(`Bearer ${KEY}`);
       expect(JSON.stringify(entry.request)).not.toContain(KEY);
@@ -759,7 +943,7 @@ describe("transient failures", () => {
       const result = await client.judge(buildJevState(makeUnit({ id: "dates", diff: CODE_HUNK })));
       expect(result.judgment.category).toBe("refactor");
       expect(waits).toEqual([8_000, 250]);
-      expect(client.requestCount).toBe(3);
+      expect(client.requestCount).toBe(JUDGMENT_RUNS + 2);
     } finally {
       clock.mockRestore();
     }

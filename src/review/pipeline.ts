@@ -9,11 +9,11 @@
  *     deterministically;
  *   - a hunk whose serialized state exceeds the size cap goes to manual review
  *     uncalled, never truncated and never auto-passed;
- *   - anything else gets one Jev call, and a failed or malformed call fails
+ *   - anything else gets repeated Jev calls, and a failed or malformed call fails
  *     closed (uncertain) instead of degrading into a pass. A transient failure
  *     is retried with the documented backoff before that happens;
- *   - a judgment is only trusted when both returned distributions have a clear
- *     winner, so a flat risk or category answer escalates to a human.
+ *   - a judgment is only trusted when the averaged distributions have a clear
+ *     winner and the runs agree, so flat or unstable answers escalate to a human.
  *
  * Items are returned sorted by status (attention, uncertain, low, passed) and
  * then by priority, descending, with input order breaking ties.
@@ -54,19 +54,19 @@ export const CATEGORY_PRIORITY = {
   other: 0,
 } satisfies Record<ReviewCategory, number>;
 
-/** Below this combined confidence the answer is not trusted, so the hunk is uncertain. */
-export const CONFIDENCE_FLOOR = 0.55;
 /** A bug probability strictly inside this band is a split vote, so the hunk is uncertain. */
 export const GRAY_BAND_LOW = 0.35;
 export const GRAY_BAND_HIGH = 0.65;
 /**
- * The risk distribution must put at least this much weight on one level, and the
- * category distribution at least this much on one option. A flatter distribution
+ * The averaged risk distribution must put at least this much weight on one level,
+ * and the category distribution this much on one option. A flatter distribution
  * means the state did not separate the alternatives, which is the documented
  * signal to escalate rather than act.
  */
 export const TOP_LEVEL_PROBABILITY_FLOOR = 0.6;
 export const TOP_CATEGORY_PROBABILITY_FLOOR = 0.6;
+/** Maximum run-to-mean total variation at or above this signals unstable judgments. */
+export const DIVERGENCE_THRESHOLD = 0.35;
 /** At or above this, the model itself says the context is insufficient. */
 export const NEEDS_HUMAN_GATE = 0.6;
 /** At or above these, the hunk is ranked for attention. */
@@ -121,7 +121,7 @@ interface RoutedItem {
   readonly item: ReviewItem;
 }
 
-/** A unit waiting on one live request. */
+/** A unit waiting on its live judgment runs. */
 interface PendingUnit {
   readonly index: number;
   readonly state: JevState;
@@ -208,7 +208,7 @@ function routeUnit(unit: ReviewUnit): UnitRoute {
 /** Status from the validated answers, gates first so a split vote never ranks as attention. */
 function statusFor(assessment: JevAssessment): ReviewStatus {
   const { judgment, riskTopProbability, categoryTopProbability } = assessment;
-  if (judgment.confidence < CONFIDENCE_FLOOR) return "uncertain";
+  if (assessment.divergence >= DIVERGENCE_THRESHOLD) return "uncertain";
   if (judgment.bug > GRAY_BAND_LOW && judgment.bug < GRAY_BAND_HIGH) return "uncertain";
   if (judgment.needsHuman > GRAY_BAND_LOW && judgment.needsHuman < GRAY_BAND_HIGH) return "uncertain";
   if (riskTopProbability < TOP_LEVEL_PROBABILITY_FLOOR) return "uncertain";
@@ -240,7 +240,7 @@ function reasonsFor(unit: ReviewUnit, assessment: JevAssessment, status: ReviewS
     `impact risk ${Math.round(judgment.risk * 10) / 10}/3 (nearest rubric level: ${RISK_LEVELS[level]})`,
     `likely bug ${percent(judgment.bug)} against the ${percent(BUG_ATTENTION_GATE)} attention gate`,
     `category: ${judgment.category}`,
-    `model confidence ${percent(judgment.confidence)} against the ${percent(CONFIDENCE_FLOOR)} floor`,
+    `model confidence ${percent(judgment.confidence)} (informational only)`,
     `needs human ${percent(judgment.needsHuman)} against the ${percent(NEEDS_HUMAN_GATE)} gate`,
   ];
   if (assessment.riskTopProbability < TOP_LEVEL_PROBABILITY_FLOOR) {
@@ -251,6 +251,11 @@ function reasonsFor(unit: ReviewUnit, assessment: JevAssessment, status: ReviewS
   if (assessment.categoryTopProbability < TOP_CATEGORY_PROBABILITY_FLOOR) {
     reasons.push(
       `no category stands out: the likeliest holds ${percent(assessment.categoryTopProbability)} of the vote, under the ${percent(TOP_CATEGORY_PROBABILITY_FLOOR)} floor`,
+    );
+  }
+  if (assessment.divergence >= DIVERGENCE_THRESHOLD) {
+    reasons.push(
+      `judgment runs disagree: maximum distribution divergence ${percent(assessment.divergence)} meets the ${percent(DIVERGENCE_THRESHOLD)} threshold`,
     );
   }
   if (unit.callFlow === undefined || unit.callFlow.length === 0) {
