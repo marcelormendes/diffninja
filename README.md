@@ -33,6 +33,16 @@ Or install it globally:
 npm install -g diffninja
 ```
 
+Register the MCP server on every agent CLI you use (Claude Code, Codex, OMP,
+pi) with one command:
+
+```bash
+npx -y diffninja setup
+```
+
+It installs the package globally first, then registers the server in each
+detected CLI. See `docs/mcp-setup.md` for the manual entries.
+
 Both `diffninja` (CLI) and `diffninja-mcp` (MCP server) ship in the package.
 `npx` fetches the latest published version on first run; if a cached copy
 feels stale, pin it explicitly (`npx -y diffninja@latest ...`).

@@ -173,6 +173,24 @@ Windows uses `rundll32.exe` to launch the default browser; macOS uses `open`,
 Linux uses `xdg-open`. PR inputs automatically attempt browser launch; open
 the printed URL manually if the desktop launcher is unavailable.
 
+## MCP setup
+
+`diffninja setup` registers the MCP server on every detected agent CLI:
+
+```bash
+npx -y diffninja setup [--cli claude,codex,omp,pi] [--dry-run]
+diffninja setup --uninstall [--cli codex]
+```
+
+Supported CLIs: Claude Code (`~/.claude.json`), Codex
+(`~/.codex/config.toml`), OMP (`~/.omp/agent/mcp.json`), pi
+(`~/.pi/agent/mcp.json`, needs `pi-mcp-extension`). The setup installs the
+package globally first so each entry points at a permanent `node` plus
+`mcp-cli.js`; without a working global install it falls back to `npx`
+entries. `--dry-run` previews, `--no-install` skips the global install,
+`--uninstall` removes the entries. The API key is referenced from the
+launching environment, never stored in the files.
+
 ## Install-time notes
 
 Node `>=22.18` is required. From the npm registry (once `0.1.0` is
