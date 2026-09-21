@@ -12,12 +12,15 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
 ## Project specific instructions
 
 - Single Node.js CLI package (npm, `package-lock.json`). Node `>=22.18` required.
-- The package is `private: true` and nothing is published from this repo, so
-  setup docs point at a local build and an absolute `node dist/...` path.
-  Do not write instructions that assume an npm-published binary exists; local
-  `npm run build` plus the absolute path is authoritative.
+- The package is prepared for public npm distribution as `diffninja`, with
+  `diffninja` and `diffninja-mcp` bins only. Preparation is not publication.
+  README documents npm-first installation and absolute Node + MCP entry paths;
+  `docs/npm-release.md` records publishing prerequisites and platform caveats.
+  Never publish, log in to npm, or perform npm-account actions without explicit
+  authorization for that action.
 - Standard commands live in `package.json` `scripts`:
-  - Typecheck/build: `npm run build` (runs `tsc`, emits `dist/`).
+  - Typecheck/build: `npm run build` (cleans `dist/`, runs `tsc`).
+  - Package: `npm pack --dry-run` (`prepack` rebuilds from clean output).
   - Lint: `npm run lint` (`oxlint`).
   - Tests: `npm test` (`vitest run`).
   - Run in dev: `npm run dev -- --diff <patch> --mock` (runs

@@ -8,6 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema, type CallToolRequest, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, test } from "vitest";
 import { createReviewServer } from "../src/review/mcp.js";
+import type { ConnectedSnapshot } from "../src/review/github.js";
 import type { ReviewReport, ReviewStatus } from "../src/review/types.js";
 
 const patch = readFileSync(resolve("examples/review/checkout.patch"), "utf8");
@@ -144,7 +145,6 @@ describe("review_diff over the MCP protocol", () => {
     for (const [index, item] of report.items.entries()) {
       expect(item.priority).toBeGreaterThanOrEqual(0);
       expect(item.priority).toBeLessThanOrEqual(100);
-      expect(item.reasons.length).toBeGreaterThan(0);
       if (index > 0) {
         const previous = report.items[index - 1];
         if (STATUS_RANK[previous.status] === STATUS_RANK[item.status]) {

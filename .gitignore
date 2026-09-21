@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-pack/
+diffninja-*.tgz
 *.tsbuildinfo
 .DS_Store
 *.log

@@ -135,25 +135,20 @@ export function resolveSnapshotAndPaths(
     return { snapshot: resolveSnapshot(undefined), paths };
   }
 
-  try {
-    git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]);
+  if (isCommitRef(cwd, ref)) {
     return { snapshot: resolveSnapshot(ref), paths };
-  } catch {
-    const abs = resolve(cwd, ref);
-    if (existsSync(abs)) {
-      return {
-        snapshot: resolveSnapshot(undefined),
-        paths: [ref, ...paths],
-      };
-    }
-    throw new Error(`Unknown git ref: ${ref}`);
   }
+  if (isPathOnDisk(cwd, ref)) {
+    return {
+      snapshot: resolveSnapshot(undefined),
+      paths: [ref, ...paths],
+    };
+  }
+  throw new Error(`Unknown git ref: ${ref}`);
 }
 
 export function verifyCommit(cwd: string, ref: string): void {
-  try {
-    git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]);
-  } catch {
+  if (!isCommitRef(cwd, ref)) {
     throw new Error(`Unknown git ref: ${ref}`);
   }
 }
@@ -259,23 +254,6 @@ export function listSnapshotFiles(
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
-/** @deprecated Use listSourceFiles */
-export function listTsFiles(
-  cwd: string,
-  snapshot: Snapshot,
-  pathFilters: string[] = [],
-): string[] {
-  return listSourceFiles(cwd, snapshot, pathFilters);
-}
-
-export function listSourceFiles(
-  cwd: string,
-  snapshot: Snapshot,
-  pathFilters: string[] = [],
-): string[] {
-  return listSnapshotFiles(cwd, snapshot, pathFilters).map((file) => file.path);
-}
-
 const BATCH_BYTES = 32 * 1024 * 1024;
 
 type Blob = { oid: string; size: number };
@@ -358,35 +336,6 @@ export function visitWorktreeFiles(
     if (!isRegularFile(full)) continue;
     visit(file, readFileSync(full, "utf8"));
   }
-}
-
-export function readSnapshotFiles(
-  cwd: string,
-  snapshot: Snapshot,
-  files: SnapshotFile[],
-): Map<string, string> {
-  const sources = new Map<string, string>();
-
-  if (snapshot.kind === "worktree") {
-    visitWorktreeFiles(cwd, files, (file, source) => {
-      sources.set(file.path, source);
-    });
-    return sources;
-  }
-
-  const pathsByOid = new Map<string, string[]>();
-  for (const file of files) {
-    if (!file.oid) continue;
-    const paths = pathsByOid.get(file.oid) ?? [];
-    paths.push(file.path);
-    pathsByOid.set(file.oid, paths);
-  }
-  visitCommitBlobs(cwd, files, (oid, source) => {
-    for (const path of pathsByOid.get(oid) ?? []) {
-      sources.set(path, source);
-    }
-  });
-  return sources;
 }
 
 export function describeSnapshot(snapshot: Snapshot): string {

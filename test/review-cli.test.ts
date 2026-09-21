@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 
 const cli = resolve("src/review/cli.ts");
 const patch = resolve("examples/review/checkout.patch");
+const tsx = import.meta.resolve("tsx");
 
 describe("diffninja command", () => {
   it("includes changed calldiff call paths for a git range", () => {
@@ -20,7 +21,7 @@ describe("diffninja command", () => {
       execFileSync("git", ["add", "."], { cwd: dir });
       execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "head"], { cwd: dir });
       const out = join(dir, "review.html");
-      execFileSync(process.execPath, ["--import", "tsx", cli, "--repo", dir, "--from", "HEAD~1", "--to", "HEAD", "--mock", "--out", out]);
+      execFileSync(process.execPath, ["--import", tsx, cli, "--repo", dir, "--from", "HEAD~1", "--to", "HEAD", "--mock", "--out", out]);
       const report = JSON.parse(readFileSync(out + ".json", "utf8"));
       expect(report.callFlow.join("\n")).toContain("authorize");
       expect(report.items[0].callFlow.join("\n")).toContain("authorize");
@@ -35,7 +36,8 @@ describe("diffninja command", () => {
     const dir = mkdtempSync(join(tmpdir(), "diffninja-cli-"));
     try {
       const out = join(dir, "report.html");
-      execFileSync(process.execPath, ["--import", "tsx", cli, "--diff", patch, "--mock", "--out", out]);
+      const stdinOut = join(dir, "stdin.html");
+      execFileSync(process.execPath, ["--import", tsx, cli, "--diff", patch, "--mock", "--out", out]);
       const fileReport = JSON.parse(readFileSync(out + ".json", "utf8"));
       expect(fileReport.items).toHaveLength(5);
       expect(fileReport.mode).toBe("mock");
@@ -43,19 +45,19 @@ describe("diffninja command", () => {
       expect(fileReport.callFlowAvailability).toBe("needs-git-range");
       expect(fileReport.items.some((item: { status: string }) => item.status === "passed")).toBe(true);
       expect(readFileSync(out, "utf8")).toContain("diffninja");
-      execFileSync(process.execPath, ["--import", "tsx", cli, "--stdin", "--mock", "--out", out], { input: readFileSync(patch) });
-      const stdinReport = JSON.parse(readFileSync(out + ".json", "utf8"));
+      execFileSync(process.execPath, ["--import", tsx, cli, "--stdin", "--mock", "--out", stdinOut], { input: readFileSync(patch) });
+      const stdinReport = JSON.parse(readFileSync(stdinOut + ".json", "utf8"));
       expect(stdinReport.items).toEqual(fileReport.items);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   it("refuses live review without credentials", () => {
     const env = { ...process.env, TYPESAFE_API_KEY: "" };
-    const result = spawnSync(process.execPath, ["--import", "tsx", cli, "--diff", patch], { env, encoding: "utf8" });
+    const result = spawnSync(process.execPath, ["--import", tsx, cli, "--diff", patch], { env, encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("TYPESAFE_API_KEY");
   });
   it("rejects ambiguous input modes", () => {
-    const result = spawnSync(process.execPath, ["--import", "tsx", cli, "--diff", patch, "--stdin", "--mock"], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, ["--import", tsx, cli, "--diff", patch, "--stdin", "--mock"], { encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("exactly one input");
   });
@@ -126,6 +128,8 @@ if (args[0] === "--version") {
 `);
   writeFileSync(join(dir, "gh"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)} "$@"\n`, { mode: 0o755 });
   writeFileSync(join(dir, "xdg-open"), `#!/bin/sh\nprintf '%s' "$1" >> "$DIFFNINJA_OPEN_LOG"\n`, { mode: 0o755 });
+  // The CLI opens the browser with `open` on macOS, `xdg-open` on Linux.
+  writeFileSync(join(dir, "open"), `#!/bin/sh\nprintf '%s' "$1" >> "$DIFFNINJA_OPEN_LOG"\n`, { mode: 0o755 });
   return { dir, ghLog, openLog, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, DIFFNINJA_GH_LOG: ghLog, DIFFNINJA_OPEN_LOG: openLog } };
 }
 
@@ -156,7 +160,7 @@ describe("diffninja pull request input", () => {
     const { dir, ghLog, openLog, env } = fakeTools();
     try {
       const out = join(dir, "report.html");
-      execFileSync(process.execPath, ["--import", "tsx", cli, "--static", "--mock", "--out", out, PR_URL], { env });
+      execFileSync(process.execPath, ["--import", tsx, cli, "--static", "--mock", "--out", out, PR_URL], { env });
       const report = JSON.parse(readFileSync(out + ".json", "utf8"));
       expect(report.source).toBe(PR_URL);
       expect(report.mode).toBe("mock");
@@ -180,7 +184,7 @@ describe("diffninja pull request input", () => {
         // The typographic quotes and zero-width space a copy-paste leaves behind.
         ["--static", "--mock", "--out", out, `see \u201c${PR_URL}\u201d\u200b`],
       ]) {
-        execFileSync(process.execPath, ["--import", "tsx", cli, ...args], { env });
+        execFileSync(process.execPath, ["--import", tsx, cli, ...args], { env });
         const report = JSON.parse(readFileSync(out + ".json", "utf8"));
         expect(report.source, args.join(" ")).toBe(PR_URL);
         expect(report.items, args.join(" ")).toHaveLength(1);
@@ -191,7 +195,7 @@ describe("diffninja pull request input", () => {
     const { dir, env } = fakeTools();
     try {
       const out = join(dir, "report.html");
-      execFileSync(process.execPath, ["--import", "tsx", cli, "--diff", patch, "--static", "--mock", "--out", out, PR_URL], { env });
+      execFileSync(process.execPath, ["--import", tsx, cli, "--diff", patch, "--static", "--mock", "--out", out, PR_URL], { env });
       const report = JSON.parse(readFileSync(out + ".json", "utf8"));
       expect(report.source).toBe(PR_URL);
       expect(report.items).toHaveLength(1);
@@ -201,7 +205,7 @@ describe("diffninja pull request input", () => {
     const { dir, openLog, env } = fakeTools();
     try {
       const out = join(dir, "report.html");
-      execFileSync(process.execPath, ["--import", "tsx", cli, "--static", "--mock", "--out", out, "--open", PR_URL], { env });
+      execFileSync(process.execPath, ["--import", tsx, cli, "--static", "--mock", "--out", out, "--open", PR_URL], { env });
       expect(readFileSync(openLog, "utf8")).toContain("report.html");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -221,12 +225,15 @@ describe("diffninja pull request input", () => {
       ];
       for (const args of cases) {
         const label = args.join(" ");
-        const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args], { env, encoding: "utf8" });
+        const result = spawnSync(process.execPath, ["--import", tsx, cli, ...args], {
+          cwd: dir, env, encoding: "utf8", timeout: 30_000,
+        });
         // Reported by the CLI itself, never as an uncaught stack trace.
         expect(result.status, label).toBe(1);
         expect(result.stderr, label).toMatch(/^diffninja: \S/);
         expect(result.stdout, label).not.toContain("Connected review:");
         expect(existsSync(out), label).toBe(false);
+        expect(existsSync(join(dir, "review.html")), label).toBe(false);
       }
       expect(existsSync(openLog)).toBe(false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -234,7 +241,6 @@ describe("diffninja pull request input", () => {
   it("asks for one full link instead of echoing shorthand, prose, or secrets", () => {
     const { dir, ghLog, openLog, env } = fakeTools();
     try {
-      const out = join(dir, "report.html");
       const secret = `ghp_${"a".repeat(36)}`;
       // None of these names a target. `leak` is the fragment a naive error
       // would splice back in; a refusal must never repeat pasted input, which
@@ -252,13 +258,15 @@ describe("diffninja pull request input", () => {
       ];
       for (const { args, leak } of cases) {
         const label = args.join(" ");
-        const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
+        const result = spawnSync(process.execPath, ["--import", tsx, cli, ...args], {
+          cwd: dir, env, encoding: "utf8", timeout: 30_000,
+        });
         expect(result.status, label).toBe(1);
-        expect(result.stderr, label).not.toContain(leak);
+        expect(`${result.stdout}\n${result.stderr}`, label).not.toContain(leak);
         expect(result.stdout, label).not.toContain("Connected review:");
         expect(existsSync(ghLog), label).toBe(false);
         expect(existsSync(openLog), label).toBe(false);
-        expect(existsSync(out), label).toBe(false);
+        expect(existsSync(join(dir, "review.html")), label).toBe(false);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -274,12 +282,15 @@ describe("diffninja pull request input", () => {
       ];
       for (const args of cases) {
         const label = args.join(" ");
-        const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
+        const result = spawnSync(process.execPath, ["--import", tsx, cli, ...args], {
+          cwd: dir, env, encoding: "utf8", timeout: 30_000,
+        });
         expect(result.status, label).toBe(1);
         expect(result.stdout, label).not.toContain("Connected review:");
         // The diff was never read and no report was written: the guard ran first.
         expect(existsSync(ghLog), label).toBe(false);
         expect(existsSync(out), label).toBe(false);
+        expect(existsSync(join(dir, "review.html")), label).toBe(false);
         expect(existsSync(openLog), label).toBe(false);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -294,7 +305,7 @@ describe("diffninja pull request input", () => {
         ["serve", "--connected", "--static", PR_URL],
       ]) {
         const label = args.join(" ");
-        const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
+        const result = spawnSync(process.execPath, ["--import", tsx, cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
         expect(result.status, label).toBe(1);
         expect(result.stderr, label).toMatch(/--connected|serve answers connected review/);
         expect(result.stdout, label).not.toContain("Connected review:");
@@ -315,7 +326,7 @@ describe("diffninja pull request input", () => {
         ["--connected", `--pr=${PR_URL} ${other}`],
       ]) {
         const label = args.join(" ");
-        const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
+        const result = spawnSync(process.execPath, ["--import", tsx, cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
         expect(result.status, label).toBe(1);
         expect(result.stderr, label).toMatch(/different pull requests|exactly one full GitHub pull request URL/);
         expect(result.stdout, label).not.toContain("Connected review:");
@@ -327,7 +338,7 @@ describe("diffninja pull request input", () => {
   });
   it("serves a guarded --connected link pasted inside quoted text, making no report", async () => {
     const { dir, ghLog, openLog, env } = fakeTools();
-    const child = spawn(process.execPath, ["--import", "tsx", cli, "--connected", `see \u201c${PR_URL}\u201d\u200b`], { env });
+    const child = spawn(process.execPath, ["--import", tsx, cli, "--connected", `see \u201c${PR_URL}\u201d\u200b`], { env });
     let stdout = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => { stdout += chunk; });
@@ -346,7 +357,7 @@ describe("diffninja pull request input", () => {
       const report = join(dir, "report.html");
       writeFileSync(join(dir, "xdg-open"), `#!/bin/sh\nprintf '%s' "$1" >> "$DIFFNINJA_OPEN_LOG"\n`, { mode: 0o755 });
       const env = { ...process.env, PATH: dir, DIFFNINJA_OPEN_LOG: openLog };
-      const result = spawnSync(process.execPath, ["--import", "tsx", cli, PR_URL], { env, encoding: "utf8", timeout: 30_000 });
+      const result = spawnSync(process.execPath, ["--import", tsx, cli, PR_URL], { env, encoding: "utf8", timeout: 30_000 });
       expect(result.status).toBe(1);
       expect(result.stderr).toMatch(/\bgh\b/);
       expect(result.stdout).not.toContain("Connected review:");
@@ -354,7 +365,7 @@ describe("diffninja pull request input", () => {
       // With no gh anywhere on PATH, an unreadable link is still refused for
       // being unreadable: detection never waits on the gh prerequisite.
       for (const args of [["https://github.com/octocat/hello/pull/7abc"], ["--static", "--mock", "--out", report, "https://github.com/octocat/pull/7"]]) {
-        const malformed = spawnSync(process.execPath, ["--import", "tsx", cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
+        const malformed = spawnSync(process.execPath, ["--import", tsx, cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
         expect(malformed.status, args.join(" ")).toBe(1);
         expect(malformed.stderr, args.join(" ")).not.toMatch(/\bgh\b/);
         expect(existsSync(report), args.join(" ")).toBe(false);
@@ -381,7 +392,7 @@ exit 1
       const env = { ...process.env, PATH: dir, DIFFNINJA_OPEN_LOG: openLog };
       for (const args of [[PR_URL], ["--static", "--mock", "--out", report, PR_URL]]) {
         const label = args.join(" ");
-        const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
+        const result = spawnSync(process.execPath, ["--import", tsx, cli, ...args], { env, encoding: "utf8", timeout: 30_000 });
         expect(result.status, label).toBe(1);
         expect(result.stderr, label).toMatch(/gh auth login/);
         expect(result.stderr, label).not.toMatch(/token|password|EPIPE/i);
@@ -393,7 +404,7 @@ exit 1
   });
   it("serves a pull request with no serve or open flag and opens the browser", async () => {
     const { dir, ghLog, openLog, env } = fakeTools();
-    const child = spawn(process.execPath, ["--import", "tsx", cli, "--mock", PR_URL], { env });
+    const child = spawn(process.execPath, ["--import", tsx, cli, "--mock", PR_URL], { env });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -412,7 +423,7 @@ exit 1
   });
   it("keeps bare serve working without touching GitHub", async () => {
     const { dir, ghLog, openLog, env } = fakeTools();
-    const child = spawn(process.execPath, ["--import", "tsx", cli, "serve"], { env });
+    const child = spawn(process.execPath, ["--import", tsx, cli, "serve"], { env });
     let stdout = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => { stdout += chunk; });
@@ -427,7 +438,7 @@ exit 1
   });
   it("loads the pull request up front when serve is given one", async () => {
     const { dir, ghLog, openLog, env } = fakeTools();
-    const child = spawn(process.execPath, ["--import", "tsx", cli, "serve", `--pr=${PR_URL}`], { env });
+    const child = spawn(process.execPath, ["--import", tsx, cli, "serve", `--pr=${PR_URL}`], { env });
     let stdout = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => { stdout += chunk; });

@@ -109,6 +109,7 @@ describe("locally declared helpers", () => {
     // through the impostor `walk` in scripts/gate.ts.
     const result = host.run("calldiff reach -e buildTree --to sendEmail");
 
+    expect(result.code).toBe(0);
     expect(result.stdout).toContain("No paths from buildTree to sendEmail.");
   });
 

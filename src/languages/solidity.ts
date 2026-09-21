@@ -199,11 +199,6 @@ function handleFunction(
   const body = childByType(node, "function_body");
   const key = contractName ? `${contractName}.${name}` : name;
   const visibility = childByType(node, "visibility")?.text;
-  const exported =
-    visibility === "public" ||
-    visibility === "external" ||
-    visibility === undefined ||
-    contractName === null;
 
   functions.push({
     key,
@@ -212,7 +207,7 @@ function handleFunction(
     steps: body
       ? collectStatements(file, statementsOf(body), contractName)
       : [],
-    exported: visibility === "private" || visibility === "internal" ? false : exported,
+    exported: visibility !== "private" && visibility !== "internal",
     start: node.startIndex,
     end: node.endIndex,
   });

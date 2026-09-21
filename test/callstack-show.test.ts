@@ -88,5 +88,9 @@ describe("callstack tree", () => {
       outer()
       └─ mid()
     `.trimEnd());
+    // Without the bound this prefix is still printed, so the deeper calls
+    // are what actually prove the flag was honoured.
+    expect(result.stdout).not.toContain("inner()");
+    expect(result.stdout).not.toContain("leaf()");
   });
 });

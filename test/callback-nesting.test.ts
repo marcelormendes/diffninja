@@ -228,6 +228,12 @@ test("typescript: reach walks through callback nesting", () => {
   );
 
   expect(result.code).toBe(0);
-  expect(result.stdout).toContain("parseTraceparent");
-  expect(result.stdout).toContain("Effect.flatMap()");
+  // The whole path, so a truncated or header-only report cannot pass: the
+  // target name also appears in the "reach ... → target" banner above.
+  expect(result.stdout).toContain(src`
+    traceRequest(options)
+    └─ Effect.flatMap()
+       └─ parentSpanFromRequest(request)
+          └─ parseTraceparent(header)
+  `.trimEnd());
 });

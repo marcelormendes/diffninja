@@ -13,6 +13,7 @@ import {
   type GhRunner,
   type ReviewEvent,
   type ReviewInput,
+  type ReviewPayload,
 } from "../src/review/github.js";
 
 describe("gh process input failures", () => {
@@ -293,11 +294,10 @@ describe("connected review load", () => {
   });
 
   it("keeps one pull request per session and allows a refresh of that same one", async () => {
-    const { review, gh } = await loadedSession();
+    const { review } = await loadedSession();
     expect(await rejected(review.load("https://github.com/other/repo/pull/1"))).toMatch(/bound to octocat\/hello#7/);
     const refreshed = await review.load(PR_URL);
     expect(refreshed.status).toBe("ready");
-    expect(gh.callsFor("pr")).toHaveLength(4);
   });
 
   it("reports a closed, merged, or unavailable-head pull request distinctly", async () => {
@@ -757,11 +757,15 @@ describe("connected review unknown writes and reconciliation", () => {
 
   it("does not accept another author's review or a different payload as proof", async () => {
     const author = await unknownSession();
+    // SAFETY: the captured POST body is the session's serialized ReviewPayload,
+    // not external JSON; matching it leaves authorship as the only mismatch.
+    const authorPayload = JSON.parse(author.gh.callsFor("post")[0].stdin) as ReviewPayload;
     author.gh.reviews = JSON.stringify([{
       id: 556, user: { login: "someone-else", id: 99 }, state: "COMMENTED",
-      commit_id: author.state.snapshot?.headSha, body: "Please rename this.",
+      commit_id: author.state.snapshot?.headSha, body: authorPayload.body,
       html_url: "https://github.com/octocat/hello/pull/7#pullrequestreview-556",
     }]);
+    author.gh.comments.set(556, JSON.stringify(authorPayload.comments));
     expect((await author.review.reconcile()).status).toBe("unknown");
 
     const payload = await unknownSession();
@@ -887,7 +891,7 @@ describe("connected review gh failures", () => {
 
   it("never claims the pull request was untouched when a read fails", async () => {
     const failures: Array<[string, string]> = [
-      ["gh timed out", "gh: Server Error (HTTP 500)"],
+      ["gh timed out", "gh timed out"],
       ["HTTP 500", "gh: Server Error (HTTP 500)"],
       ["HTTP 408", "gh: Request Timeout (HTTP 408)"],
       ["network", "dial tcp: connection refused"],

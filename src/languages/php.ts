@@ -48,7 +48,7 @@ function getParamsLabel(params: SyntaxNode | null): string {
   return names.length === 0 ? "()" : `(${names.join(", ")})`;
 }
 
-function calleeKey(node: SyntaxNode, _className: string | null): string | null {
+function calleeKey(node: SyntaxNode): string | null {
   // Bare / qualified function call callee is usually `name` or `qualified_name`
   if (node.type === "name") return node.text;
   if (node.type === "qualified_name") {
@@ -319,7 +319,7 @@ function collectStatements(
     if (node.type === "function_call_expression") {
       const callee = node.namedChild(0);
       if (callee) {
-        const key = calleeKey(callee, className);
+        const key = calleeKey(callee);
         if (key) addCall(key, node);
       }
     } else if (node.type === "member_call_expression") {

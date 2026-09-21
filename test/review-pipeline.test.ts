@@ -59,6 +59,12 @@ interface AnswerSpec {
   readonly confidence?: number;
   /** Weight on the most likely risk level; below 0.6 the vote reads as split. */
   readonly topLevelProbability?: number;
+  /**
+   * Weight on the most likely category. Defaults to `confidence`, but a case
+   * that isolates the confidence gate needs a settled category vote and a low
+   * confidence at the same time.
+   */
+  readonly categoryProbability?: number;
 }
 
 /** Weighted-style distribution: the chosen level holds `top`, the rest share the remainder. */
@@ -94,7 +100,7 @@ function answersOf(spec: AnswerSpec): JevObject {
     category: {
       type: "choice",
       choice: spec.category,
-      probabilities: distribution(spec.category, REVIEW_CATEGORIES, confidence),
+      probabilities: distribution(spec.category, REVIEW_CATEGORIES, spec.categoryProbability ?? confidence),
       confidence,
     },
     needs_human: { type: "noul", noul: spec.needsHuman ?? 0.2 },
@@ -146,7 +152,13 @@ function scriptedFetch(script: Readonly<Record<string, AnswerSpec>>): FetchHost 
 }
 
 function bodyFetch(bodies: Readonly<Record<string, string>>): FetchHost {
-  return installFetch((request) => new Response(bodies[request.state.file] ?? "", { status: 200 }));
+  return installFetch((request) => {
+    const body = bodies[request.state.file];
+    // A missing key would silently answer with an empty body and hide a
+    // routing regression behind an unrelated parse error.
+    if (body === undefined) throw new Error(`no scripted body for ${request.state.file}`);
+    return new Response(body, { status: 200 });
+  });
 }
 
 function itemById(items: readonly ReviewItem[], id: string): ReviewItem {
@@ -176,8 +188,8 @@ describe("reviewUnits ranking and requests", () => {
         added: 1,
         callFlow: ["runCheckout()", "└─ deleteOrder()"],
       }),
-      makeUnit({ id: "mid", file: "src/mid.ts", diff: CODE_HUNK, added: 1 }),
       makeUnit({ id: "clean", file: "src/clean.ts", diff: CODE_HUNK, added: 1 }),
+      makeUnit({ id: "mid", file: "src/mid.ts", diff: CODE_HUNK, added: 1 }),
     ];
     const host = scriptedFetch({
       "src/high.ts": { risk: 3, bug: 0.78, category: "security" },
@@ -192,7 +204,6 @@ describe("reviewUnits ranking and requests", () => {
     expect(result.items.map((item) => item.status)).toEqual(["attention", "low", "low"]);
     // Scores 2.4 / 1.2 / 0.6 x 50 + bug x 30 + needs-human x 20 + the category boost.
     expect(result.items.map((item) => item.priority)).toEqual([79, 30, 15]);
-    expect(result.items.map((item) => item.id).sort()).toEqual(["clean", "high", "mid"]);
 
     expect(host.log).toHaveLength(3);
     expect(host.log[0].url).toBe(JEV_ENDPOINT);
@@ -246,9 +257,14 @@ describe("reviewUnits ranking and requests", () => {
 
     expect(result.items).toHaveLength(2);
     expect(result.items.map((item) => item.id).sort()).toEqual(["judged", "trivial"]);
-    for (const item of result.items) {
-      expect(item.reasons.length).toBeGreaterThan(0);
-    }
+    // The trivial hunk is explained by the deterministic rule that spared it.
+    const trivial = itemById(result.items, "trivial");
+    expect(trivial.status).toBe("passed");
+    expect(trivial.reasons.join("\n")).toMatch(/exact no-op/);
+    // The judged hunk carries the model's own answer and its routing note.
+    const judged = itemById(result.items, "judged");
+    expect(judged.judgment?.category).toBe("refactor");
+    expect(judged.reasons.join("\n")).toMatch(/routed to low/);
     expect(units).toEqual(snapshot);
     expect(host.log).toHaveLength(1);
   });
@@ -329,7 +345,7 @@ describe("uncertainty gates", () => {
       makeUnit({ id: "attn", file: "src/attn.ts", diff: CODE_HUNK, added: 1 }),
     ];
     const host = scriptedFetch({
-      "src/conf.ts": { risk: 3, bug: 0.8, category: "security", confidence: 0.4 },
+      "src/conf.ts": { risk: 3, bug: 0.8, category: "security", confidence: 0.4, categoryProbability: 0.95 },
       "src/gray.ts": { risk: 2, bug: 0.5, category: "bug-risk" },
       "src/split.ts": { risk: 2, bug: 0.8, category: "bug-risk", topLevelProbability: 0.35 },
       "src/human.ts": { risk: 3, bug: 0.8, category: "api-change", needsHuman: 0.8 },

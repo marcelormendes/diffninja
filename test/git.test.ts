@@ -77,6 +77,9 @@ test("lists tracked and non-ignored worktree sources", () => {
 
   const deletedWorktree = host.run("calldiff tree -e deleted");
   expect(deletedWorktree.code).not.toBe(0);
+  expect(`${deletedWorktree.stdout}\n${deletedWorktree.stderr}`).toMatch(
+    /Entrypoint not found/,
+  );
 
   const deletedCommit = host.run("calldiff tree HEAD -e deleted");
   expect(deletedCommit.code).toBe(0);
@@ -84,6 +87,9 @@ test("lists tracked and non-ignored worktree sources", () => {
 
   const untrackedCommit = host.run("calldiff tree HEAD -e extra");
   expect(untrackedCommit.code).not.toBe(0);
+  expect(`${untrackedCommit.stdout}\n${untrackedCommit.stderr}`).toMatch(
+    /Entrypoint not found/,
+  );
 });
 
 test.skipIf(process.platform === "win32")(
@@ -122,7 +128,8 @@ test("reads commit source blobs including unicode names", () => {
       }
       function weird() {}
     `,
-    "/src/types.d.ts": "declare const ignored: string;\n",
+    "/src/types.d.ts": "export function ignored() {\n  hidden();\n}\nfunction hidden() {}\n",
+    "/src/same-body.ts": "export function found() {\n  hidden();\n}\nfunction hidden() {}\n",
     "/README.md": "not source\n",
   });
 
@@ -134,6 +141,15 @@ test("reads commit source blobs including unicode names", () => {
   expect(odd.code).toBe(0);
   expect(odd.stdout).toContain("weird()");
 
+  // The same body in a .ts file is found, so this proves the extension rule
+  // rather than a reader that simply cannot read the commit.
+  const control = host.run("calldiff tree HEAD -e found");
+  expect(control.code).toBe(0);
+  expect(control.stdout).toContain("hidden()");
+
   const ignoredDecl = host.run("calldiff tree HEAD -e ignored");
   expect(ignoredDecl.code).not.toBe(0);
+  expect(`${ignoredDecl.stdout}\n${ignoredDecl.stderr}`).toMatch(
+    /Entrypoint not found/,
+  );
 });

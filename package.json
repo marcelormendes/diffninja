@@ -1,7 +1,6 @@
 {
   "name": "diffninja",
   "version": "0.1.0",
-  "private": true,
   "description": "Focused local PR reviews with calldiff and Jev",
   "type": "module",
   "exports": {
@@ -12,15 +11,19 @@
   },
   "bin": {
     "diffninja": "dist/review/cli.js",
-    "diffninja-mcp": "dist/review/mcp-cli.js",
-    "calldiff": "dist/cli.js"
+    "diffninja-mcp": "dist/review/mcp-cli.js"
   },
   "files": [
-    "dist"
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "scripts/ensure-native-grammar.mjs"
   ],
   "scripts": {
-    "build": "tsc",
-    "prepublishOnly": "npm run build",
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
+    "build": "npm run clean && tsc",
+    "prepack": "npm run build",
+    "postinstall": "node scripts/ensure-native-grammar.mjs",
+    "rebuild:native": "node scripts/ensure-native-grammar.mjs",
     "dev": "tsx src/review/cli.ts",
     "start": "node dist/review/cli.js",
     "lint": "oxlint",
@@ -28,6 +31,10 @@
   },
   "engines": {
     "node": ">=22.18.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "repository": {
     "type": "git",
@@ -56,12 +63,16 @@
     "incur": "^0.4.26",
     "picocolors": "^1.1.1",
     "tree-sitter": "^0.25.1",
-    "tree-sitter-typescript": "^0.23.2",
+    "tree-sitter-javascript": "^0.25.0",
     "zod": "^4.6.5"
+  },
+  "optionalDependencies": {
+    "tree-sitter-typescript": "^0.23.2"
   },
   "overrides": {
     "tree-sitter-typescript": {
-      "tree-sitter": "$tree-sitter"
+      "tree-sitter": "$tree-sitter",
+      "tree-sitter-javascript": "0.25.0"
     }
   },
   "devDependencies": {

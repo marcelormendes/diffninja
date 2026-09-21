@@ -305,8 +305,13 @@ test("tsx: an anonymous memo callback keys off the declared name", () => {
 
   const result = host.run("calldiff tree -e OrderBadge");
   expect(result.code).toBe(0);
-  expect(result.stdout).toContain("OrderBadge(");
-  expect(result.stdout).toContain("Badge()");
+  // `OrderBadge(` alone would be satisfied by a `Badge(`-free tree, because
+  // Badge() is a suffix of OrderBadge(); the exact block pins the relationship.
+  expect(result.stdout).toContain(src`
+  OrderBadge({})
+  └─ Badge()
+     └─ toneFor()
+  `.trimEnd());
 });
 
 test("an exported wrapped declarator is selectable as an entry", () => {

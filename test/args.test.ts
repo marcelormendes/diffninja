@@ -107,12 +107,21 @@ describe("calldiff CLI", () => {
     });
     const result = host.run("calldiff reach -e boot");
     expect(result.code).toBeGreaterThan(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/\bto\b/);
   });
 
-  test("unknown flag fails", () => {
+  test("unknown command and unknown flag fail", () => {
     const host = workspace();
-    const result = host.run("calldiff --not-a-real-flag");
-    expect(result.code).toBeGreaterThan(0);
+
+    const command = host.run("calldiff --not-a-real-flag");
+    expect(command.code).toBeGreaterThan(0);
+    expect(`${command.stdout}\n${command.stderr}`).toMatch(/is not a command/);
+
+    const flag = host.run("calldiff tree --not-a-real-flag");
+    expect(flag.code).toBeGreaterThan(0);
+    expect(`${flag.stdout}\n${flag.stderr}`).toMatch(
+      /Unknown flag: --not-a-real-flag/,
+    );
   });
 
   test("strips lone -- separators so path filters still work", () => {
@@ -123,8 +132,10 @@ describe("calldiff CLI", () => {
         }
         function run() {}
       `,
+      // The decoy exports the same entry name, so the filter is what decides
+      // which definition is walked: without it the other file would be found.
       "/other/decoy.ts": src`
-        export function decoy() {
+        export function boot() {
           boom();
         }
         function boom() {}
@@ -133,6 +144,6 @@ describe("calldiff CLI", () => {
     const result = host.run("calldiff tree -e boot -- src");
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("run()");
-    expect(result.stdout).not.toContain("decoy()");
+    expect(result.stdout).not.toContain("boom()");
   });
 });

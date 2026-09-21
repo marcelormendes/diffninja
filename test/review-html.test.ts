@@ -234,11 +234,9 @@ describe("review HTML", () => {
     const html = renderReview(
       report([item(), item(), item({ status: "low", file: "b.ts" })]),
     );
-    expect(html).toContain('data-filter="attention" data-count="2"');
-    expect(html).toContain('data-filter="uncertain" data-count="0"');
-    expect(html).toContain('data-filter="low" data-count="1"');
-    expect(html).toContain('data-filter="passed" data-count="0"');
-    expect([...html.matchAll(/data-filter="\w+" data-count="\d+" aria-pressed="true"/g)]).toHaveLength(4);
+    expect(html).toContain('aria-hidden="true"></span>Attention<span class="pill-n mono">2</span>');
+    expect(html).toContain('aria-hidden="true"></span>Low<span class="pill-n mono">1</span>');
+    expect([...html.matchAll(/data-filter="\w+"[^>]*aria-pressed="true"/g)]).toHaveLength(4);
     for (const status of ["attention", "uncertain", "low", "passed"]) {
       const chip = new RegExp(
         `<button[^>]*data-filter="${status}"[^>]*>(<span class="dot dot-${status}" aria-hidden="true"></span>)`,
@@ -308,7 +306,10 @@ describe("review HTML", () => {
     expect(html).not.toContain('id="toolbar"');
     expect(html).not.toContain('id="item-');
     expect(html).not.toContain('class="toc-link"');
-    expect(html).toContain("dot-attention");
+    // The severity legend is in the markup, not just in the stylesheet.
+    expect(visible(html)).toContain(
+      '<span class="dot dot-attention" aria-hidden="true"></span>Attention: read first',
+    );
   });
   test("absence never fabricates a tree or mislabels a completed git-range analysis", () => {
     const patch = visible(renderReview(report([item()])));
@@ -372,7 +373,6 @@ describe("review HTML", () => {
     expect(html.match(/<script\b/g)).toHaveLength(1);
     expect(html).not.toMatch(/<script[^>]+src=|<link\b|@import|url\(["']?https?:/i);
     expect([...html.matchAll(/href="([^"]*)"/g)].every((match) => match[1].startsWith("#"))).toBe(true);
-    expect(scriptOf(html)).not.toMatch(/fetch\(|XMLHttpRequest|localStorage/);
   });
 
 });

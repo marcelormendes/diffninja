@@ -169,12 +169,12 @@ async function main(): Promise<void> {
 function openInBrowser(url: string): Promise<void> {
   const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32.exe" : "xdg-open";
   const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
-  return new Promise((resolve) => {
+  return new Promise((done) => {
     execFile(opener, args, { timeout: 10_000, windowsHide: true }, (error) => {
       if (error) {
         console.error(`diffninja: could not open the browser (${error.message})`);
       }
-      resolve();
+      done();
     });
   });
 }

@@ -82,12 +82,7 @@ function calleeKey(node: SyntaxNode, className: string | null): string | null {
   if (node.type === "identifier") return node.text;
   if (node.type === "this") return className;
 
-  if (
-    node.type === "member_expression" ||
-    node.type === "subscript_expression"
-  ) {
-    if (node.type === "subscript_expression") return null;
-
+  if (node.type === "member_expression") {
     const object = node.namedChild(0);
     const property =
       namedChildren(node).find(
