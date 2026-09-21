@@ -1,7 +1,11 @@
 /**
  * JavaScript / JSX callable extraction (tree-sitter-javascript).
  */
-import type { CallStep, FunctionInfo } from "../types.js";
+import type {
+  CallStep,
+  CallSyntax,
+  FunctionInfo,
+} from "../types.js";
 import {
   childByType,
   collapseWs,
@@ -11,6 +15,18 @@ import {
   type SyntaxNode,
   type Tree,
 } from "./types.js";
+import {
+  jsCallSyntax,
+  jsFunctionScope,
+  jsModuleScope,
+  jsParameterList,
+  type JsEnv,
+} from "./call-syntax.js";
+
+/** Module-level scope of the file being extracted, plus an empty class. */
+function moduleEnv(root: SyntaxNode): JsEnv {
+  return { scope: jsModuleScope(root), className: null };
+}
 
 function isFnLike(type: string): boolean {
   return (
@@ -139,35 +155,44 @@ function statementsOf(node: SyntaxNode): SyntaxNode[] {
   return [node];
 }
 
+/**
+ * Steps of one statement list. `env` carries the lexical scope in effect
+ * (module, function, or method), which is what classifies call targets.
+ */
 function collectStatements(
   file: string,
   statements: SyntaxNode[],
-  className: string | null,
+  env: JsEnv,
 ): CallStep[] {
   const steps: CallStep[] = [];
   const seenCalls = new Set<string>();
 
-  const addCall = (key: string, node: SyntaxNode) => {
+  const addCall = (key: string, node: SyntaxNode, syntax?: CallSyntax) => {
     const mark = `${key}:${node.startIndex}`;
     if (seenCalls.has(mark)) return;
     seenCalls.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node) });
+    const step: CallStep = { type: "call", key, ...locFromNode(file, node) };
+    if (syntax) step.syntax = syntax;
+    steps.push(step);
   };
 
   const emitCall = (
     key: string | null,
     node: SyntaxNode,
     nested: CallStep[],
+    syntax?: CallSyntax,
   ) => {
     if (key && nested.length > 0) {
-      steps.push({
+      const step: CallStep = {
         type: "call",
         key,
         ...locFromNode(file, node),
         children: nested,
-      });
+      };
+      if (syntax) step.syntax = syntax;
+      steps.push(step);
     } else if (key) {
-      addCall(key, node);
+      addCall(key, node, syntax);
     } else {
       steps.push(...nested);
     }
@@ -200,7 +225,7 @@ function collectStatements(
         label: test ? `if (${condText(test)})` : "if",
         ...locFromNode(file, test ?? node),
         children: consequent
-          ? collectStatements(file, statementsOf(consequent), className)
+          ? collectStatements(file, statementsOf(consequent), env)
           : [],
       });
 
@@ -226,7 +251,7 @@ function collectStatements(
             label: elseTest ? `else if (${condText(elseTest)})` : "else if",
             ...locFromNode(file, elseTest ?? current),
             children: elseConsequent
-              ? collectStatements(file, statementsOf(elseConsequent), className)
+              ? collectStatements(file, statementsOf(elseConsequent), env)
               : [],
           });
           current = childByType(inner, "else_clause");
@@ -238,7 +263,7 @@ function collectStatements(
           key: branchKey("else", ""),
           label: "else",
           ...locFromNode(file, current),
-          children: collectStatements(file, statementsOf(inner), className),
+          children: collectStatements(file, statementsOf(inner), env),
         });
         break;
       }
@@ -253,7 +278,7 @@ function collectStatements(
         label: "try",
         ...locFromNode(file, node),
         children: tryBlock
-          ? collectStatements(file, statementsOf(tryBlock), className)
+          ? collectStatements(file, statementsOf(tryBlock), env)
           : [],
       });
       for (const clause of namedChildren(node)) {
@@ -270,7 +295,7 @@ function collectStatements(
             label: text ? `catch (${text})` : "catch",
             ...locFromNode(file, param ?? clause),
             children: block
-              ? collectStatements(file, statementsOf(block), className)
+              ? collectStatements(file, statementsOf(block), env)
               : [],
           });
         }
@@ -282,7 +307,7 @@ function collectStatements(
             label: "finally",
             ...locFromNode(file, clause),
             children: block
-              ? collectStatements(file, statementsOf(block), className)
+              ? collectStatements(file, statementsOf(block), env)
               : [],
           });
         }
@@ -334,7 +359,7 @@ function collectStatements(
             key: text ? `case:${text}` : "case",
             label: text ? `case ${text}` : "case",
             ...locFromNode(file, caseValue ?? clause),
-            children: collectStatements(file, stmts, className),
+            children: collectStatements(file, stmts, env),
           });
         }
         if (clause.type === "switch_default") {
@@ -346,7 +371,7 @@ function collectStatements(
             key: "default",
             label: "default",
             ...locFromNode(file, clause),
-            children: collectStatements(file, stmts, className),
+            children: collectStatements(file, stmts, env),
           });
         }
       }
@@ -356,14 +381,19 @@ function collectStatements(
     if (type === "call_expression" || type === "new_expression") {
       const isNew = type === "new_expression";
       const callee = node.namedChild(0);
-      const bare = callee ? calleeKey(callee, isNew ? null : className) : null;
-      const key =
-        bare && isNew && !bare.startsWith("new ") ? `new ${bare}` : bare;
+      const bare = callee ? calleeKey(callee, isNew ? null : env.className) : null;
       const args = childByType(node, "arguments");
+      const syntax = callee ? jsCallSyntax(callee, args, env) : undefined;
+      // A dynamic target has no key from `calleeKey`; the call is still a call,
+      // so the target expression itself becomes its identity.
+      const base = bare ?? (syntax ? syntax.callee : null);
+      const key =
+        base && isNew && !base.startsWith("new ") ? `new ${base}` : base;
       emitCall(
         key,
         node,
-        args ? stepsFromArguments(file, args, className) : [],
+        args ? stepsFromArguments(file, args, env) : [],
+        syntax,
       );
       // `foo(x).bar()` keeps `foo` — the receiver is not an argument.
       if (callee) walkExpr(callee);
@@ -383,13 +413,13 @@ function collectStatements(
             attr.type === "jsx_attribute" ||
             attr.type === "jsx_expression"
           ) {
-            fromAttrs.push(...collectStatements(file, [attr], className));
+            fromAttrs.push(...collectStatements(file, [attr], env));
           }
         }
       }
       const nested = [
         ...fromAttrs,
-        ...collectStatements(file, childNodes, className),
+        ...collectStatements(file, childNodes, env),
       ];
       emitCall(opening ? jsxCalleeKey(opening) : null, opening ?? node, nested);
       return;
@@ -402,7 +432,7 @@ function collectStatements(
       emitCall(
         jsxCalleeKey(node),
         node,
-        collectStatements(file, attrNodes, className),
+        collectStatements(file, attrNodes, env),
       );
       return;
     }
@@ -426,7 +456,7 @@ function collectStatements(
 function stepsFromArguments(
   file: string,
   args: SyntaxNode,
-  className: string | null,
+  env: JsEnv,
 ): CallStep[] {
   const skipCallbacks = args.parent ? hoistsCallback(args.parent) : false;
   const steps: CallStep[] = [];
@@ -435,15 +465,11 @@ function stepsFromArguments(
     if (isCallback(arg.type)) {
       if (skipCallbacks) continue;
       steps.push(
-        ...collectStepsFromBody(
-          file,
-          unwrapCurriedBody(bodyOf(arg)),
-          className,
-        ),
+        ...collectStepsFromBody(file, unwrapCurriedBody(bodyOf(arg)), env),
       );
       continue;
     }
-    steps.push(...collectStatements(file, [arg], className));
+    steps.push(...collectStatements(file, [arg], env));
   }
   return steps;
 }
@@ -471,13 +497,13 @@ function hoistsCallback(call: SyntaxNode): boolean {
 function collectStepsFromBody(
   file: string,
   body: SyntaxNode | null,
-  className: string | null,
+  env: JsEnv,
 ): CallStep[] {
   if (!body) return [];
   if (body.type === "statement_block") {
-    return collectStatements(file, namedChildren(body), className);
+    return collectStatements(file, namedChildren(body), env);
   }
-  return collectStatements(file, [body], className);
+  return collectStatements(file, [body], env);
 }
 
 function functionFromParts(
@@ -489,17 +515,20 @@ function functionFromParts(
   exported: boolean,
   start: number,
   end: number,
-  className: string | null,
+  env: JsEnv,
 ): FunctionInfo {
-  return {
+  const declared = jsParameterList(params);
+  const info: FunctionInfo = {
     key,
     label: `${label}${getParamsLabel(params)}`,
     file,
-    steps: collectStepsFromBody(file, body, className),
+    steps: collectStepsFromBody(file, body, env),
     exported,
     start,
     end,
   };
+  if (declared) info.params = declared;
+  return info;
 }
 
 function paramsOf(node: SyntaxNode): SyntaxNode | null {
@@ -571,7 +600,7 @@ function unwrapCurriedBody(body: SyntaxNode | null): SyntaxNode | null {
 function collectLocalDefinitions(
   file: string,
   body: SyntaxNode | null,
-  className: string | null,
+  env: JsEnv,
   functions: FunctionInfo[],
 ) {
   if (!body) return;
@@ -583,15 +612,7 @@ function collectLocalDefinitions(
         child.type === "generator_function_declaration"
       ) {
         const id = childByType(child, "identifier");
-        handleFunctionNode(
-          file,
-          child,
-          id?.text ?? null,
-          false,
-          className,
-          functions,
-          true,
-        );
+        handleFunctionNode(file, child, id?.text ?? null, false, env, functions, true);
         continue;
       }
 
@@ -606,15 +627,7 @@ function collectLocalDefinitions(
             childByType(d, "arrow_function") ??
             childByType(d, "function_expression");
           if (id && init) {
-            handleFunctionNode(
-              file,
-              init,
-              id.text,
-              false,
-              className,
-              functions,
-              true,
-            );
+            handleFunctionNode(file, init, id.text, false, env, functions, true);
           }
         }
         // Fall through: `walk` skips the initializer bodies as fn-like below,
@@ -631,19 +644,31 @@ function collectLocalDefinitions(
   walk(body);
 }
 
+/**
+ * Scope of one function body. The enclosing class identity is inherited, so a
+ * local closure still has its method's `this` bindings.
+ */
+function functionEnv(node: SyntaxNode, outer: JsEnv): JsEnv {
+  return {
+    scope: jsFunctionScope(node, outer.scope),
+    className: outer.className,
+  };
+}
+
 function handleFunctionNode(
   file: string,
   node: SyntaxNode,
   name: string | null,
   exported: boolean,
-  className: string | null,
+  outer: JsEnv,
   functions: FunctionInfo[],
   /** Declared inside another body: key stays bare and resolution is file-scoped. */
   local = false,
 ) {
   if (!name) return;
-  const key = className && !local ? `${className}.${name}` : name;
+  const key = outer.className && !local ? `${outer.className}.${name}` : name;
   const body = unwrapCurriedBody(bodyOf(node));
+  const env = functionEnv(node, outer);
   const info = functionFromParts(
     file,
     key,
@@ -653,10 +678,10 @@ function handleFunctionNode(
     exported,
     node.startIndex,
     node.endIndex,
-    className,
+    env,
   );
   functions.push(local ? { ...info, local: true } : info);
-  collectLocalDefinitions(file, body, className, functions);
+  collectLocalDefinitions(file, body, env, functions);
 }
 
 function handleClass(
@@ -664,6 +689,7 @@ function handleClass(
   node: SyntaxNode,
   exported: boolean,
   functions: FunctionInfo[],
+  outer: JsEnv,
 ) {
   const nameNode = childByType(node, "identifier");
   const className = nameNode?.text ?? null;
@@ -671,6 +697,12 @@ function handleClass(
 
   const body = childByType(node, "class_body");
   if (!body) return;
+
+  // Members resolve `this.name()`; the class body itself sees the outer scope.
+  const classEnv: JsEnv = {
+    scope: outer.scope,
+    className,
+  };
 
   for (const element of namedChildren(body)) {
     if (element.type === "method_definition") {
@@ -690,6 +722,7 @@ function handleClass(
         ? `${className}.constructor`
         : `${className}.${methodName}`;
       const label = isConstructor ? `new ${className}()` : key;
+      const env = functionEnv(element, classEnv);
 
       functions.push(
         functionFromParts(
@@ -701,10 +734,10 @@ function handleClass(
           exported,
           element.startIndex,
           element.endIndex,
-          className,
+          env,
         ),
       );
-      collectLocalDefinitions(file, fnBody, className, functions);
+      collectLocalDefinitions(file, fnBody, env, functions);
     }
 
     if (element.type === "field_definition") {
@@ -718,7 +751,7 @@ function handleClass(
           value,
           keyNode.text,
           exported,
-          className,
+          classEnv,
           functions,
         );
       }
@@ -731,6 +764,7 @@ function visitStatement(
   node: SyntaxNode,
   exported: boolean,
   functions: FunctionInfo[],
+  env: JsEnv,
 ) {
   if (node.type === "export_statement") {
     const decl =
@@ -747,7 +781,7 @@ function visitStatement(
     ) {
       const id = childByType(decl, "identifier");
       const name = id?.text ?? (isDefault ? "default" : null);
-      handleFunctionNode(file, decl, name, true, null, functions);
+      handleFunctionNode(file, decl, name, true, env, functions);
       return;
     }
     if (decl.type === "arrow_function") {
@@ -756,20 +790,20 @@ function visitStatement(
         decl,
         isDefault ? "default" : null,
         true,
-        null,
+        env,
         functions,
       );
       return;
     }
     if (decl.type === "class_declaration" || decl.type === "class") {
-      handleClass(file, decl, true, functions);
+      handleClass(file, decl, true, functions, env);
       return;
     }
     if (
       decl.type === "lexical_declaration" ||
       decl.type === "variable_declaration"
     ) {
-      visitStatement(file, decl, true, functions);
+      visitStatement(file, decl, true, functions, env);
     }
     return;
   }
@@ -779,12 +813,12 @@ function visitStatement(
     node.type === "generator_function_declaration"
   ) {
     const id = childByType(node, "identifier");
-    handleFunctionNode(file, node, id?.text ?? null, exported, null, functions);
+    handleFunctionNode(file, node, id?.text ?? null, exported, env, functions);
     return;
   }
 
   if (node.type === "class_declaration") {
-    handleClass(file, node, exported, functions);
+    handleClass(file, node, exported, functions, env);
     return;
   }
 
@@ -799,7 +833,7 @@ function visitStatement(
         childByType(d, "arrow_function") ??
         childByType(d, "function_expression");
       if (id && init) {
-        handleFunctionNode(file, init, id.text, exported, null, functions);
+        handleFunctionNode(file, init, id.text, exported, env, functions);
       }
     }
   }
@@ -811,8 +845,9 @@ function extractFromTree(
   tree: Tree,
 ): FunctionInfo[] {
   const functions: FunctionInfo[] = [];
+  const env = moduleEnv(tree.rootNode);
   for (const stmt of namedChildren(tree.rootNode)) {
-    visitStatement(file, stmt, false, functions);
+    visitStatement(file, stmt, false, functions, env);
   }
   return functions;
 }

@@ -89,11 +89,36 @@ pi) and the tool's arguments: [docs/mcp-setup.md](docs/mcp-setup.md).
 
 1. **Deterministic checks first.** No-op hunks and blank-only changes are
    settled in code, with no model call.
-2. **One Jev judgment per hunk.** Four typed questions (impact scope, bug
-   likelihood, change category, missing context). Answers are numbers and
+2. **Three Jev runs per hunk.** Each asks four typed questions (impact scope, bug
+   likelihood, change category, missing context). Category options are shuffled
+   independently on every request; ordinal impact levels keep their order.
+   Probability vectors are averaged by option name. Answers are numbers and
    categories only — no generated prose.
-3. **Ranked in code.** The answers combine into a 0–100 priority. Low
-   confidence fails closed to `uncertain`; it never degrades into a pass.
+3. **Ranked in code.** The averaged answers combine into a 0–100 priority.
+   A category or impact-level top probability below 0.6, or run-to-average
+   total-variation distance at or above 0.35, routes to `uncertain`, alongside
+   the bug-probability and missing-context gates. Vendor confidence is
+   informational only. Failed or malformed runs fail closed for the whole hunk.
+
+Git-range analysis supplies selected call-site blocks from both snapshots,
+including written arguments, declared parameters, locations, and explicit target
+and binding uncertainty. Unambiguous same-file JS/TS and Python calls support
+positional binding; Python also supports named arguments. Imports, member
+dispatch, dynamic targets, and other grammars do not get guessed mappings.
+These are static source expressions, not runtime values or data-flow analysis.
+
+Context prioritizes calls adjacent to the hunk, with depth limited to four,
+at most eight arguments per call, and 120 characters per argument excerpt.
+Truncation and omitted arguments, repeated expansions, and pruned paths are
+marked. Distinct call sites are retained. Full caller bodies are not supplied.
+
+The serialized model state is capped at 24,000 characters. Optional context is
+pruned before sacrificing evaluation; the hunk is never truncated. If the
+essential file/hunk/diff/disclaimer state itself cannot fit, the hunk enters the
+human-review queue once, with `item.routing.evaluation: "not_evaluated"`,
+`reasonCode: "context_limit_exceeded"`, `requiredChars`, and `limitChars`.
+There is no model call or fabricated judgment for that hunk. The HTML identifies
+the skip and its sizes; the JSON and MCP results carry the routing metadata.
 
 ## Good to know
 

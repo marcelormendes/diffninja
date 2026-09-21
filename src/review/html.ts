@@ -8,8 +8,8 @@ import { escapeHtml } from "./escape-html.js";
  * The page is a plain diff review: file header, hunks with line numbers and
  * green/red lines. Ranking decides the order of the hunks and nothing else;
  * severity reaches the reviewer only as color (hunk header tint, left border,
- * jump-nav dot). Reasons, judgments, priority scores and model metadata stay in
- * the JSON sidecar and never reach the HTML.
+ * jump-nav dot). Judgments, priority scores and model metadata stay in the JSON
+ * sidecar; a skipped evaluation is also identified next to its unevaluated hunk.
  *
  * Everything is server-rendered, so the report is readable with JavaScript
  * disabled. The single inline script is progressive enhancement: expand and
@@ -224,6 +224,9 @@ function renderItemBody(item: ReviewItem): string {
   return [
     '<div class="body">',
     special,
+    item.routing?.evaluation === "not_evaluated"
+      ? `<p class="note">Not evaluated: essential context requires ${formatInteger(item.routing.requiredChars)} characters; the limit is ${formatInteger(item.routing.limitChars)}. No model judgment was recorded; manual review is required.</p>`
+      : "",
     renderDiff(item.diff),
     "</div>",
   ]

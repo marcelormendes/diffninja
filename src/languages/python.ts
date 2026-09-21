@@ -2,7 +2,7 @@
  * Python callable extraction (tree-sitter-python) — parity with the TS extractor
  * where Python has an analogue.
  */
-import type { CallStep, FunctionInfo } from "../types.js";
+import type { CallStep, CallSyntax, FunctionInfo } from "../types.js";
 import {
   childByType,
   collapseWs,
@@ -12,6 +12,13 @@ import {
   type SyntaxNode,
   type Tree,
 } from "./types.js";
+import {
+  pythonCallSyntax,
+  pythonFunctionScope,
+  pythonModuleScope,
+  pythonParameterList,
+  type PythonEnv,
+} from "./call-syntax.js";
 
 function isLikelyClassName(name: string): boolean {
   const c = name[0];
@@ -98,25 +105,31 @@ function calleeKey(node: SyntaxNode, className: string | null): string | null {
 function collectBlock(
   file: string,
   block: SyntaxNode | null,
-  className: string | null,
+  env: PythonEnv,
 ): CallStep[] {
   if (!block) return [];
-  return collectStatements(file, namedChildren(block), className);
+  return collectStatements(file, namedChildren(block), env);
 }
 
+/**
+ * Steps of one statement list. `env` carries the lexical scope in effect
+ * (module, function, or method), which is what classifies call targets.
+ */
 function collectStatements(
   file: string,
   statements: SyntaxNode[],
-  className: string | null,
+  env: PythonEnv,
 ): CallStep[] {
   const steps: CallStep[] = [];
   const seen = new Set<string>();
 
-  const addCall = (key: string, node: SyntaxNode) => {
+  const addCall = (key: string, node: SyntaxNode, syntax?: CallSyntax) => {
     const mark = `${key}:${node.startIndex}`;
     if (seen.has(mark)) return;
     seen.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node) });
+    const step: CallStep = { type: "call", key, ...locFromNode(file, node) };
+    if (syntax) step.syntax = syntax;
+    steps.push(step);
   };
 
   const walk = (node: SyntaxNode): void => {
@@ -144,7 +157,7 @@ function collectStatements(
         key: cond ? `if:${cond}` : "if",
         label: cond ? `if ${cond}` : "if",
         ...locFromNode(file, condNode ?? node),
-        children: collectBlock(file, childByType(node, "block"), className),
+        children: collectBlock(file, childByType(node, "block"), env),
       });
 
       for (const clause of namedChildren(node)) {
@@ -157,7 +170,7 @@ function collectStatements(
             key: text ? `else-if:${text}` : "else-if",
             label: text ? `elif ${text}` : "elif",
             ...locFromNode(file, elifCond ?? clause),
-            children: collectBlock(file, childByType(clause, "block"), className),
+            children: collectBlock(file, childByType(clause, "block"), env),
           });
         }
         if (clause.type === "else_clause") {
@@ -166,7 +179,7 @@ function collectStatements(
             key: "else",
             label: "else",
             ...locFromNode(file, clause),
-            children: collectBlock(file, childByType(clause, "block"), className),
+            children: collectBlock(file, childByType(clause, "block"), env),
           });
         }
       }
@@ -193,7 +206,7 @@ function collectStatements(
           key: text ? `case:${text}` : "case",
           label,
           ...locFromNode(file, pattern ?? clause),
-          children: collectBlock(file, childByType(clause, "block"), className),
+          children: collectBlock(file, childByType(clause, "block"), env),
         });
       }
       return;
@@ -206,7 +219,7 @@ function collectStatements(
         key: "try",
         label: "try",
         ...locFromNode(file, node),
-        children: collectBlock(file, tryBlock, className),
+        children: collectBlock(file, tryBlock, env),
       });
       for (const clause of namedChildren(node)) {
         if (clause.type === "except_clause") {
@@ -220,7 +233,7 @@ function collectStatements(
             key: text ? `except:${text}` : "except",
             label: text ? `except ${text}` : "except",
             ...locFromNode(file, handlerType ?? clause),
-            children: collectBlock(file, childByType(clause, "block"), className),
+            children: collectBlock(file, childByType(clause, "block"), env),
           });
         }
         if (clause.type === "else_clause") {
@@ -229,7 +242,7 @@ function collectStatements(
             key: "else",
             label: "else",
             ...locFromNode(file, clause),
-            children: collectBlock(file, childByType(clause, "block"), className),
+            children: collectBlock(file, childByType(clause, "block"), env),
           });
         }
         if (clause.type === "finally_clause") {
@@ -238,7 +251,7 @@ function collectStatements(
             key: "finally",
             label: "finally",
             ...locFromNode(file, clause),
-            children: collectBlock(file, childByType(clause, "block"), className),
+            children: collectBlock(file, childByType(clause, "block"), env),
           });
         }
       }
@@ -248,8 +261,11 @@ function collectStatements(
     if (node.type === "call") {
       const callee = node.namedChild(0);
       if (callee) {
-        const key = calleeKey(callee, className);
-        if (key) addCall(key, node);
+        const args = childByType(node, "argument_list");
+        const syntax = pythonCallSyntax(callee, args, env);
+        // A dynamic target has no key from `calleeKey`; the call is still a
+        // call, so the target expression itself becomes its identity.
+        addCall(calleeKey(callee, env.className) ?? syntax?.callee ?? "", node, syntax);
       }
       // Still walk arguments for nested calls, but not into nested lambdas
       for (const child of namedChildren(node).slice(1)) walk(child);
@@ -268,11 +284,12 @@ function pushFunction(
   node: SyntaxNode,
   name: string,
   exported: boolean,
-  className: string | null,
+  outer: PythonEnv,
   params: SyntaxNode | null,
   body: SyntaxNode | null,
   functions: FunctionInfo[],
 ) {
+  const className = outer.className;
   const isInit = className !== null && name === "__init__";
   const key = className
     ? isInit
@@ -280,20 +297,28 @@ function pushFunction(
       : `${className}.${name}`
     : name;
   const label = isInit ? `${className}()` : key;
+  // The body's scope chains to the enclosing one; its own params and locals
+  // shadow outer names.
+  const env: PythonEnv = {
+    scope: pythonFunctionScope(node, outer.scope),
+    className,
+  };
+  const declared = pythonParameterList(params);
   const info: FunctionInfo = {
     key,
     label: `${label}${getParamsLabel(params)}`,
     file,
     steps:
       body && body.type === "block"
-        ? collectBlock(file, body, className)
+        ? collectBlock(file, body, env)
         : body
-          ? collectStatements(file, [body], className)
+          ? collectStatements(file, [body], env)
           : [],
     exported,
     start: node.startIndex,
     end: node.endIndex,
   };
+  if (declared) info.params = declared;
   functions.push(info);
 
   if (isInit && className) {
@@ -309,7 +334,7 @@ function handleFunctionDefinition(
   file: string,
   node: SyntaxNode,
   exported: boolean,
-  className: string | null,
+  outer: PythonEnv,
   functions: FunctionInfo[],
 ) {
   const name = childByType(node, "identifier")?.text ?? null;
@@ -333,7 +358,7 @@ function handleFunctionDefinition(
     node,
     name,
     methodExported,
-    className,
+    outer,
     params,
     body,
     functions,
@@ -344,7 +369,7 @@ function handleLambdaAssignment(
   file: string,
   assignment: SyntaxNode,
   exported: boolean,
-  className: string | null,
+  outer: PythonEnv,
   functions: FunctionInfo[],
 ) {
   const id = childByType(assignment, "identifier");
@@ -359,7 +384,7 @@ function handleLambdaAssignment(
     lambda,
     id.text,
     exported && !isPrivateName(id.text),
-    className,
+    outer,
     params,
     body,
     functions,
@@ -371,11 +396,18 @@ function handleClass(
   node: SyntaxNode,
   exported: boolean,
   functions: FunctionInfo[],
+  outer: PythonEnv,
 ) {
   const className = childByType(node, "identifier")?.text ?? null;
   if (!className) return;
   const body = childByType(node, "block");
   if (!body) return;
+
+  // Methods resolve `self.name()`; the class body itself sees the outer scope.
+  const classEnv: PythonEnv = {
+    scope: outer.scope,
+    className,
+  };
 
   for (const stmt of namedChildren(body)) {
     if (stmt.type === "decorated_definition") {
@@ -386,7 +418,7 @@ function handleClass(
           file,
           fn,
           exported && !isPrivateName(className),
-          className,
+          classEnv,
           functions,
         );
       }
@@ -397,7 +429,7 @@ function handleClass(
         file,
         stmt,
         exported && !isPrivateName(className),
-        className,
+        classEnv,
         functions,
       );
       continue;
@@ -409,7 +441,7 @@ function handleClass(
           file,
           assignment,
           exported && !isPrivateName(className),
-          className,
+          classEnv,
           functions,
         );
       }
@@ -421,6 +453,7 @@ function visitModule(
   file: string,
   node: SyntaxNode,
   functions: FunctionInfo[],
+  env: PythonEnv,
 ) {
   if (node.type === "decorated_definition") {
     const inner =
@@ -432,25 +465,25 @@ function visitModule(
         file,
         inner,
         !isPrivateName(name),
-        null,
+        env,
         functions,
       );
     } else if (inner?.type === "class_definition") {
       const name = childByType(inner, "identifier")?.text ?? "";
-      handleClass(file, inner, !isPrivateName(name), functions);
+      handleClass(file, inner, !isPrivateName(name), functions, env);
     }
     return;
   }
 
   if (node.type === "function_definition") {
     const name = childByType(node, "identifier")?.text ?? "";
-    handleFunctionDefinition(file, node, !isPrivateName(name), null, functions);
+    handleFunctionDefinition(file, node, !isPrivateName(name), env, functions);
     return;
   }
 
   if (node.type === "class_definition") {
     const name = childByType(node, "identifier")?.text ?? "";
-    handleClass(file, node, !isPrivateName(name), functions);
+    handleClass(file, node, !isPrivateName(name), functions, env);
     return;
   }
 
@@ -462,7 +495,7 @@ function visitModule(
         file,
         assignment,
         id ? !isPrivateName(id.text) : true,
-        null,
+        env,
         functions,
       );
     }
@@ -475,8 +508,13 @@ function extractFromTree(
   tree: Tree,
 ): FunctionInfo[] {
   const functions: FunctionInfo[] = [];
-  for (const stmt of namedChildren(tree.rootNode)) {
-    visitModule(file, stmt, functions);
+  const root = tree.rootNode;
+  const env: PythonEnv = {
+    scope: pythonModuleScope(root),
+    className: null,
+  };
+  for (const stmt of namedChildren(root)) {
+    visitModule(file, stmt, functions, env);
   }
   return functions;
 }

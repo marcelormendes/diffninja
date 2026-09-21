@@ -1,5 +1,6 @@
 import type Parser from "tree-sitter";
-import type { FunctionInfo, SourceLoc } from "../types.js";
+import type { DeclaredParams, FunctionInfo, SourceLoc } from "../types.js";
+import { parameterText, textOnlyParams } from "./call-syntax.js";
 
 export type SyntaxNode = Parser.SyntaxNode;
 export type Tree = Parser.Tree;
@@ -41,4 +42,46 @@ export function locFromNode(file: string, node: SyntaxNode): SourceLoc {
   const line = node.startPosition.row + 1;
   const endLine = node.endPosition.row + 1;
   return endLine > line ? { file, line, endLine } : { file, line };
+}
+
+/**
+ * Parameter-list containers the grammars declare. A list is a direct child of
+ * the definition node, or of its declarator (`int callee(int param);`).
+ */
+const PARAMETER_CONTAINERS = {
+  formal_parameters: true,
+  parameters: true,
+  parameter_list: true,
+  method_parameters: true,
+  function_value_parameters: true,
+  lambda_parameters: true,
+  parameter_clause: true,
+} satisfies Record<string, true>;
+
+/** Nodes that hold a parameter list one level below the definition. */
+const PARAMETER_DECLARATORS = {
+  function_declarator: true,
+  declarator: true,
+  method_declarator: true,
+  call_signature: true,
+  function_declarator_body: true,
+} satisfies Record<string, true>;
+
+function namedChildrenTyped(node: SyntaxNode, types: Record<string, true>) {
+  return namedChildren(node).filter((child) => types[child.type] === true);
+}
+
+/**
+ * Declared parameter list of a definition, read from the AST: the verbatim
+ * list text, with no slots. Text alone keeps argument binding `unknown`, which
+ * is what the extractors that do not build lexical scopes can honestly claim.
+ */
+export function declaredParamsOf(node: SyntaxNode): DeclaredParams | undefined {
+  const direct = namedChildrenTyped(node, PARAMETER_CONTAINERS)[0];
+  if (direct) return textOnlyParams(parameterText(direct));
+  for (const declarator of namedChildrenTyped(node, PARAMETER_DECLARATORS)) {
+    const nested = namedChildrenTyped(declarator, PARAMETER_CONTAINERS)[0];
+    if (nested) return textOnlyParams(parameterText(nested));
+  }
+  return undefined;
 }

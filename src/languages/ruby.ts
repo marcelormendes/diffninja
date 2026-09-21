@@ -5,8 +5,10 @@
  * `Foo.new` is a `call` with constant + identifier "new".
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
+  declaredParamsOf,
   collapseWs,
   locFromNode,
   namedChildren,
@@ -128,7 +130,9 @@ function collectStatements(
     const mark = `${key}:${node.startIndex}`;
     if (seen.has(mark)) return;
     seen.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node) });
+    const step: CallStep = { type: "call", key, ...locFromNode(file, node) };
+    step.syntax = heuristicCallSyntax(node, key);
+    steps.push(step);
   };
 
   const walk = (node: SyntaxNode, asStatement: boolean): void => {
@@ -381,6 +385,7 @@ function handleMethod(
   const info: FunctionInfo = {
     key,
     label: `${labelBase}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps: collectBody(file, body, className),
     exported: !name.startsWith("_"),
@@ -394,6 +399,7 @@ function handleMethod(
       ...info,
       key: `new ${className}`,
       label: `${className}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     });
   }
 }
@@ -413,6 +419,7 @@ function handleSingletonMethod(
   functions.push({
     key,
     label: `${key}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps: collectBody(file, body, className),
     exported: !name.startsWith("_"),

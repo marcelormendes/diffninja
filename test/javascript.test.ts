@@ -318,7 +318,7 @@ test("javascript: try/catch/finally and switch as branches", () => {
   `));
 });
 
-test("javascript: ignores computed member calls", () => {
+test("javascript: keeps computed member calls as dynamic nodes", () => {
   const host = workspace();
   const from = host.commit("before", {
     "/computed.js": src`
@@ -343,6 +343,7 @@ test("javascript: ignores computed member calls", () => {
   expect(result.code).toBe(0);
   expect(result.stdout).toContain(diffOutdent(`
       run(obj, key)
+      ├─ obj[key]()
       ├─ obj.known()
     + └─ obj.other()
   `));

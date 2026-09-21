@@ -2,8 +2,10 @@
  * C++ callable extraction (tree-sitter-cpp).
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
+  declaredParamsOf,
   collapseWs,
   locFromNode,
   namedChildren,
@@ -94,7 +96,9 @@ function collectStatements(
     const mark = `${key}:${node.startIndex}`;
     if (seen.has(mark)) return;
     seen.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node) });
+    const step: CallStep = { type: "call", key, ...locFromNode(file, node) };
+    step.syntax = heuristicCallSyntax(node, key);
+    steps.push(step);
   };
 
   const walk = (node: SyntaxNode): void => {
@@ -247,6 +251,7 @@ function pushFunction(
   const info: FunctionInfo = {
     key,
     label: `${label}${getParamsLabel(declarator)}`,
+    params: declarator ? declaredParamsOf(declarator) : undefined,
     file,
     steps: body ? collectStatements(file, namedChildren(body), className) : [],
     exported,
@@ -333,6 +338,7 @@ function handleClassMethod(
       ...ctor,
       key: `new ${className}`,
       label: `new ${className}${getParamsLabel(declarator)}`,
+    params: declaredParamsOf(declarator),
     });
   }
 }

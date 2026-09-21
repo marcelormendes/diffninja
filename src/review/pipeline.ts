@@ -7,13 +7,16 @@
  *   - a unit the input parser marked special never reaches the model;
  *   - an exact no-op hunk and a blank-only change to a .md/.txt document pass
  *     deterministically;
- *   - a hunk whose serialized state exceeds the size cap goes to manual review
- *     uncalled, never truncated and never auto-passed;
- *   - anything else gets one Jev call, and a failed or malformed call fails
+ *   - a hunk whose essential state (file, hunk, diff, and the context note)
+ *     exceeds the size cap goes to manual review uncalled, never truncated and
+ *     never auto-passed, and reports why through `routing`; optional call-flow
+ *     context is measured and trimmed to fit first, so context size alone never
+ *     costs a hunk its model call;
+ *   - anything else gets repeated Jev calls, and a failed or malformed call fails
  *     closed (uncertain) instead of degrading into a pass. A transient failure
  *     is retried with the documented backoff before that happens;
- *   - a judgment is only trusted when both returned distributions have a clear
- *     winner, so a flat risk or category answer escalates to a human.
+ *   - a judgment is only trusted when the averaged distributions have a clear
+ *     winner and the runs agree, so flat or unstable answers escalate to a human.
  *
  * Items are returned sorted by status (attention, uncertain, low, passed) and
  * then by priority, descending, with input order breaking ties.
@@ -35,7 +38,14 @@ import {
   type JevState,
   type ReviewCategory,
 } from "./jev.js";
-import type { Judgment, ReviewItem, ReviewOptions, ReviewStatus, ReviewUnit } from "./types.js";
+import type {
+  Judgment,
+  ReviewItem,
+  ReviewOptions,
+  ReviewRouting,
+  ReviewStatus,
+  ReviewUnit,
+} from "./types.js";
 
 /** How much each model answer weighs in the 0..100 priority. Sums to 100. */
 export const PRIORITY_WEIGHTS = { risk: 50, bug: 30, needsHuman: 20 } as const;
@@ -54,19 +64,19 @@ export const CATEGORY_PRIORITY = {
   other: 0,
 } satisfies Record<ReviewCategory, number>;
 
-/** Below this combined confidence the answer is not trusted, so the hunk is uncertain. */
-export const CONFIDENCE_FLOOR = 0.55;
 /** A bug probability strictly inside this band is a split vote, so the hunk is uncertain. */
 export const GRAY_BAND_LOW = 0.35;
 export const GRAY_BAND_HIGH = 0.65;
 /**
- * The risk distribution must put at least this much weight on one level, and the
- * category distribution at least this much on one option. A flatter distribution
+ * The averaged risk distribution must put at least this much weight on one level,
+ * and the category distribution this much on one option. A flatter distribution
  * means the state did not separate the alternatives, which is the documented
  * signal to escalate rather than act.
  */
 export const TOP_LEVEL_PROBABILITY_FLOOR = 0.6;
 export const TOP_CATEGORY_PROBABILITY_FLOOR = 0.6;
+/** Maximum run-to-mean total variation at or above this signals unstable judgments. */
+export const DIVERGENCE_THRESHOLD = 0.35;
 /** At or above this, the model itself says the context is insufficient. */
 export const NEEDS_HUMAN_GATE = 0.6;
 /** At or above these, the hunk is ranked for attention. */
@@ -113,7 +123,7 @@ export interface ReviewPipelineResult {
 type UnitRoute =
   | { readonly kind: "judge"; readonly state: JevState }
   | { readonly kind: "pass"; readonly reason: string }
-  | { readonly kind: "manual"; readonly reason: string };
+  | { readonly kind: "manual"; readonly reason: string; readonly routing?: ReviewRouting };
 
 /** One input unit paired with its position, so ties keep input order. */
 interface RoutedItem {
@@ -121,7 +131,7 @@ interface RoutedItem {
   readonly item: ReviewItem;
 }
 
-/** A unit waiting on one live request. */
+/** A unit waiting on its live judgment runs. */
 interface PendingUnit {
   readonly index: number;
   readonly state: JevState;
@@ -193,13 +203,25 @@ function routeUnit(unit: ReviewUnit): UnitRoute {
   const passReason = deterministicPassReason(unit);
   if (passReason !== null) return { kind: "pass", reason: passReason };
   const state = buildJevState(unit);
+  // buildJevState admits optional entries only while they fit, so a state still
+  // above the cap here is one whose essentials cannot fit at any trim.
   const stateChars = JSON.stringify(state).length;
   if (stateChars > MAX_STATE_CHARS) {
+    const trimmed =
+      (unit.callFlow ?? []).length > 0
+        ? "even after every optional call-flow entry was omitted"
+        : "with no optional context to omit";
     return {
       kind: "manual",
       reason:
-        `state is ${stateChars} characters, above the ${MAX_STATE_CHARS} character cap; ` +
-        "not truncated and not sent to the model, so it needs manual review",
+        `essential state is ${stateChars} characters, above the ${MAX_STATE_CHARS} character cap ` +
+        `${trimmed}; the hunk is not truncated and was not sent to the model, so it needs manual review`,
+      routing: {
+        evaluation: "not_evaluated",
+        reasonCode: "context_limit_exceeded",
+        requiredChars: stateChars,
+        limitChars: MAX_STATE_CHARS,
+      },
     };
   }
   return { kind: "judge", state };
@@ -208,7 +230,7 @@ function routeUnit(unit: ReviewUnit): UnitRoute {
 /** Status from the validated answers, gates first so a split vote never ranks as attention. */
 function statusFor(assessment: JevAssessment): ReviewStatus {
   const { judgment, riskTopProbability, categoryTopProbability } = assessment;
-  if (judgment.confidence < CONFIDENCE_FLOOR) return "uncertain";
+  if (assessment.divergence >= DIVERGENCE_THRESHOLD) return "uncertain";
   if (judgment.bug > GRAY_BAND_LOW && judgment.bug < GRAY_BAND_HIGH) return "uncertain";
   if (judgment.needsHuman > GRAY_BAND_LOW && judgment.needsHuman < GRAY_BAND_HIGH) return "uncertain";
   if (riskTopProbability < TOP_LEVEL_PROBABILITY_FLOOR) return "uncertain";
@@ -228,19 +250,35 @@ function priorityFor(judgment: Judgment): number {
   return clampPriority(weighted + boost);
 }
 
+/** Count retained source entries, excluding the adapter's trailing omission marker. */
+function carriedFlowCount(unit: ReviewUnit, state: JevState): number {
+  const supplied = unit.callFlow ?? [];
+  const carried = state.callFlow ?? [];
+  let count = 0;
+  for (const entry of supplied) {
+    if (count < carried.length && carried[count] === entry) count += 1;
+  }
+  return count;
+}
+
 /**
  * Reasons are fixed templates filled with the returned values and this file's
  * own rubric text. No model-authored text is ever quoted, so a reason can only
  * restate a number, a category, and a named gate.
  */
-function reasonsFor(unit: ReviewUnit, assessment: JevAssessment, status: ReviewStatus): string[] {
+function reasonsFor(
+  unit: ReviewUnit,
+  assessment: JevAssessment,
+  status: ReviewStatus,
+  carriedFlow: number,
+): string[] {
   const judgment = assessment.judgment;
   const level = Math.min(MAX_RISK_LEVEL, Math.max(0, Math.round(judgment.risk)));
   const reasons = [
     `impact risk ${Math.round(judgment.risk * 10) / 10}/3 (nearest rubric level: ${RISK_LEVELS[level]})`,
     `likely bug ${percent(judgment.bug)} against the ${percent(BUG_ATTENTION_GATE)} attention gate`,
     `category: ${judgment.category}`,
-    `model confidence ${percent(judgment.confidence)} against the ${percent(CONFIDENCE_FLOOR)} floor`,
+    `model confidence ${percent(judgment.confidence)} (informational only)`,
     `needs human ${percent(judgment.needsHuman)} against the ${percent(NEEDS_HUMAN_GATE)} gate`,
   ];
   if (assessment.riskTopProbability < TOP_LEVEL_PROBABILITY_FLOOR) {
@@ -253,16 +291,31 @@ function reasonsFor(unit: ReviewUnit, assessment: JevAssessment, status: ReviewS
       `no category stands out: the likeliest holds ${percent(assessment.categoryTopProbability)} of the vote, under the ${percent(TOP_CATEGORY_PROBABILITY_FLOOR)} floor`,
     );
   }
-  if (unit.callFlow === undefined || unit.callFlow.length === 0) {
+  if (assessment.divergence >= DIVERGENCE_THRESHOLD) {
+    reasons.push(
+      `judgment runs disagree: maximum distribution divergence ${percent(assessment.divergence)} meets the ${percent(DIVERGENCE_THRESHOLD)} threshold`,
+    );
+  }
+  const suppliedFlow = unit.callFlow ?? [];
+  if (suppliedFlow.length === 0) {
     reasons.push("no call flow was supplied, so this judgment used the hunk alone");
+  } else if (carriedFlow < suppliedFlow.length) {
+    reasons.push(
+      `call flow was trimmed for the state size limit: ${carriedFlow} of ${suppliedFlow.length} entries were sent, highest priority first, and the rest omitted, so an absent call path is not a safety claim`,
+    );
   }
   reasons.push(ROUTING_REASON[status]);
   return reasons;
 }
 
-function judgedItem(unit: ReviewUnit, assessment: JevAssessment, mock: boolean): ReviewItem {
+function judgedItem(
+  unit: ReviewUnit,
+  state: JevState,
+  assessment: JevAssessment,
+  mock: boolean,
+): ReviewItem {
   const status = statusFor(assessment);
-  const reasons = reasonsFor(unit, assessment, status);
+  const reasons = reasonsFor(unit, assessment, status, carriedFlowCount(unit, state));
   if (mock) {
     reasons.unshift("mock mode: these values are a deterministic local fixture, not a live Jev judgment");
   }
@@ -275,8 +328,15 @@ function judgedItem(unit: ReviewUnit, assessment: JevAssessment, mock: boolean):
   };
 }
 
-function unjudgedItem(unit: ReviewUnit, reason: string, priority: number): ReviewItem {
-  return { ...unit, status: "uncertain", priority, reasons: [reason, UNJUDGED_NOTE] };
+function unjudgedItem(
+  unit: ReviewUnit,
+  reason: string,
+  priority: number,
+  routing?: ReviewRouting,
+): ReviewItem {
+  const reasons = [reason, UNJUDGED_NOTE];
+  if (routing === undefined) return { ...unit, status: "uncertain", priority, reasons };
+  return { ...unit, status: "uncertain", priority, reasons, routing };
 }
 
 function passedItem(unit: ReviewUnit, reason: string): ReviewItem {
@@ -337,7 +397,10 @@ export async function reviewUnits(
     if (route.kind === "pass") {
       routed.push({ index, item: passedItem(unit, route.reason) });
     } else if (route.kind === "manual") {
-      routed.push({ index, item: unjudgedItem(unit, route.reason, MANUAL_REVIEW_PRIORITY) });
+      routed.push({
+        index,
+        item: unjudgedItem(unit, route.reason, MANUAL_REVIEW_PRIORITY, route.routing),
+      });
     } else {
       pending.push({ index, state: route.state });
     }
@@ -349,7 +412,12 @@ export async function reviewUnits(
     for (const entry of pending) {
       routed.push({
         index: entry.index,
-        item: judgedItem(units[entry.index], mockAssessment(units[entry.index]), true),
+        item: judgedItem(
+          units[entry.index],
+          entry.state,
+          mockAssessment(units[entry.index]),
+          true,
+        ),
       });
     }
   } else if (pending.length > 0) {
@@ -359,7 +427,7 @@ export async function reviewUnits(
     await forEachConcurrent(pending, MAX_CONCURRENT_REQUESTS, async (entry) => {
       const unit = units[entry.index];
       try {
-        const item = judgedItem(unit, await client.judge(entry.state), false);
+        const item = judgedItem(unit, entry.state, await client.judge(entry.state), false);
         routed.push({ index: entry.index, item });
       } catch (error) {
         if (!(error instanceof JevRequestError) && !(error instanceof JevResponseError)) throw error;

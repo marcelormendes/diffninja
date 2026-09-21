@@ -2,8 +2,10 @@
  * C callable extraction (tree-sitter-c).
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
+  declaredParamsOf,
   collapseWs,
   locFromNode,
   namedChildren,
@@ -106,7 +108,9 @@ function collectStatements(file: string, statements: SyntaxNode[]): CallStep[] {
     const mark = `${key}:${node.startIndex}`;
     if (seen.has(mark)) return;
     seen.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node) });
+    const step: CallStep = { type: "call", key, ...locFromNode(file, node) };
+    step.syntax = heuristicCallSyntax(node, key);
+    steps.push(step);
   };
 
   const walk = (node: SyntaxNode): void => {
@@ -231,6 +235,7 @@ function handleFunction(
   functions.push({
     key: name,
     label: `${name}${getParamsLabel(node)}`,
+    params: declaredParamsOf(node),
     file,
     steps: body ? collectStatements(file, namedChildren(body)) : [],
     exported: !hasStatic(node),

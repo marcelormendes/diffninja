@@ -1,8 +1,8 @@
 /**
  * Jev (TypeSafe "System One") adapter for hunk review.
  *
- * One judgment per nontrivial hunk at the documented evaluation endpoint
- * (https://api.typesafe.ai/v1/systemone) carrying four atomic questions:
+ * Repeated judgments per nontrivial hunk at the documented evaluation endpoint
+ * (https://api.typesafe.ai/v1/systemone), each carrying four atomic questions:
  * an impact-risk score, a likely-bug noul, a category choice, and an
  * insufficient-context noul. Every one of the four is consumed by routing, so
  * none of them is speculative. Answers are validated (declared type, 0..1
@@ -19,6 +19,7 @@
  * the boundary, so no generated text can reach a review reason.
  */
 
+import { randomInt } from "node:crypto";
 import type { Judgment, ReviewOptions, ReviewUnit } from "./types.js";
 
 /** Documented evaluation endpoint. */
@@ -27,10 +28,19 @@ export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const JEV_MODEL = "jev-1.13.0";
 /** Environment variable the TypeSafe SDKs read; used when `options.apiKey` is empty. */
 export const JEV_API_KEY_ENV = "TYPESAFE_API_KEY";
+/** Independent judgments averaged for each live hunk; must be a positive integer. */
+export const JUDGMENT_RUNS = 3;
 /**
- * Largest serialized state we will send. This conservative character cap is not
- * a tokenizer or a guarantee about the API's token limits. Oversized hunks go to
- * manual review without truncation.
+ * Largest serialized state we will send, measured as `JSON.stringify(state).length`
+ * so escaping counts. This conservative character cap is not a tokenizer or a
+ * guarantee about the API's token limits.
+ *
+ * The budget is spent essentials first: `file`, `hunk`, `diff`, and `contextNote`
+ * are never trimmed. Optional call-flow entries are then admitted whole, highest
+ * retention priority first, and an entry that does not fit is dropped whole rather
+ * than truncated. Optional context alone therefore never sends a hunk to manual
+ * review: only a state whose essentials cannot fit at any trim is oversized, and
+ * even that state is returned intact.
  */
 export const MAX_STATE_CHARS = 24_000;
 /**
@@ -217,6 +227,22 @@ export const JEV_QUESTIONS: JevQuestions = {
   },
 };
 
+/** Fisher-Yates over unordered categories only; ordinal risk levels stay untouched. */
+function shuffledQuestions(randomIntImpl: (max: number) => number): JevQuestions {
+  const categories = [...REVIEW_CATEGORIES];
+  for (let index = categories.length - 1; index > 0; index -= 1) {
+    const swap = randomIntImpl(index + 1);
+    [categories[index], categories[swap]] = [categories[swap], categories[index]];
+  }
+  return {
+    ...JEV_QUESTIONS,
+    category: {
+      ...JEV_QUESTIONS.category,
+      criteria: Object.fromEntries(categories.map((category) => [category, CATEGORY_RUBRIC[category]])),
+    },
+  };
+}
+
 /** One unit of work sent to the model. */
 export interface JevState {
   readonly file: string;
@@ -233,28 +259,108 @@ export interface JevRequest {
 }
 
 /**
- * State for one hunk: the diff, the file, and the calldiff call flow when the
- * caller captured one. Nothing else is sent, because unrelated detail in the
+ * Note sent with call-flow entries. It describes what those entries are, what they
+ * cannot establish, and — independently of any size marker — that every entry the
+ * state does not list is omitted, so a pruned state is never presented as complete.
+ */
+const FLOW_CONTEXT_NOTE =
+  "callFlow contains selected static, syntactic call context from trees touching this file, not " +
+  "necessarily this hunk. Argument expressions and parameter declarations are source text, not " +
+  "runtime values. Mappings describe supported argument-binding syntax only; they are not data-flow " +
+  "analysis or proof of the runtime target. Candidate definitions are heuristic, and unknown " +
+  "mappings must not be inferred. Entries identify their source snapshot: after describes " +
+  "resulting code; before describes prior or removed code. Do not combine evidence across " +
+  "snapshots as one execution. Context is depth- and size-limited: unavailable extraction and " +
+  "truncated expressions are marked, and every call-flow entry not listed in this state is omitted. " +
+  "Dynamic calls, higher-order invocation, overload resolution, implicit arguments, unsupported " +
+  "syntax or languages, and parse failures may leave relevant context absent. These entries are " +
+  "not complete caller contracts. Missing context establishes neither safety nor a defect; " +
+  "needs_human concerns missing information necessary to assess this change.";
+
+/**
+ * Note sent when the state carries no call-flow entry. It says what a missing call
+ * flow cannot establish instead of implying the changed code was reached by nobody,
+ * and it stays within the cap's smallest essential state.
+ */
+const NO_FLOW_CONTEXT_NOTE =
+  "No call flow is included. Any supplied call-flow entries have been omitted. Caller arguments, parameter mappings, and caller contracts may be " +
+  "unavailable. This state does not establish complete caller coverage or runtime values. Absence " +
+  "of call-flow evidence establishes neither safety nor a defect; needs_human concerns missing " +
+  "information necessary to assess this change.";
+
+/** The fields a hunk must carry whole; no trim and no note ever costs them room. */
+interface EssentialState {
+  readonly file: string;
+  readonly hunk: string;
+  readonly diff: string;
+}
+
+/** One state candidate: an empty entry list omits `callFlow` rather than sending `[]`. */
+function stateOf(
+  essential: EssentialState,
+  entries: readonly string[],
+  contextNote: string,
+): JevState {
+  return {
+    file: essential.file,
+    hunk: essential.hunk,
+    diff: essential.diff,
+    callFlow: entries.length > 0 ? entries : undefined,
+    contextNote,
+  };
+}
+
+/** Admit whole blocks in priority order, accounting for their actual JSON escaping. */
+function fittingFlowEntries(essential: EssentialState, supplied: readonly string[]): string[] {
+  const retained: string[] = [];
+  // Serialize the complete envelope once; every admitted JSON string and comma
+  // adds exactly its serialized length, without repeatedly copying a large hunk.
+  let chars = JSON.stringify({ ...stateOf(essential, [], FLOW_CONTEXT_NOTE), callFlow: [] }).length;
+  for (const entry of supplied) {
+    const added = JSON.stringify(entry).length + (retained.length > 0 ? 1 : 0);
+    if (chars + added > MAX_STATE_CHARS) continue;
+    retained.push(entry);
+    chars += added;
+  }
+  return retained;
+}
+
+/**
+ * State for one hunk: the diff, the file, and the call-flow entries when the
+ * caller captured any. Nothing else is sent, because unrelated detail in the
  * state costs accuracy, and the changed-line counts the adapter already knows are
  * not fields any question asks about.
  *
- * The call flow is per file, not per hunk: calldiff matches a call tree to a file
- * when the file appears anywhere in that tree, so the note says so and a judgment
- * never claims hunks-exact context it was not given. Without a call flow the note
- * says that too.
+ * Selection is hunk-focused where source locations are available, not proof of
+ * complete caller coverage. Snapshot and binding provenance remain in each block.
+ *
+ * The essentials are laid out first and the optional entries are then admitted
+ * whole, in the priority order the caller supplied them, while the serialized
+ * state fits {@link MAX_STATE_CHARS}. Entries that do not fit are left out rather
+ * than truncated, and the only state this function returns above the cap is one
+ * whose essentials already exceed it, which is what routing reports as
+ * never-evaluated. When no entry fits, the state is the smaller no-flow one, so
+ * choosing the richer note can never by itself cost a hunk its model call.
  */
 export function buildJevState(unit: ReviewUnit): JevState {
-  const callFlow = unit.callFlow ?? [];
-  return {
-    file: unit.file,
-    hunk: unit.header,
-    diff: unit.diff,
-    callFlow: callFlow.length > 0 ? callFlow : undefined,
-    contextNote:
-      callFlow.length > 0
-        ? "callFlow contains syntactic call trees touching this file, not necessarily this hunk. Trees are depth-limited and may omit dynamic calls or parse failures; they are not complete caller contracts."
-        : "No call flow was supplied. Absence of call-flow evidence does not establish safety or a defect.",
-  };
+  const essential: EssentialState = { file: unit.file, hunk: unit.header, diff: unit.diff };
+  const supplied = unit.callFlow ?? [];
+  const base = stateOf(essential, [], NO_FLOW_CONTEXT_NOTE);
+  if (JSON.stringify(base).length > MAX_STATE_CHARS || supplied.length === 0) return base;
+
+  const retained = fittingFlowEntries(essential, supplied);
+  const kept = retained.length;
+  if (kept === 0) return base;
+  if (kept === supplied.length) return stateOf(essential, retained, FLOW_CONTEXT_NOTE);
+
+  // Factual notice of what the limit dropped, appended after the entries that were
+  // kept. It is left out when it does not fit: the note above states the same
+  // omission for the whole state, so the marker only adds the count.
+  const marker = `[call-flow entries omitted to fit the size limit: ${supplied.length - kept} of ${supplied.length}]`;
+  const marked = stateOf(essential, [...retained, marker], FLOW_CONTEXT_NOTE);
+  return JSON.stringify(marked).length <= MAX_STATE_CHARS
+    ? marked
+    : stateOf(essential, retained, FLOW_CONTEXT_NOTE);
 }
 
 /** The JSON data model, used to validate untrusted answer payloads field by field. */
@@ -576,31 +682,78 @@ export function parseAnswers(text: string): JevAnswers {
 /** A validated judgment plus the distribution evidence routing needs. */
 export interface JevAssessment {
   readonly judgment: Judgment;
-  /** Highest probability the model gave any single risk level; low means a split vote. */
+  /** Highest averaged probability of any single risk level; low means a split vote. */
   readonly riskTopProbability: number;
-  /** Highest probability the model gave any single category; low means none stands out. */
+  /** Highest averaged probability of any single category; low means none stands out. */
   readonly categoryTopProbability: number;
+  readonly riskProbabilities: Readonly<Record<string, number>>;
+  readonly categoryProbabilities: Readonly<Record<string, number>>;
+  /** Maximum total variation from a run to its mean, across category and risk. */
+  readonly divergence: number;
 }
 
-/** Combine validated answers into the shared Judgment shape. */
-export function toAssessment(answers: JevAnswers): JevAssessment {
+/** Average by option name, treating omitted zero-probability options as zero. */
+function averageProbabilities(
+  distributions: readonly Readonly<Record<string, number>>[],
+  keys: readonly string[],
+): Readonly<Record<string, number>> {
+  return Object.fromEntries(keys.map((key) => [
+    key,
+    distributions.reduce((sum, probabilities) => sum + (probabilities[key] ?? 0), 0) / distributions.length,
+  ]));
+}
+
+function maxDivergence(
+  distributions: readonly Readonly<Record<string, number>>[],
+  average: Readonly<Record<string, number>>,
+): number {
+  let maximum = 0;
+  for (const probabilities of distributions) {
+    let distance = 0;
+    for (const [key, probability] of Object.entries(average)) {
+      distance += Math.abs((probabilities[key] ?? 0) - probability);
+    }
+    maximum = Math.max(maximum, distance / 2);
+  }
+  return maximum;
+}
+
+/** Combine validated runs into one judgment; ties use the canonical category order. */
+export function toAssessment(answers: readonly JevAnswers[]): JevAssessment {
+  if (answers.length === 0) throw new RangeError("At least one judgment run is required");
+  const riskDistributions = answers.map((answer) => answer.impactRisk.probabilities);
+  const categoryDistributions = answers.map((answer) => answer.category.probabilities);
+  const riskProbabilities = averageProbabilities(riskDistributions, RISK_LEVEL_KEYS);
+  const categoryProbabilities = averageProbabilities(categoryDistributions, REVIEW_CATEGORIES);
+  let category: ReviewCategory = REVIEW_CATEGORIES[0];
+  for (const option of REVIEW_CATEGORIES) {
+    if (categoryProbabilities[option] > categoryProbabilities[category]) category = option;
+  }
+  const mean = (value: (answer: JevAnswers) => number): number =>
+    answers.reduce((sum, answer) => sum + value(answer), 0) / answers.length;
   return {
     judgment: {
-      risk: answers.impactRisk.score,
-      bug: answers.likelyBug.noul,
-      needsHuman: answers.needsHuman.noul,
-      category: answers.category.choice,
-      // Both distributions have to look settled before the answer is trusted.
-      confidence: Math.min(answers.impactRisk.confidence, answers.category.confidence),
+      risk: mean((answer) => answer.impactRisk.score),
+      bug: mean((answer) => answer.likelyBug.noul),
+      needsHuman: mean((answer) => answer.needsHuman.noul),
+      category,
+      // Vendor confidence is informational only, never a routing gate.
+      confidence: mean((answer) => Math.min(answer.impactRisk.confidence, answer.category.confidence)),
     },
-    riskTopProbability: Math.max(...Object.values(answers.impactRisk.probabilities)),
-    categoryTopProbability: Math.max(...Object.values(answers.category.probabilities)),
+    riskTopProbability: Math.max(...Object.values(riskProbabilities)),
+    categoryTopProbability: categoryProbabilities[category],
+    riskProbabilities,
+    categoryProbabilities,
+    divergence: Math.max(
+      maxDivergence(riskDistributions, riskProbabilities),
+      maxDivergence(categoryDistributions, categoryProbabilities),
+    ),
   };
 }
 
-/** Result of one HTTP attempt: a validated judgment, or a transient failure. */
+/** Result of one HTTP attempt: validated answers, or a transient failure. */
 type AttemptOutcome =
-  | { readonly kind: "answer"; readonly assessment: JevAssessment }
+  | { readonly kind: "answer"; readonly answers: JevAnswers }
   | { readonly kind: "transient"; readonly error: JevRequestError; readonly retryAfterMs: number | null };
 
 /**
@@ -612,6 +765,7 @@ export class JevClient {
   private readonly apiKey: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly waitImpl: (ms: number) => Promise<void>;
+  private readonly randomIntImpl: (max: number) => number;
   private attempts = 0;
 
   /** Total HTTP requests attempted by this run's client, including failed retries. */
@@ -623,30 +777,39 @@ export class JevClient {
     apiKey: string,
     fetchImpl: typeof globalThis.fetch,
     waitImpl: (ms: number) => Promise<void> = defaultWait,
+    randomIntImpl: (max: number) => number = randomInt,
   ) {
     this.apiKey = apiKey;
     this.fetchImpl = fetchImpl;
     this.waitImpl = waitImpl;
+    this.randomIntImpl = randomIntImpl;
   }
 
   /**
-   * Ask the four questions about one hunk state. Retries the documented transient
-   * failures with backoff, then throws once the attempts are used up; a definitive
-   * failure (bad key, rejected body) or an unusable answer throws immediately.
-   * Either way the hunk fails closed; every HTTP attempt contributes to requestCount.
+   * Average independent runs sequentially, keeping the caller's concurrency cap.
+   * Each run retries transient failures within one shared judgment deadline.
+   * Any definitive failure or unusable answer discards the whole judgment;
+   * every HTTP attempt contributes to requestCount.
    */
   async judge(state: JevState): Promise<JevAssessment> {
     if (this.apiKey.trim() === "") {
       throw missingApiKeyError(1);
     }
-    const request: JevRequest = { state, model: JEV_MODEL, questions: JEV_QUESTIONS };
-    const body = JSON.stringify(request);
     const deadline = Date.now() + JEV_RETRY.totalTimeoutMs;
+    const answers: JevAnswers[] = [];
+    for (let run = 0; run < JUDGMENT_RUNS; run += 1) {
+      answers.push(await this.judgeRun(state, deadline));
+    }
+    return toAssessment(answers);
+  }
+
+  private async judgeRun(state: JevState, deadline: number): Promise<JevAnswers> {
     for (let attempt = 1; ; attempt += 1) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new JevRequestError("The judgment deadline expired. Response body withheld.");
-      const outcome = await this.attempt(body, Math.min(JEV_TIMEOUT_MS, remaining));
-      if (outcome.kind === "answer") return outcome.assessment;
+      const request: JevRequest = { state, model: JEV_MODEL, questions: shuffledQuestions(this.randomIntImpl) };
+      const outcome = await this.attempt(JSON.stringify(request), Math.min(JEV_TIMEOUT_MS, remaining));
+      if (outcome.kind === "answer") return outcome.answers;
       if (attempt >= JEV_RETRY.maxAttempts) {
         throw new JevRequestError(
           `${outcome.error.message} Giving up after ${attempt} attempts.`,
@@ -706,7 +869,7 @@ export class JevClient {
         retryAfterMs: null,
       };
     }
-    return { kind: "answer", assessment: toAssessment(parseAnswers(responseBody)) };
+    return { kind: "answer", answers: parseAnswers(responseBody) };
   }
 }
 
@@ -785,5 +948,5 @@ export function mockAssessment(unit: ReviewUnit): JevAssessment {
       needs_human: { type: "noul", noul: 0.25 },
     },
   };
-  return toAssessment(parseAnswers(JSON.stringify(payload)));
+  return toAssessment([parseAnswers(JSON.stringify(payload))]);
 }

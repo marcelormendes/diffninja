@@ -2,8 +2,10 @@
  * Scala callable extraction (tree-sitter-scala).
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
+  declaredParamsOf,
   collapseWs,
   locFromNode,
   namedChildren,
@@ -84,7 +86,9 @@ function collectStatements(
     const mark = `${key}:${node.startIndex}`;
     if (seen.has(mark)) return;
     seen.add(mark);
-    steps.push({ type: "call", key, ...locFromNode(file, node) });
+    const step: CallStep = { type: "call", key, ...locFromNode(file, node) };
+    step.syntax = heuristicCallSyntax(node, key);
+    steps.push(step);
   };
 
   const pushIfChain = (node: SyntaxNode, asElseIf: boolean): void => {
@@ -279,6 +283,7 @@ function handleFunction(
   functions.push({
     key,
     label: `${key}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
     file,
     steps,
     exported,
@@ -291,6 +296,7 @@ function handleFunction(
     functions.push({
       key: `new ${typeName}`,
       label: `${typeName}${getParamsLabel(params)}`,
+    params: declaredParamsOf(node),
       file,
       steps,
       exported,

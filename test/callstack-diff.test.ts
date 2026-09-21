@@ -786,7 +786,7 @@ test("collects calls inside try/catch/finally and loops", () => {
   `));
 });
 
-test("ignores computed member calls", () => {
+test("keeps computed member calls as dynamic nodes", () => {
   const host = workspace();
   const from = host.commit("before", {
     "/file.ts": src`
@@ -811,6 +811,7 @@ test("ignores computed member calls", () => {
   expect(result.code).toBe(0);
   expect(result.stdout).toContain(diffOutdent(`
       run(obj, key)
+      ├─ obj[key]()
       ├─ obj.known()
     + └─ obj.other()
   `));

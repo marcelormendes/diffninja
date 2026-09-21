@@ -7,6 +7,7 @@
  * `package Foo { }` only its block.
  */
 import type { CallStep, FunctionInfo } from "../types.js";
+import { heuristicCallSyntax } from "./call-syntax.js";
 import {
   childByType,
   collapseWs,
@@ -253,6 +254,7 @@ function callStep(scope: Scope, key: string, node: SyntaxNode) {
     type: "call",
     key,
     ...locFromNode(scope.file, node),
+    syntax: heuristicCallSyntax(node, key),
   } satisfies CallStep;
 }
 
