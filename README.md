@@ -136,6 +136,19 @@ The tool writes no report files. Arguments and examples:
    the agent answers through `record_answers`, and the answers appear on the
    report page attributed to that agent, never reordering anything. diffninja
    itself still calls no model.
+5. **Project context (git ranges only).** What a diff does not show is often
+   the project around it. From the local clone alone — nothing is fetched —
+   the report names the commits that last changed each hunk's removed lines
+   (`git blame` at the base), earlier revert commits that touched a changed
+   file or share a rare word with the goal or the changed file names,
+   contributor guidelines that apply (`CONTRIBUTING`, `AGENTS.md`, `.github/`,
+   docs policy pages such as versioning or preview rules), and, for a new
+   file, identifiers most of its same-named siblings use and it does not
+   (`components/*/select.py`). They add questions for your agent: does a hunk
+   undo a fix it removes, does the change reintroduce something reverted, does
+   it follow the guidelines and the sibling pattern. These are pointers, not
+   verdicts, and never change status or order. A shallow clone says so: lines
+   whose origin lies past its boundary count as unknown.
 
 Intent cross-checks keep author claims and generated summaries separate.
 Source matches are navigation evidence, not proof of fulfillment. Broad goals,

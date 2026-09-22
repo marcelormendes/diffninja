@@ -240,12 +240,24 @@ function renderItemBody(item: ReviewItem, questions: readonly ReviewQuestion[]):
     '<div class="body">',
     special,
     renderFacts(item),
+    renderHistory(item),
     renderQuestions(questions),
     renderDiff(item.diff),
     "</div>",
   ]
     .filter((part) => part !== "")
     .join("\n");
+}
+
+/** The commits that last changed the lines this hunk removes, from the local repository. */
+function renderHistory(item: ReviewItem): string {
+  const history = item.history;
+  if (history === undefined) return "";
+  const rows = history.origins.map((origin) =>
+    `<li><span class="mono">${escapeHtml(origin.commit)}</span> ${escapeHtml(origin.date)} ${escapeHtml(origin.subject)} ` +
+    `<span class="obs-line">${origin.lines} line(s)${origin.notable ? ", names a fix or compatibility concern" : ""}</span></li>`);
+  if (history.unknownLines > 0) rows.push(`<li class="obs-line">${history.unknownLines} line(s) of unknown origin (shallow or unreadable history)</li>`);
+  return `<div class="note">Removed lines last changed by:<ul>${rows.join("")}</ul></div>`;
 }
 
 /**

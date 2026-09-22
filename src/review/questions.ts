@@ -17,10 +17,13 @@
 import { factQuestionsFor } from "./change-facts.js";
 import type { PullRequestIntent } from "./evidence-types.js";
 import { testLikeFile } from "./file-role.js";
+import type { ProjectContext } from "./history.js";
 import type { ReviewItem } from "./types.js";
 
 /** Most questions one report asks; hunks earlier in the report are asked first. */
 export const MAX_REVIEW_QUESTIONS = 36;
+/** Most revert and removed-fix questions one report asks; the rest stay in the project context. */
+export const MAX_HISTORY_QUESTIONS = 3;
 
 export const QUESTION_OPTIONS = {
   behaviorChange: ["changes-behavior", "no-behavior-change", "cannot-tell"],
@@ -28,6 +31,10 @@ export const QUESTION_OPTIONS = {
   testWeakened: ["weakens", "does-not-weaken", "cannot-tell"],
   docMatchesCode: ["matches", "contradicts", "cannot-tell"],
   intentFit: ["serves", "supports", "unrelated", "contradicts", "cannot-tell"],
+  undoesFix: ["keeps-its-purpose", "undoes-it", "cannot-tell"],
+  repeatsRevert: ["reintroduces-it", "different-change", "cannot-tell"],
+  followsGuidelines: ["follows", "breaks-a-rule", "not-covered", "cannot-tell"],
+  followsConvention: ["should-follow", "differs-for-a-reason", "cannot-tell"],
 } as const;
 
 export type QuestionKind = keyof typeof QUESTION_OPTIONS;
@@ -73,16 +80,61 @@ function isRead(item: ReviewItem): boolean {
 }
 
 /** The questions for one report, in report order, at most {@link MAX_REVIEW_QUESTIONS}. */
-export function reviewQuestions(items: readonly ReviewItem[], intent?: PullRequestIntent): ReviewQuestion[] {
+export function reviewQuestions(items: readonly ReviewItem[], intent?: PullRequestIntent, project?: ProjectContext): ReviewQuestion[] {
   const drafts: Omit<ReviewQuestion, "id">[] = [];
   const ask = (kind: QuestionKind, unitIds: readonly string[], text: string) =>
     drafts.push({ kind, unitIds, text, options: QUESTION_OPTIONS[kind] });
   const tests = items.filter((item) => isRead(item) && testLikeFile(item.file));
   const goal = intent?.title.trim() ?? "";
 
+  // Project questions first: there are few, and each needs the agent to read beyond the diff.
+  const firstRead = items.find((item) => isRead(item) && !testLikeFile(item.file)) ?? items.find(isRead);
+  if (project !== undefined && firstRead !== undefined) {
+    for (const revert of project.reverts.slice(0, MAX_HISTORY_QUESTIONS)) {
+      const reason = revert.reason;
+      const owner = reason.kind === "file" ? items.find((item) => item.file === reason.file && isRead(item)) : undefined;
+      ask(
+        "repeatsRevert",
+        [(owner ?? firstRead).id],
+        `Commit ${revert.commit} (${revert.date}) was a revert: "${revert.subject}". Read it (git show ${revert.commit}). ` +
+          "Does this change reintroduce what was reverted, or a close variant of it?",
+      );
+    }
+    if (project.guidelines.length > 0) {
+      ask(
+        "followsGuidelines",
+        [firstRead.id],
+        `This repository has contributor guidelines: ${project.guidelines.join(", ")}. Read the ones that apply to the changed files. ` +
+          "Does the change follow them (process, versioning or preview rules, style, tests, documentation)?",
+      );
+    }
+    for (const convention of project.conventions) {
+      const owner = items.find((item) => item.file === convention.file) ?? firstRead;
+      const names = convention.common.map((entry) => `${entry.name} (${entry.peers}/${convention.peers})`).join(", ");
+      ask(
+        "followsConvention",
+        [owner.id],
+        `Most files matching ${convention.pattern} use ${names}; the new ${convention.file} uses none of them. ` +
+          "Read two or three of those files. Should the new file follow their pattern?",
+      );
+    }
+  }
+
+  let fixQuestions = 0;
   for (const item of items) {
     if (!isRead(item)) continue;
     const language = item.facts!.language!;
+    // Tests and their snapshots change with the code they check; asked about in code only.
+    const origin = testLikeFile(item.file) ? undefined : item.history?.origins.find((entry) => entry.notable);
+    if (origin !== undefined && fixQuestions < MAX_HISTORY_QUESTIONS) {
+      fixQuestions += 1;
+      ask(
+        "undoesFix",
+        [item.id],
+        `${hunkName(item)} removes or rewrites ${origin.lines} line(s) last changed by ${origin.commit} (${origin.date}) "${origin.subject}". ` +
+          `Read that commit (git show ${origin.commit}). Does this hunk undo what it did, without keeping its purpose some other way?`,
+      );
+    }
     if (testLikeFile(item.file)) {
       if (mayWeakenTest(item)) {
         ask("testWeakened", [item.id], `Does this change to ${hunkName(item)} weaken what the test checks (a removed or loosened assertion, a skipped or exclusive test)?`);

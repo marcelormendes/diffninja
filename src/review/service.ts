@@ -16,6 +16,8 @@ import { crossCheckIntent } from "./intent.js";
 import { checkReferences } from "./reference-check.js";
 import { moduleResolver } from "./module-resolution.js";
 import { reviewQuestions } from "./questions.js";
+import { readProjectContext } from "./history.js";
+import type { ProjectContext } from "./history.js";
 
 export type ReviewInput =
   | { diff: string; source: string }
@@ -153,14 +155,20 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   // it per hunk, so a change to a widely used type cannot produce a report of tens
   // of megabytes (one real hunk had thousands of callers).
   for (const unit of units) boundReportContext(unit);
+  // History, guidelines, and conventions come from the local repository only.
+  const project: ProjectContext | undefined = snapshots
+    ? readProjectContext(cwd!, snapshots.from, snapshots.to, units, options.pr?.title ?? "")
+    : undefined;
   const result = reviewUnits(units);
   // Structured flows are grouped per changed file in report order, after
   // ranking, so the HTML can order files by the severity of their worst hunk.
   const callFlows = buildCallFlows(reportOrderedTextHunkFiles(result.items, units), trees, nodeDetail);
   if (callFlows.length > 0) callFlowAvailability = "available";
-  return { title: options.pr?.title || "Focused PR review", source, createdAt: new Date().toISOString(),
+  const report: ReviewReport = { title: options.pr?.title || "Focused PR review", source, createdAt: new Date().toISOString(),
     pr: options.pr,
     evidence: { ...evidence, intent: crossCheckIntent(options.pr, units, evidence.agenda, evidence.findings) },
     ...result, callFlow, callFlows, callFlowAvailability, warnings: [...warnings, ...result.warnings],
-    questions: reviewQuestions(result.items, options.pr) };
+    questions: reviewQuestions(result.items, options.pr, project) };
+  if (project !== undefined) report.project = project;
+  return report;
 }

@@ -1,4 +1,5 @@
 import type { ReviewContextNode, ReviewItem, ReviewReport } from "./types.js";
+import type { ProjectContext } from "./history.js";
 import type {
   AutomaticFinding,
   CheckCoverage,
@@ -50,12 +51,39 @@ export function renderBrief(report: ReviewReport): string {
     evidence === undefined
       ? '<p class="ev-note">No intent cross-check was recorded for this report.</p>'
       : renderIntent(evidence.intent, ranks),
+    report.project === undefined ? "" : renderProject(report.project),
     evidence === undefined ? "" : renderChecks(evidence.checks),
     evidence === undefined ? "" : renderAgenda(evidence.agenda, ranks, claimed, findingsAt),
     evidence === undefined ? "" : renderFindings(evidence.findings, ranks),
   ]
     .filter((part) => part !== "")
     .join("\n");
+}
+
+/**
+ * Repository context the diff does not show: related reverts, contributor
+ * guidelines, and sibling-file conventions. Commit subjects and paths are
+ * repository text, printed escaped; they are pointers to read, not verdicts.
+ */
+function renderProject(project: ProjectContext): string {
+  const rows: string[] = [];
+  for (const revert of project.reverts) {
+    const why = revert.reason.kind === "file" ? `touched ${revert.reason.file}` : `shares the word “${revert.reason.term}”`;
+    rows.push(`<li><span class="mono">${escapeHtml(revert.commit)}</span> ${escapeHtml(revert.date)} ${escapeHtml(revert.subject)} <span class="ev-note">(revert; ${escapeHtml(why)})</span></li>`);
+  }
+  for (const path of project.guidelines) rows.push(`<li>Guideline: <span class="mono">${escapeHtml(path)}</span></li>`);
+  for (const convention of project.conventions) {
+    const names = convention.common.map((entry) => `${entry.name} (${entry.peers}/${convention.peers})`).join(", ");
+    rows.push(`<li>New <span class="mono">${escapeHtml(convention.file)}</span> uses none of what most <span class="mono">${escapeHtml(convention.pattern)}</span> files use: <span class="mono">${escapeHtml(names)}</span></li>`);
+  }
+  const shallow = project.history === "shallow"
+    ? '<p class="ev-note">This clone is shallow: line history and reverts before its boundary are missing.</p>'
+    : "";
+  return [
+    '<h2 id="brief-project">Project context</h2>',
+    shallow,
+    rows.length === 0 ? '<p class="ev-note">No related reverts, guidelines, or sibling conventions were found.</p>' : `<ul>${rows.join("")}</ul>`,
+  ].filter((part) => part !== "").join("\n");
 }
 
 /**

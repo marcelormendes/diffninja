@@ -68,6 +68,11 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - Static success returns `structuredContent` equal to the `ReviewReport` plus
     `reportUrl` and `reviewId`; the report carries `questions` (`questions.ts`,
     deterministic templates, closed options incl. `cannot-tell`, at most 36; import-only hunks are not asked about).
+    A git-range report also carries `project` (`history.ts`): line origins per
+    hunk (`items[].history`, blame at the base), related reverts, applicable
+    guideline paths, and new-file sibling conventions, all from local git only,
+    code-point sorted, and never affecting status, priority, or order; a shallow
+    clone reports `history: "shallow"` and counts cut lines as unknown.
   - `record_answers`: strict `{ reviewId, answers: [{ questionId, choice }] }`,
     no free text; any invalid answer refuses the whole call and keeps nothing;
     answers are attributed to the MCP client's own name/version, re-render the
@@ -119,7 +124,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   the deterministic checks, status, ranking, and order; `review-change-facts.test.ts`
   the lexical facts; `review-report-pages.test.ts` the report pages;
   `review-input.test.ts` and `review-html.test.ts` cover parsing and rendering;
-  `review-cli.test.ts` covers the setup-only command. `review-mcp.test.ts` covers the MCP tool through
+  `review-cli.test.ts` covers the setup-only command. `review-history.test.ts`
+  covers the project context against temporary repositories (full and shallow). `review-mcp.test.ts` covers the MCP tool through
   `createReviewServer()`: input validation, the structured report, its JSON
   text twin, and error cases — assert the outward result, not internal wiring.
   `review-setup.test.ts` covers `runSetup()` (detection, dry-run, entry

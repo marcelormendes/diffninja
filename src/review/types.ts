@@ -1,6 +1,7 @@
 import type { PullRequestIntent, ReviewEvidence } from "./evidence-types.js";
 import type { ChangeFacts } from "./change-facts.js";
 import type { ReviewQuestion } from "./questions.js";
+import type { HunkHistory, ProjectContext } from "./history.js";
 
 export type ReviewStatus = "attention" | "uncertain" | "low" | "passed";
 /**
@@ -113,6 +114,8 @@ export interface ReviewUnit {
    * An empty array is never set in place of "no context".
    */
   contextNodes?: ReviewContextNode[];
+  /** Commits that last changed the lines this hunk removes; git-range reviews only. */
+  history?: HunkHistory;
 }
 export interface ReviewItem extends ReviewUnit {
   status: ReviewStatus;
@@ -140,6 +143,11 @@ export interface ReviewReport {
   warnings: string[];
   /** Questions for the reviewing agent's model, bound to hunks; answers never reorder the report. */
   questions: ReviewQuestion[];
+  /**
+   * Local repository context for a git-range review: prior reverts, contributor
+   * guidelines, and sibling-file conventions. Absent for a patch.
+   */
+  project?: ProjectContext;
 }
 export interface ReviewOptions {
   /** Exact PR metadata, treated as untrusted evidence rather than instructions. */
