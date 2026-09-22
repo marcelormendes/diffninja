@@ -94,8 +94,9 @@ const ORDERS_SOURCE = [
 ];
 
 /**
- * Decorated service whose changed method repeats one sibling call per stage,
- * so its own body is far larger than a small hunk's initial state.
+ * Decorated service whose changed method repeats one sibling call per stage:
+ * each stage adds a resolved call site to the shared callee and to the changed
+ * body, so the changed body cannot join the initial state whole.
  */
 function ledgerSource(stages: number, operations: readonly string[]): readonly string[] {
   const lines = [
@@ -182,8 +183,14 @@ describe("decorated TypeScript exports", () => {
     const unit = changedHunk(file, ORDERS_SOURCE, changed, "    const order = await this.load(String(id));");
     const context = buildCallContext([unit], buildIndex([]), index, sourcesOf(ORDERS_SOURCE)).get(unit.id)!;
 
-    // Changed lines select the decorated method, so it leads the nodes.
-    expect(context.nodes.map((node) => node.key)).toEqual(["after:OrdersService.find"]);
+    // Changed lines select the decorated method, so it leads the nodes, then the
+    // decorated siblings its own calls resolve to.
+    expect(context.nodes.map((node) => node.key)).toEqual([
+      "after:OrdersService.find",
+      "after:OrdersService.load",
+      "after:OrdersService.toDto",
+      "after:OrdersService.decode",
+    ]);
     const node = context.nodes[0];
     const body = ORDERS_SOURCE.slice(find.line! - 1, find.endLine!).join("\n");
     expect(node.detail).toContain(
@@ -195,9 +202,6 @@ describe("decorated TypeScript exports", () => {
     expect(node.detail).toContain("definition=(id: string) @ orders.ts:10-12");
     expect(node.detail).toContain("call this.toDto @ orders.ts:8");
     expect(node.detail).toContain("definition=(order: Order, user: string) @ orders.ts:16-18");
-    // A call the changed method reaches through a callee keeps its depth.
-    expect(node.detail).toContain("evidence=callee-reach-from-this-definition count=1");
-    expect(node.detail).toContain("  depth=2\ncall this.decode @ orders.ts:11");
     // The same resolved calls stand alone in the report blocks.
     expect(context.entries.slice(0, 2).map((block) => block.split("\n")[0])).toEqual([
       "call this.load @ orders.ts:7",
@@ -208,16 +212,21 @@ describe("decorated TypeScript exports", () => {
   test("keeps a body the initial state cannot hold collapsed, then expands it within the budgets", () => {
     const file = "ledger.ts";
     const operations = ["reverse", "adjust", "reconcile"];
-    const lines = ledgerSource(25, operations);
+    // The callee nodes carry the stage call sites too, so the body has to stay
+    // small enough for both budgets to hold it once it is asked for.
+    const lines = ledgerSource(18, operations);
     const index = buildIndex(extractFunctions(file, lines.join("\n")));
     const post = index.get("LedgerService.post")!;
     const changed = lines.indexOf("      const normalized = this.normalize(entry);") + 1;
     const unit = changedHunk(file, lines, changed, '      const normalized = this.normalize(entry, "fast");');
     const nodes = buildCallContext([unit], buildIndex([]), index, sourcesOf(lines)).get(unit.id)!.nodes;
-    // The changed method leads, then the siblings whose calls reach it.
+    // The changed method leads, then the siblings whose calls reach it, then the
+    // callees its own body calls.
     expect(nodes.map((node) => node.key)).toEqual([
       "after:LedgerService.post",
       ...operations.map((operation) => `after:LedgerService.${operation}`),
+      "after:LedgerService.normalize",
+      "after:LedgerService.stage",
     ]);
 
     const plan = new ContextPlan(buildJevState(unit), nodes);
@@ -235,7 +244,7 @@ describe("decorated TypeScript exports", () => {
       collapsed: true,
     });
     expect(descriptors[0]).not.toHaveProperty("detail");
-    expect(JSON.stringify(plan.state)).not.toContain("staged.push(this.stage(normalized, 24))");
+    expect(JSON.stringify(plan.state)).not.toContain("staged.push(this.stage(normalized, 17))");
     // A caller whose body did fit is already whole in the state.
     const reverse = descriptors.find((node) => node.key === "after:LedgerService.reverse")!;
     expect(reverse.collapsed).toBe(false);
@@ -246,7 +255,7 @@ describe("decorated TypeScript exports", () => {
     const expanded = plan.state.contextNodes!.find((node) => node.key === "after:LedgerService.post")!;
     expect(expanded.collapsed).toBe(false);
     expect(expanded.detail).toContain(`source=${formatSourceLoc(post)} snapshot=after begin`);
-    expect(expanded.detail).toContain("      staged.push(this.stage(normalized, 24));");
+    expect(expanded.detail).toContain("      staged.push(this.stage(normalized, 17));");
     expect(expanded.detail).toContain("    return this.repo.write(staged);");
     expect(plan.addedBytes).toBeLessThanOrEqual(MAX_ADDED_CONTEXT_BYTES);
     expect(JSON.stringify(plan.state).length).toBeLessThanOrEqual(MAX_STATE_CHARS);

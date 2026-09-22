@@ -72,14 +72,14 @@ interface ContextNodePlan {
   definition: Definition;
   key: string;
   side: SnapshotSide;
-  role: "changed-definition" | "caller";
+  role: "changed-definition" | "caller" | "callee";
   /** Call sites written in this definition. */
   calls: SelectedEdge[];
   /** Call sites resolved to this definition, which are its callers. */
   reachedBy: SelectedEdge[];
-  /** Selected call sites below this definition's own calls. */
+  /** Selected call sites below this definition whose owner has no node of its own. */
   calleeReach: SelectedEdge[];
-  /** Selected call sites above this definition's callers. */
+  /** Selected call sites above this definition whose owner has no node of its own. */
   callerReach: SelectedEdge[];
 }
 
@@ -244,10 +244,11 @@ function nodeKey(info: FunctionInfo, side: SnapshotSide, taken: Set<string>): st
 
 /**
  * The nodes one hunk's selection describes: the changed definition in each
- * snapshot, then the definitions that call it, each carrying the call sites and
- * bindings the selection already extracted. A selected edge is attached to its
- * owner's node and, when the edge resolved into a node as well, to that node's
- * caller evidence, so no existing evidence is dropped on the way here.
+ * snapshot, the definitions that call it, then the definitions its calls
+ * resolve to, each carrying the call sites and bindings the selection already
+ * extracted. A selected edge is attached to its owner's node and, when the edge
+ * resolved into a node as well, to that node's caller evidence, so no existing
+ * evidence is dropped on the way here.
  */
 function nodePlans(
   sides: readonly { side: SnapshotSide; selection: Selection }[],
@@ -271,13 +272,24 @@ function nodePlans(
 
   // Hunk definitions of both snapshots lead — the resulting snapshot first,
   // because it is the code under review — then the definitions that call them,
-  // which are the caller contracts a hunk alone cannot show.
+  // which are the caller contracts a hunk alone cannot show, then the
+  // definitions their selected calls resolve to, nearest first, which are the
+  // callee bodies a call signature alone cannot show.
   for (const { side, selection } of sides) for (const seed of selection.seeds) add(seed, side, "changed-definition");
   for (const { side, selection } of sides) {
     for (const entry of selection.selected) {
       if (entry.direction !== "incoming") continue;
       add(entry.edge.owner, side, "caller");
     }
+  }
+  for (const { side, selection } of sides) {
+    // The walk already holds one entry per selected edge at the shortest
+    // distance it was reached, so a stable sort by distance orders a callee
+    // before the definitions that callee in turn reaches.
+    const callees = selection.selected
+      .filter(entry => entry.direction === "outgoing" && entry.edge.target !== undefined)
+      .sort((left, right) => left.distance - right.distance);
+    for (const entry of callees) add(entry.edge.target!, side, "callee");
   }
 
   for (const { selection } of sides) {
@@ -290,7 +302,8 @@ function nodePlans(
       if (owner) owner.calls.push(entry);
       if (target && target !== owner) target.reachedBy.push(entry);
       if (owner || target) continue;
-      // Deeper evidence stays with the hunk definition whose walk found it.
+      // A definition the snapshot gave no line never became a node, so its
+      // edges stay with the hunk definition whose walk found them.
       const anchor = byDefinition.get(entry.anchor);
       if (!anchor) continue;
       if (entry.direction === "incoming") anchor.callerReach.push(entry);

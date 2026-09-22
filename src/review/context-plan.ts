@@ -70,7 +70,7 @@ const NO_EXPANSION: ReadonlySet<string> = new Set<string>();
  * collapsed descriptor does and does not reveal.
  */
 const STRUCTURED_CONTEXT_CAVEAT =
-  "contextNodes contains selected static, syntactic context for this file: caller and parent " +
+  "contextNodes contains selected static, syntactic context for this file: changed, caller, and callee " +
   "definition bodies read from one snapshot. Argument expressions, parameter declarations, and " +
   "definition sources are source text, not runtime values; mappings describe supported " +
   "argument-binding syntax only and are not data-flow analysis or proof of the runtime target; " +

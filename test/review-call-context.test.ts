@@ -189,7 +189,7 @@ describe("structured context nodes", () => {
 
   test("keys a parent definition by snapshot and carries its whole source verbatim", () => {
     const planned = nodes(source, 1, { after: () => source });
-    expect(planned).toHaveLength(1);
+    expect(planned.map(node => node.key)).toEqual(["after:caller", "after:callee"]);
     const [node] = planned;
     expect(node).toMatchObject({ key: "after:caller", label: "caller(arg)", file: "caller.ts", line: 1 });
     expect(node.detail).toContain("context node after:caller");
@@ -210,7 +210,10 @@ describe("structured context nodes", () => {
       "}",
       "function callee(param) { return param; }",
     ].join("\n"), 2, { after: definition => { requested.push(definition); return "function callee(param) { return param; }"; } });
-    expect(requested).toEqual([{ file: "caller.ts", line: 1, endLine: 3 }]);
+    expect(requested).toEqual([
+      { file: "caller.ts", line: 1, endLine: 3 },
+      { file: "caller.ts", line: 4 },
+    ]);
   });
 
   test("states an unavailable source instead of hiding the node", () => {
@@ -221,22 +224,22 @@ describe("structured context nodes", () => {
     expect(node.detail).toContain("evidence=call-sites-in-this-definition count=1");
   });
 
-  test("adds a caller node whose definition reaches the changed one", () => {
+  test("adds the caller that reaches the changed definition and the callee it reaches", () => {
     const planned = nodes([
       "function caller(arg) { callee(arg); }",
       "function callee(param) { helper(param); }",
       "function helper(param) { return param; }",
     ].join("\n"), 2, { after: () => null });
-    expect(planned.map(node => [node.key, node.detail.includes("role=caller")])).toEqual([
-      ["after:callee", false], ["after:caller", true],
-    ]);
+    expect(planned.map(node => node.key)).toEqual(["after:callee", "after:caller", "after:helper"]);
     const caller = planned.find(node => node.key === "after:caller")!;
+    expect(caller.detail).toContain("role=caller");
     expect(caller.detail).toContain("evidence=call-sites-in-this-definition count=1");
     expect(caller.detail).toContain('call callee @ caller.ts:1');
     expect(caller.detail).toContain('arg[1] -> param: "arg"');
     const callee = planned.find(node => node.key === "after:callee")!;
     expect(callee.detail).toContain('call helper @ caller.ts:2');
     expect(callee.detail).toContain("evidence=call-sites-in-this-definition count=1");
+    expect(planned.find(node => node.key === "after:helper")!.detail).toContain("role=callee");
   });
 
   test("keeps upstream ancestor definitions addressable, not just their call sites", () => {
@@ -276,18 +279,65 @@ describe("structured context nodes", () => {
     expect(prior.detail).not.toContain('arg[1] -> param2');
   });
 
-  test("keeps a node's callee-reach evidence attached to the definition that reaches it", () => {
-    const planned = nodes([
-      "function caller(arg) { callee(arg); }",
-      "function callee(param) { nested(param); }",
-      "function nested(param) { deep(param); }",
-      "function deep(param) { return param; }",
-    ].join("\n"), 1, { after: () => null });
-    const parent = planned[0];
-    expect(parent.key).toBe("after:caller");
-    expect(parent.detail).toContain("evidence=callee-reach-from-this-definition count=2");
-    expect(parent.detail).toContain("  depth=2\ncall nested @ caller.ts:2");
-    expect(parent.detail).toContain("  depth=3\ncall deep @ caller.ts:3");
+  test("carries the caller, the changed definition, and its callees as nodes within depth", () => {
+    const lines = [
+      "function caller(arg) {",
+      "  changed(arg);",
+      "  sibling(arg);",
+      "}",
+      "function changed(input) {",
+      "  return callee(input);",
+      "}",
+      "function sibling(param) { return param; }",
+      "function callee(param) {",
+      "  return nested(param);",
+      "}",
+      "function nested(param) {",
+      "  return deeper(param);",
+      "}",
+      "function deeper(param) {",
+      "  return deepest(param);",
+      "}",
+      "function deepest(param) { return beyond(param); }",
+      "function beyond(param) { return param; }",
+    ];
+    const source = lines.join("\n");
+    const planned = nodes(source, 5, {
+      after: definition => lines.slice(definition.line - 1, definition.endLine ?? definition.line).join("\n"),
+    });
+    // The changed definition leads, then the caller that reaches it, then the
+    // callees nearest first. The sibling the caller also calls gets no node, and
+    // the depth limit cuts the definition past `deepest` out entirely.
+    expect(planned.map(node => node.key)).toEqual([
+      "after:changed", "after:caller", "after:callee", "after:nested", "after:deeper", "after:deepest",
+    ]);
+    const detailOf = (key: string) => planned.find(node => node.key === key)!.detail;
+    // Every node carries the snapshot's own text for its own span, whole.
+    expect(detailOf("after:caller")).toContain(
+      "source=caller.ts:1-4 snapshot=after begin\nfunction caller(arg) {\n  changed(arg);\n  sibling(arg);\n}\n  source-end",
+    );
+    expect(detailOf("after:changed")).toContain(
+      "source=caller.ts:5-7 snapshot=after begin\nfunction changed(input) {\n  return callee(input);\n}\n  source-end",
+    );
+    expect(detailOf("after:callee")).toContain(
+      "source=caller.ts:9-11 snapshot=after begin\nfunction callee(param) {\n  return nested(param);\n}\n  source-end",
+    );
+    // A call site stays on the definition that writes it, and the binding it
+    // resolved to stays on the callee node, however deep the callee sits.
+    expect(detailOf("after:changed")).toContain("evidence=call-sites-in-this-definition count=1");
+    expect(detailOf("after:changed")).toContain('call callee @ caller.ts:6');
+    expect(detailOf("after:callee")).toContain("evidence=call-sites-reaching-this-definition count=1");
+    expect(detailOf("after:callee")).toContain('call callee @ caller.ts:6');
+    expect(detailOf("after:callee")).toContain('arg[1] -> param: "input"');
+    expect(detailOf("after:callee")).toContain('call nested @ caller.ts:10');
+    expect(detailOf("after:deeper")).toContain('call deepest @ caller.ts:16');
+    expect(detailOf("after:deepest")).toContain("evidence=call-sites-reaching-this-definition count=1");
+    // The caller's other calls are not expanded, and the walk stops at depth four.
+    expect(detailOf("after:caller")).toContain('call changed @ caller.ts:2');
+    const blocks = context(source, 5).join("\n");
+    expect(blocks).toContain("reason=distant-descendants-or-siblings depth-limit=4");
+    expect(blocks).not.toContain('call sibling @ caller.ts:3');
+    expect(blocks).not.toContain("call beyond @ caller.ts:19");
   });
 
   test("reports no evidence rather than an empty node body", () => {

@@ -64,8 +64,8 @@ export interface CallFlowFile {
  */
 export type CallFlowAvailability = "available" | "needs-git-range" | "no-changes" | "failed";
 /**
- * One keyed piece of structured review context for a hunk: a caller or parent
- * definition with its snapshot-bound source and the call/binding evidence
+ * One keyed piece of structured review context for a hunk: a changed, caller, or
+ * callee definition with its snapshot-bound source and the call/binding evidence
  * extracted for it. `key` is what makes the node addressable, so a later round
  * can ask for exactly this node's `detail` instead of the whole report text.
  */

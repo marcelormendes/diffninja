@@ -23,9 +23,28 @@ import {
   type JsEnv,
 } from "./call-syntax.js";
 
+/** Declared class type of a `this.<name>` receiver, keyed by the field's name. */
+type ClassReceivers = ReadonlyMap<string, string>;
+
+/** How one scope reads `this`: its class owner and its fields' declared types. */
+interface ClassContext {
+  className: string | null;
+  /** Class type of each `this.<name>` receiver the scope can reach. */
+  receivers: ClassReceivers;
+}
+
+/** Scope of one TypeScript body: the shared JS bindings plus `this` knowledge. */
+interface TsEnv extends JsEnv, ClassContext {}
+
+/** Nothing declared: no class owner, no field type to reach a receiver through. */
+const NO_RECEIVERS: ClassReceivers = new Map();
+
+/** A `new` target names a class, not a member of the enclosing class. */
+const NO_CLASS: ClassContext = { className: null, receivers: NO_RECEIVERS };
+
 /** Module-level scope of the file being extracted, plus an empty class. */
-function moduleEnv(root: SyntaxNode): JsEnv {
-  return { scope: jsModuleScope(root), className: null };
+function moduleEnv(root: SyntaxNode): TsEnv {
+  return { scope: jsModuleScope(root), className: null, receivers: NO_RECEIVERS };
 }
 
 function isFnLike(type: string): boolean {
@@ -94,9 +113,30 @@ function branchKey(kind: "if" | "else-if" | "else", cond: string): string {
   return `${kind}:${cond}`;
 }
 
-function calleeKey(node: SyntaxNode, className: string | null): string | null {
+/**
+ * Declared class type of a receiver reached through `this.<field>`: the field
+ * or constructor parameter property it names, and nothing else. A receiver the
+ * scope cannot type resolves to nothing rather than to the enclosing class.
+ */
+function thisReceiverType(
+  object: SyntaxNode,
+  receivers: ClassReceivers,
+): string | null {
+  if (object.type !== "member_expression") return null;
+  const root = object.namedChild(0);
+  const property =
+    namedChildren(object).find(
+      (c) =>
+        c.type === "property_identifier" ||
+        c.type === "private_property_identifier",
+    ) ?? null;
+  if (root?.type !== "this" || !property) return null;
+  return receivers.get(property.text) ?? null;
+}
+
+function calleeKey(node: SyntaxNode, ctx: ClassContext): string | null {
   if (node.type === "identifier") return node.text;
-  if (node.type === "this") return className;
+  if (node.type === "this") return ctx.className;
 
   if (node.type === "member_expression") {
     const object = node.namedChild(0);
@@ -109,14 +149,18 @@ function calleeKey(node: SyntaxNode, className: string | null): string | null {
     if (!object || !property) return null;
 
     const propName = property.text;
-    if (object.type === "this" && className) {
-      return `${className}.${propName}`;
+    if (object.type === "this" && ctx.className) {
+      return `${ctx.className}.${propName}`;
     }
     if (object.type === "identifier") {
       return `${object.text}.${propName}`;
     }
-    if (className) return `${className}.${propName}`;
-    return propName;
+    // `this.<field>.<method>()`: key by the receiver's declared class, never by
+    // the class the call was written in. An untyped receiver keeps its own text
+    // as the key, so it cannot borrow a same-named method of the wrong owner.
+    const receiver = thisReceiverType(object, ctx.receivers);
+    if (receiver) return `${receiver}.${propName}`;
+    return null;
   }
 
   return null;
@@ -126,14 +170,14 @@ function calleeKey(node: SyntaxNode, className: string | null): string | null {
  * Treat JSX tags as component "calls". PascalCase identifiers and any
  * member expression (`Foo.Bar`, `motion.div`) count; lowercase tags are HTML.
  */
-function jsxCalleeKey(node: SyntaxNode): string | null {
+function jsxCalleeKey(node: SyntaxNode, ctx: ClassContext): string | null {
   for (const child of namedChildren(node)) {
     if (child.type === "identifier") {
       const name = child.text;
       return /^[A-Z]/.test(name) ? name : null;
     }
     if (child.type === "member_expression") {
-      return calleeKey(child, null);
+      return calleeKey(child, ctx);
     }
     if (
       child.type === "jsx_attribute" ||
@@ -158,7 +202,7 @@ function statementsOf(node: SyntaxNode): SyntaxNode[] {
 function collectStatements(
   file: string,
   statements: SyntaxNode[],
-  env: JsEnv,
+  env: TsEnv,
 ): CallStep[] {
   const steps: CallStep[] = [];
   const seenCalls = new Set<string>();
@@ -269,7 +313,7 @@ function collectStatements(
     if (type === "call_expression" || type === "new_expression") {
       const isNew = type === "new_expression";
       const callee = node.namedChild(0);
-      const bare = callee ? calleeKey(callee, isNew ? null : env.className) : null;
+      const bare = callee ? calleeKey(callee, isNew ? NO_CLASS : env) : null;
       const args = childByType(node, "arguments");
       const syntax = callee ? jsCallSyntax(callee, args, env) : undefined;
       // A dynamic target has no key from `calleeKey`; the call is still a call,
@@ -309,7 +353,7 @@ function collectStatements(
         ...fromAttrs,
         ...collectStatements(file, childNodes, env),
       ];
-      emitCall(opening ? jsxCalleeKey(opening) : null, opening ?? node, nested);
+      emitCall(opening ? jsxCalleeKey(opening, env) : null, opening ?? node, nested);
       return;
     }
 
@@ -318,7 +362,7 @@ function collectStatements(
         (c) => c.type === "jsx_attribute" || c.type === "jsx_expression",
       );
       emitCall(
-        jsxCalleeKey(node),
+        jsxCalleeKey(node, env),
         node,
         collectStatements(file, attrNodes, env),
       );
@@ -380,7 +424,7 @@ function unwrapCurriedBody(body: SyntaxNode | null): SyntaxNode | null {
 function stepsFromArguments(
   file: string,
   args: SyntaxNode,
-  env: JsEnv,
+  env: TsEnv,
 ): CallStep[] {
   const skipCallbacks = args.parent ? hoistsCallback(args.parent) : false;
   const steps: CallStep[] = [];
@@ -419,7 +463,7 @@ function hoistsCallback(call: SyntaxNode): boolean {
 function collectStepsFromBody(
   file: string,
   body: SyntaxNode | null,
-  env: JsEnv,
+  env: TsEnv,
 ): CallStep[] {
   if (!body) return [];
   if (body.type === "statement_block") {
@@ -437,7 +481,7 @@ function functionFromParts(
   exported: boolean,
   start: number,
   end: number,
-  env: JsEnv,
+  env: TsEnv,
 ): FunctionInfo {
   const declared = jsParameterList(params);
   const info: FunctionInfo = {
@@ -496,7 +540,7 @@ function unwrapWrappedFunction(
   fallbackName: string | null,
   exported: boolean,
   functions: FunctionInfo[],
-  outer: JsEnv,
+  outer: TsEnv,
   local = false,
 ): boolean {
   const args = namedChildren(call).find((c) => c.type === "arguments");
@@ -551,7 +595,7 @@ function extractDeclaratorFunction(
   d: SyntaxNode,
   exported: boolean,
   functions: FunctionInfo[],
-  outer: JsEnv,
+  outer: TsEnv,
   local = false,
 ): void {
   const id = childByType(d, "identifier");
@@ -588,7 +632,7 @@ function extractDeclaratorFunction(
 function collectLocalDefinitions(
   file: string,
   body: SyntaxNode | null,
-  env: JsEnv,
+  env: TsEnv,
   functions: FunctionInfo[],
 ) {
   if (!body) return;
@@ -636,12 +680,14 @@ function collectLocalDefinitions(
 
 /**
  * Scope of one function body. The enclosing class identity is inherited, so a
- * local closure still has its method's `this` bindings.
+ * local closure still has its method's `this` bindings — including the declared
+ * class of each field a receiver is reached through.
  */
-function functionEnv(node: SyntaxNode, outer: JsEnv): JsEnv {
+function functionEnv(node: SyntaxNode, outer: TsEnv): TsEnv {
   return {
     scope: jsFunctionScope(node, outer.scope),
     className: outer.className,
+    receivers: outer.receivers,
   };
 }
 
@@ -650,7 +696,7 @@ function handleFunctionNode(
   node: SyntaxNode,
   name: string | null,
   exported: boolean,
-  outer: JsEnv,
+  outer: TsEnv,
   functions: FunctionInfo[],
   /** Declared inside another body: key stays bare and resolution is file-scoped. */
   local = false,
@@ -676,12 +722,74 @@ function handleFunctionNode(
   collectLocalDefinitions(file, body, env, functions);
 }
 
+/** The one class an annotation names, or nothing when the type is not bare. */
+function bareClassType(annotation: SyntaxNode | null): string | null {
+  if (annotation?.type !== "type_annotation") return null;
+  const type = annotation.namedChild(0);
+  return type?.type === "type_identifier" ? type.text : null;
+}
+
+/** `static` is an unnamed token on the member, not a named child. */
+function isStaticMember(node: SyntaxNode): boolean {
+  return node.children.some((child) => child.type === "static");
+}
+
+/** Only a visibility modifier or `readonly` makes a parameter a property. */
+function isParameterProperty(param: SyntaxNode): boolean {
+  if (
+    param.type !== "required_parameter" &&
+    param.type !== "optional_parameter"
+  ) {
+    return false;
+  }
+  if (childByType(param, "accessibility_modifier")) return true;
+  return param.children.some((child) => child.type === "readonly");
+}
+
+/**
+ * Class types a `this.<name>` receiver can have without guessing: a field or a
+ * constructor parameter property annotated with one bare class name.
+ *
+ * A generic, union, qualified, or inferred type names no single owner, so the
+ * receiver stays unknown and a call through it keeps its own text instead of
+ * borrowing a same-named member of whichever class it was written in.
+ */
+function classReceivers(body: SyntaxNode): ClassReceivers {
+  const receivers = new Map<string, string>();
+  const add = (name: SyntaxNode | null, annotation: SyntaxNode | null): void => {
+    const type = bareClassType(annotation);
+    if (name && type) receivers.set(name.text, type);
+  };
+
+  for (const member of namedChildren(body)) {
+    // A static member is not reachable through an instance `this`.
+    if (isStaticMember(member)) continue;
+
+    if (member.type === "public_field_definition") {
+      add(member.childForFieldName("name"), member.childForFieldName("type"));
+      continue;
+    }
+
+    if (member.type !== "method_definition") continue;
+    if (childByType(member, "property_identifier")?.text !== "constructor") {
+      continue;
+    }
+    const params = childByType(member, "formal_parameters");
+    for (const param of params ? namedChildren(params) : []) {
+      if (!isParameterProperty(param)) continue;
+      add(param.childForFieldName("pattern"), param.childForFieldName("type"));
+    }
+  }
+
+  return receivers;
+}
+
 function handleClass(
   file: string,
   node: SyntaxNode,
   exported: boolean,
   functions: FunctionInfo[],
-  outer: JsEnv,
+  outer: TsEnv,
 ) {
   const nameNode =
     childByType(node, "type_identifier") ?? childByType(node, "identifier");
@@ -692,10 +800,14 @@ function handleClass(
   if (!body) return;
 
   // Members resolve `this.name()`; the class body itself sees the outer scope.
-  const classEnv: JsEnv = {
+  const classEnv: TsEnv = {
     scope: outer.scope,
     className,
+    receivers: classReceivers(body),
   };
+  // In a static member `this` is the class itself, not an instance, so its
+  // instance fields are not the receivers of `this.<field>` there.
+  const staticEnv: TsEnv = { ...classEnv, receivers: NO_RECEIVERS };
 
   for (const element of namedChildren(body)) {
     if (element.type === "method_definition") {
@@ -716,7 +828,10 @@ function handleClass(
         ? `${className}.constructor`
         : `${className}.${methodName}`;
       const label = isConstructor ? `new ${className}()` : key;
-      const env = functionEnv(element, classEnv);
+      const env = functionEnv(
+        element,
+        isStaticMember(element) ? staticEnv : classEnv,
+      );
 
       functions.push(
         functionFromParts(
@@ -745,7 +860,7 @@ function handleClass(
           value,
           keyNode.text,
           exported,
-          classEnv,
+          isStaticMember(element) ? staticEnv : classEnv,
           functions,
         );
       }
@@ -758,7 +873,7 @@ function visitStatement(
   node: SyntaxNode,
   exported: boolean,
   functions: FunctionInfo[],
-  env: JsEnv,
+  env: TsEnv,
 ) {
   if (node.type === "export_statement") {
     // Decorators can precede the declaration inside an export statement.
