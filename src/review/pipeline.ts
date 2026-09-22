@@ -18,8 +18,9 @@
  *
  * Priority orders hunks within the report: a fixed base, a weight for a change
  * that is not inert, and the heaviest fact of the boundary group (what the
- * change says or bounds) and of the failure group (failures, gates,
- * permissions). Each group contributes its maximum, never a sum.
+ * change says or bounds), of the failure group (failures, gates,
+ * permissions), and of the surface group (public declarations, schema, stored
+ * data). Each group contributes its maximum, never a sum.
  *
  * The report order puts manual work first, then the read hunks by priority —
  * those outside test files before those in test files — and the passes last;
@@ -50,6 +51,8 @@ export const FACT_PRIORITY = {
   failurePropagated: 3,
   failureDeferred: 6,
   failureDiscarded: 15,
+  contractChanged: 10,
+  dataChanged: 15,
   instructionChanged: 10,
   referenceChanged: 6,
   gateWeakened: 15,
@@ -65,6 +68,9 @@ const BOUNDARY_FACTS = [
 const FAILURE_FACTS = [
   "failurePropagated", "failureDeferred", "failureDiscarded", "gateWeakened", "permissionChanged",
 ] as const;
+
+/** What others build on or what is stored: public declarations, schema, and data. */
+const SURFACE_FACTS = ["contractChanged", "dataChanged"] as const;
 
 /** Facts strong enough to raise a test-file hunk to attention on their own. */
 const TEST_FILE_ATTENTION_FACTS = ["limitChanged", "failureDiscarded", "gateWeakened"] as const;
@@ -98,6 +104,8 @@ const FACT_LABEL = {
   failurePropagated: "failure handed to the caller",
   failureDeferred: "failure deferred or retried",
   failureDiscarded: "failure discarded",
+  contractChanged: "public contract or declaration changed",
+  dataChanged: "schema or stored data changed",
   instructionChanged: "instruction to readers changed",
   referenceChanged: "link or reference changed",
   gateWeakened: "CI gate weakened",
@@ -179,7 +187,7 @@ function priorityOf(facts: ChangeFacts): number {
   if (facts.inert) return TRIVIAL_PRIORITY;
   const heaviest = (group: readonly ChangeFactQuestion[]) =>
     Math.max(0, ...group.filter((question) => facts.answers[question] === "yes").map((question) => FACT_PRIORITY[question]));
-  return clampPriority(BASE_PRIORITY + CHANGED_PRIORITY + heaviest(BOUNDARY_FACTS) + heaviest(FAILURE_FACTS));
+  return clampPriority(BASE_PRIORITY + CHANGED_PRIORITY + heaviest(BOUNDARY_FACTS) + heaviest(FAILURE_FACTS) + heaviest(SURFACE_FACTS));
 }
 
 /** One sentence per established fact, citing the changed line it rests on. */

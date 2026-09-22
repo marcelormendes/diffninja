@@ -89,7 +89,7 @@ describe("status", () => {
 
   test("a file type diffninja cannot read is uncertain, never passed or low", () => {
     const { items } = reviewUnits([
-      makeUnit({ id: "query", file: "db/query.sql", diff: hunk("-SELECT 1;", "+SELECT 2;") }),
+      makeUnit({ id: "query", file: "schema/query.graphql", diff: hunk("-type A { a: Int }", "+type A { a: String }") }),
     ]);
     expect(items[0].status).toBe("uncertain");
     expect(items[0].priority).toBe(BASE_PRIORITY + CHANGED_PRIORITY);
@@ -164,7 +164,7 @@ describe("report order", () => {
       makeUnit({ id: "a", diff: hunk("-if (x > 1) retry();", "+if (x >= 1) retry();") }),
       makeUnit({ id: "b", file: "test/b.test.ts", diff: hunk("+expect(run()).toBe(1);") }),
       makeUnit({ id: "c", file: "docs/c.md", diff: hunk("+Always retry.") }),
-      makeUnit({ id: "d", file: "db/d.sql", diff: hunk("+SELECT 1;") }),
+      makeUnit({ id: "d", file: "schema/d.graphql", diff: hunk("+type D { d: Int }") }),
     ];
     expect(reviewUnits(units())).toEqual(reviewUnits(units()));
   });

@@ -69,7 +69,7 @@ describe("review questions", () => {
   test("passes, manual units, and unread types are never asked about", () => {
     const questions = questionsOf([
       unit("fmt", "src/a.ts", "-a=b;", "+a = b;"),
-      unit("sql", "db/a.sql", "+SELECT 1;"),
+      unit("sql", "schema/a.graphql", "+type A { a: Int }"),
       { ...unit("logo", "logo.png", "Binary files differ"), special: "binary" },
     ]);
     expect(questions).toEqual([]);

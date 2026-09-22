@@ -406,6 +406,8 @@ describe("review HTML", () => {
       ["Failure handed to the caller", "yes"],
       ["Failure deferred or retried", "no"],
       ["Failure discarded", "no"],
+      ["Public contract or declaration changed", "no"],
+      ["Schema or stored data changed", "no"],
     ]);
     expect(obs).toContain("added line: <code>if (amount &lt; 0) throw new Error(&#39;invalid&#39;);</code>");
     expect(obs).toContain("removed line: <code>if (amount &lt;= 0)");

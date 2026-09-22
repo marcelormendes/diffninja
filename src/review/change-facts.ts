@@ -33,7 +33,12 @@ export const CODE_FACT_QUESTIONS = [
   "failurePropagated",
   "failureDeferred",
   "failureDiscarded",
+  "contractChanged",
+  "dataChanged",
 ] as const;
+
+/** Questions asked of SQL files: schema and data changes. */
+export const SQL_FACT_QUESTIONS = ["dataChanged"] as const;
 
 /** Questions asked of prose (documentation): what a reader is told to do or rely on. */
 export const PROSE_FACT_QUESTIONS = ["instructionChanged", "referenceChanged", "limitChanged"] as const;
@@ -59,7 +64,7 @@ export type ChangeFactAnswer = "yes" | "no";
 export type CodeLanguage = "c-like" | "python" | "ruby";
 
 /** What kind of text a file is, and so which questions apply to it. */
-export type ChangeFactLanguage = CodeLanguage | "prose" | "config";
+export type ChangeFactLanguage = CodeLanguage | "sql" | "prose" | "config";
 
 /** The changed line a `yes` rests on, exactly as the diff shows it. */
 export interface ChangeFactEvidence {
@@ -84,6 +89,7 @@ const C_LIKE_FILE =
   /\.(?:[cm]?[jt]sx?|java|kts?|cs|go|rs|c|h|cc|cpp|cxx|hpp|hh|swift|php|scala|dart|groovy)$/i;
 const PYTHON_FILE = /\.pyi?$/i;
 const RUBY_FILE = /\.rb$/i;
+const SQL_FILE = /\.sql$/i;
 const PROSE_FILE = /\.(?:md|mdx|markdown|rst|txt|adoc|asciidoc)$/i;
 const CONFIG_FILE =
   /\.(?:ya?ml|json|jsonc|json5|toml|ini|cfg|conf|properties)$|(?:^|\/)(?:\.env(?:\.[\w.-]+)?|Dockerfile(?:\.[\w.-]+)?|[\w.-]+\.dockerfile)$/i;
@@ -96,6 +102,7 @@ export function changeFactLanguageOf(file: string): ChangeFactLanguage | null {
   if (C_LIKE_FILE.test(file)) return "c-like";
   if (PYTHON_FILE.test(file)) return "python";
   if (RUBY_FILE.test(file)) return "ruby";
+  if (SQL_FILE.test(file)) return "sql";
   if (PROSE_FILE.test(file)) return "prose";
   if (CONFIG_FILE.test(file)) return "config";
   return null;
@@ -106,6 +113,7 @@ export function factQuestionsFor(language: ChangeFactLanguage | null): readonly 
   if (language === null) return [];
   if (language === "prose") return PROSE_FACT_QUESTIONS;
   if (language === "config") return CONFIG_FACT_QUESTIONS;
+  if (language === "sql") return SQL_FACT_QUESTIONS;
   return CODE_FACT_QUESTIONS;
 }
 
@@ -123,8 +131,11 @@ interface ScanState {
  * One line with strings replaced by `S` and comments removed. `state` carries a
  * block comment or multi-line string into the next line of the same side.
  */
-function scanLine(line: string, language: CodeLanguage, state: ScanState): string {
+function scanLine(line: string, language: CodeLanguage, state: ScanState, keepStrings = false): string {
   let out = "";
+  // A string's text, or its placeholder: facts ignore string content, while the
+  // formatting-only check must see it, since changing a literal changes behavior.
+  const literal = (from: number, to: number) => (keepStrings ? line.slice(from, to) : "S");
   let index = 0;
   while (index < line.length) {
     if (state.open === "comment") {
@@ -136,7 +147,8 @@ function scanLine(line: string, language: CodeLanguage, state: ScanState): strin
     }
     if (state.open !== null) {
       const end = closingIndex(line, index, state.open);
-      if (end < 0) return out;
+      if (end < 0) return keepStrings ? out + line.slice(index) : out;
+      if (keepStrings) out += line.slice(index, end + state.open.length);
       index = end + state.open.length;
       state.open = null;
       continue;
@@ -151,30 +163,30 @@ function scanLine(line: string, language: CodeLanguage, state: ScanState): strin
     if (language !== "c-like" && rest.startsWith("#")) break;
     if (language === "python" && (rest.startsWith('"""') || rest.startsWith("'''"))) {
       const delimiter = rest.startsWith('"""') ? '"""' : "'''";
-      out += "S";
       const end = closingIndex(line, index + 3, delimiter);
       if (end < 0) {
         state.open = delimiter;
-        return out;
+        return out + literal(index, line.length);
       }
+      out += literal(index, end + 3);
       index = end + 3;
       continue;
     }
     const char = line[index];
     if (char === "`" && language === "c-like") {
-      out += "S";
       const end = closingIndex(line, index + 1, "`");
       if (end < 0) {
         state.open = "`";
-        return out;
+        return out + literal(index, line.length);
       }
+      out += literal(index, end + 1);
       index = end + 1;
       continue;
     }
     if (char === '"' || char === "'") {
-      out += "S";
       const end = closingIndex(line, index + 1, char);
-      if (end < 0) return out;
+      if (end < 0) return out + literal(index, line.length);
+      out += literal(index, end + 1);
       index = end + 1;
       continue;
     }
@@ -230,6 +242,8 @@ interface SideLine {
   readonly raw: string;
   /** Strings as `S`, comments removed, whitespace collapsed to single spaces. */
   readonly code: string;
+  /** Comments removed but string text kept: what the formatting-only check compares. */
+  readonly literal: string;
   readonly changed: boolean;
   /** Leading indentation width, significant for Python. */
   readonly indent: number;
@@ -243,20 +257,37 @@ interface Sides {
 /** How one side's lines become comparable text; state carries across a side. */
 type LineScanner = (line: string, state: ScanState) => string;
 
-function scannerFor(language: ChangeFactLanguage, file: string): LineScanner {
-  if (language === "prose") return (line) => line;
-  if (language === "config") {
-    const json = JSON_FILE.test(file);
-    return (line) => scanConfigLine(line, json);
-  }
-  return (line, state) => scanLine(line, language, state);
+/** The fact scanner and the literal-preserving scanner for one file type. */
+interface Scanners {
+  readonly code: LineScanner;
+  readonly literal: LineScanner;
 }
 
-function sidesOf(diff: string, scan: LineScanner): Sides {
+function scannerFor(language: ChangeFactLanguage, file: string): Scanners {
+  if (language === "prose") return { code: (line) => line, literal: (line) => line };
+  if (language === "sql") {
+    // `--` comments go; string text stays, it is what a statement writes.
+    const scan: LineScanner = (line) => line.replace(/--.*$/, "");
+    return { code: scan, literal: scan };
+  }
+  if (language === "config") {
+    const json = JSON_FILE.test(file);
+    const scan: LineScanner = (line) => scanConfigLine(line, json);
+    return { code: scan, literal: scan };
+  }
+  return {
+    code: (line, state) => scanLine(line, language, state),
+    literal: (line, state) => scanLine(line, language, state, true),
+  };
+}
+
+function sidesOf(diff: string, scanners: Scanners): Sides {
   const before: SideLine[] = [];
   const after: SideLine[] = [];
   const beforeState: ScanState = { open: null };
   const afterState: ScanState = { open: null };
+  const beforeLiteral: ScanState = { open: null };
+  const afterLiteral: ScanState = { open: null };
   let inHunk = false;
   for (const line of diff.split("\n")) {
     if (line.startsWith("@@")) {
@@ -267,17 +298,18 @@ function sidesOf(diff: string, scan: LineScanner): Sides {
     if (!inHunk || line.startsWith("\\")) continue;
     const marker = line[0];
     const raw = line.slice(1);
-    const entry = (state: ScanState, changed: boolean): SideLine => ({
+    const entry = (state: ScanState, literalState: ScanState, changed: boolean): SideLine => ({
       raw,
-      code: scan(raw, state).replace(/\s+/g, " ").trim(),
+      code: scanners.code(raw, state).replace(/\s+/g, " ").trim(),
+      literal: scanners.literal(raw, literalState).replace(/\s+/g, " ").trim(),
       changed,
       indent: raw.length - raw.trimStart().length,
     });
-    if (marker === "-") before.push(entry(beforeState, true));
-    else if (marker === "+") after.push(entry(afterState, true));
+    if (marker === "-") before.push(entry(beforeState, beforeLiteral, true));
+    else if (marker === "+") after.push(entry(afterState, afterLiteral, true));
     else if (marker === " " || line === "") {
-      before.push(entry(beforeState, false));
-      after.push(entry(afterState, false));
+      before.push(entry(beforeState, beforeLiteral, false));
+      after.push(entry(afterState, afterLiteral, false));
     }
   }
   return { before, after };
@@ -540,8 +572,8 @@ function firstEvidence(diff: HitDifference): ChangeFactEvidence | null {
 }
 
 function isInert(sides: Sides, language: CodeLanguage | "config"): boolean {
-  const key = (line: SideLine) => (language === "python" ? `${line.indent}:${compact(line.code)}` : compact(line.code));
-  const code = (lines: readonly SideLine[]) => lines.filter((line) => line.changed && line.code !== "").map(key);
+  const key = (line: SideLine) => (language === "python" ? `${line.indent}:${compact(line.literal)}` : compact(line.literal));
+  const code = (lines: readonly SideLine[]) => lines.filter((line) => line.changed && line.literal !== "").map(key);
   const before = code(sides.before);
   const after = code(sides.after);
   return before.length === after.length && before.every((value, index) => value === after[index]);
@@ -593,6 +625,42 @@ function proseInert(sides: Sides): boolean {
 
 type Recorder = (question: ChangeFactQuestion, found: ChangeFactEvidence | null) => void;
 
+/**
+ * A declaration others build on: an exported symbol, an HTTP route, a DTO or
+ * entity field, or a public method or function signature. Read on code with
+ * strings set aside, so a string that looks like a declaration never counts.
+ */
+const CONTRACT: readonly RegExp[] = [
+  /^export\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:function|class|interface|type|enum|const|let|abstract)\b/,
+  /^@(?:Get|Post|Put|Patch|Delete|All|Controller|Resolver|Query|Mutation|Column|PrimaryColumn|PrimaryGeneratedColumn|Entity|ManyToOne|OneToMany|OneToOne|ManyToMany|JoinColumn|Index|Unique|Is[A-Z]\w*|Min|Max|Length|ValidateNested|Type|Transform|Api(?:Property|ResponseProperty)\w*|Field|Prop|Schema)\b/,
+  /^(?:public\s+|static\s+|async\s+|override\s+|readonly\s+)*(?!(?:if|for|while|switch|catch|return|function|await|new|else|do|try)\b)[A-Za-z_$][\w$]*\s*(?:<[^>]*>)?\s*\([^)]*\)\s*(?::\s*[^={;]+)?\s*\{$/,
+  /^(?:public|protected)\s+(?:static\s+|abstract\s+|final\s+|async\s+|override\s+)*[\w<>[\],.? ]+\s+\w+\s*\(/,
+  /^def\s+[A-Za-z]\w*\s*\(/,
+  /^class\s+[A-Z]\w*/,
+  /^func\s+(?:\([^)]*\)\s*)?[A-Z]\w*\s*\(/,
+  /^pub(?:\([^)]*\))?\s+(?:async\s+)?(?:fn|struct|enum|trait|type|const)\b/,
+];
+
+/** Schema changes and writes to stored data, in SQL text or a migration builder call. */
+const DATA_CHANGE =
+  /\b(?:ALTER\s+(?:TABLE|TYPE|INDEX|VIEW|SEQUENCE)|ADD\s+VALUE|CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TYPE|VIEW|MATERIALIZED\s+VIEW)|DROP\s+(?:TABLE|COLUMN|INDEX|TYPE|VIEW|CONSTRAINT|SCHEMA)|ADD\s+(?:COLUMN|CONSTRAINT)|RENAME\s+(?:COLUMN|TO)|TRUNCATE|DELETE\s+FROM|UPDATE\s+[\w."]+\s+SET|INSERT\s+INTO)\b|\b(?:addColumn|dropColumn|renameColumn|changeColumn|createTable|dropTable|alterTable|renameTable|createIndex|dropIndex|createForeignKey|dropForeignKey|removeColumn|addIndex|removeIndex|addConstraint|removeConstraint|bulkInsert|bulkUpdate|bulkDelete)\s*\(/i;
+
+/** A migration directory: whatever changes there changes the schema or stored data. */
+const MIGRATION_PATH = /(?:^|\/)migrations?\//i;
+
+/** Changed lines whose literal text (comments removed, strings kept) matches. */
+function literalHits(lines: readonly SideLine[], pattern: RegExp): Hit[] {
+  return lines
+    .filter((line) => line.changed && line.literal !== "" && pattern.test(line.literal))
+    .map((line) => ({ key: compact(line.literal), line }));
+}
+
+function contractHits(lines: readonly SideLine[]): Hit[] {
+  return lines
+    .filter((line) => line.changed && line.code !== "" && CONTRACT.some((pattern) => pattern.test(line.code)))
+    .map((line) => ({ key: compact(line.code), line }));
+}
+
 function proseFacts(sides: Sides, record: Recorder): void {
   record("instructionChanged", firstEvidence(difference(textHits(sides.before, NORMATIVE), textHits(sides.after, NORMATIVE))));
   record("referenceChanged", firstEvidence(difference(referenceHits(sides.before), referenceHits(sides.after))));
@@ -620,7 +688,7 @@ function configFacts(sides: Sides, record: Recorder): void {
   record("limitChanged", limit === null ? null : evidenceOf(limit, "added"));
 }
 
-function codeFacts(sides: Sides, language: CodeLanguage, record: Recorder): void {
+function codeFacts(sides: Sides, language: CodeLanguage, record: Recorder, file: string): void {
   const conditions = difference(conditionHits(sides.before, language), conditionHits(sides.after, language));
   record("comparisonChanged", firstEvidence(conditions));
 
@@ -645,6 +713,17 @@ function codeFacts(sides: Sides, language: CodeLanguage, record: Recorder): void
   );
   record("failureDeferred", firstEvidence(difference(lineHits(sides.before, DEFERRAL), lineHits(sides.after, DEFERRAL))));
   record("failureDiscarded", firstEvidence(difference(discardHits(sides.before, language), discardHits(sides.after, language))));
+  record("contractChanged", firstEvidence(difference(contractHits(sides.before), contractHits(sides.after))));
+  const data = firstEvidence(difference(literalHits(sides.before, DATA_CHANGE), literalHits(sides.after, DATA_CHANGE)));
+  record("dataChanged", data ?? (MIGRATION_PATH.test(file) ? firstChangedLine(sides) : null));
+}
+
+/** The first changed line with code on it, added side first: what a migration hunk does. */
+function firstChangedLine(sides: Sides): ChangeFactEvidence | null {
+  const added = sides.after.find((line) => line.changed && line.code !== "");
+  if (added !== undefined) return evidenceOf({ key: "", line: added }, "added");
+  const removed = sides.before.find((line) => line.changed && line.code !== "");
+  return removed === undefined ? null : evidenceOf({ key: "", line: removed }, "removed");
 }
 
 /** The facts for one hunk, each `yes` with the changed line it rests on. */
@@ -670,6 +749,10 @@ export function changeFactsOf(unit: Pick<ReviewUnit, "file" | "diff">): ChangeFa
     configFacts(sides, record);
     return { language, inert: isInert(sides, language), answers, evidence };
   }
-  codeFacts(sides, language, record);
+  if (language === "sql") {
+    record("dataChanged", firstEvidence(difference(literalHits(sides.before, DATA_CHANGE), literalHits(sides.after, DATA_CHANGE))));
+    return { language, inert: isInert(sides, "config"), answers, evidence };
+  }
+  codeFacts(sides, language, record, unit.file);
   return { language, inert: isInert(sides, language), answers, evidence };
 }

@@ -29,6 +29,8 @@ describe("change facts", () => {
       failurePropagated: "yes",
       failureDeferred: "no",
       failureDiscarded: "no",
+      contractChanged: "no",
+      dataChanged: "no",
     });
     expect(facts.evidence.limitChanged).toEqual({ side: "added", text: "if (amount < 0) throw new Error('invalid');" });
     expect(facts.inert).toBe(false);
@@ -112,6 +114,13 @@ describe("change facts", () => {
     expect(
       changeFactsOf({ file: "a.py", diff: hunk("if ready:", "-    run()", "+run()") }).inert,
     ).toBe(false);
+    // Changing the text of a string changes behavior, even though facts ignore it.
+    expect(
+      changeFactsOf({ file: "src/a.ts", diff: hunk("-  description: 'Marks rows as FAILED',", "+  description: 'Marks rows as DONE',") }).inert,
+    ).toBe(false);
+    expect(
+      changeFactsOf({ file: "src/a.ts", diff: hunk("-  'multi ' +", "-  'line',", "+  'multi line',") }).inert,
+    ).toBe(false);
   });
 
   test("a removed line whose text starts with dashes is still a removed line", () => {
@@ -121,11 +130,43 @@ describe("change facts", () => {
   });
 
   test("answers nothing for a file type it cannot read, never no", () => {
-    const facts = changeFactsOf({ file: "schema/query.sql", diff: hunk("-SELECT 1;", "+SELECT 2 WHERE limit > 3;") });
+    const facts = changeFactsOf({ file: "schema/query.graphql", diff: hunk("-type A { a: Int }", "+type A { a: String }") });
     expect(facts.language).toBeNull();
     expect(facts.inert).toBeNull();
     expect(facts.answers).toEqual({});
     expect(facts.evidence).toEqual({});
+  });
+
+  test("public contracts: exports, routes, DTO and entity fields, and public signatures", () => {
+    for (const [file, line] of [
+      ["src/a.ts", "+export async function syncLeases(ids: string[]): Promise<void> {"],
+      ["src/a.controller.ts", "+  @Post('enrollments/:id/approve')"],
+      ["src/a.dto.ts", "+  @IsOptional()"],
+      ["src/a.entity.ts", "+  @Column({ nullable: true })"],
+      ["src/a.service.ts", "+  async approveEnrollment(id: string, actor: Actor): Promise<Enrollment> {"],
+      ["app/a.py", "+def approve(enrollment_id):"],
+      ["pkg/a.go", "+func Approve(id string) error {"],
+    ]) {
+      expect(yesOf(file, hunk(line)), line).toContain("contractChanged");
+    }
+    // Private helpers, calls, and control flow are not contracts.
+    for (const line of ["+  private normalize(value: string): string {", "+  if (ready) {", "+  await this.repo.save(entity);", "+const x = 'export function fake() {';"]) {
+      expect(yesOf("src/a.ts", hunk(line)), line).not.toContain("contractChanged");
+    }
+  });
+
+  test("schema and stored data: SQL in migrations and .sql files, and migration builder calls", () => {
+    expect(yesOf("src/db/migrations/1700-add-col.ts", hunk("+    await queryRunner.query('ALTER TABLE enrollments ADD COLUMN approved_at timestamptz');"))).toContain("dataChanged");
+    expect(yesOf("src/db/migrations/1700.ts", hunk("+    await queryRunner.dropColumn('leases', 'legacy_id');"))).toContain("dataChanged");
+    expect(yesOf("db/fix.sql", hunk("+DELETE FROM leases WHERE end_date < now();"))).toEqual(["dataChanged"]);
+    expect(yesOf("src/db/migrations/20260922-enum.js", hunk("+      `ALTER TYPE \"${ENUM_NAME}\" ADD VALUE IF NOT EXISTS 'X';`,"))).toContain("dataChanged");
+    expect(yesOf("src/db/seed.js", hunk("+    await queryInterface.bulkUpdate('leases', { active: false }, {});"))).toContain("dataChanged");
+    // Anything that changes inside a migrations directory changes the schema or data.
+    expect(yesOf("src/db/migrations/20260922-noop.js", hunk("+  async down() {}"))).toContain("dataChanged");
+    expect(yesOf("db/fix.sql", hunk("-SELECT 1;", "+SELECT 2;"))).toEqual([]);
+    expect(changeFactsOf({ file: "db/fix.sql", diff: hunk("-SELECT 1; -- old", "+SELECT 1;") }).inert).toBe(true);
+    // A comment that mentions SQL is not a data change.
+    expect(yesOf("src/a.ts", hunk("+// TODO: DELETE FROM leases later"))).not.toContain("dataChanged");
   });
 
   test("prose: instructions, link targets, and numeric limits; a heading is not a comment", () => {
