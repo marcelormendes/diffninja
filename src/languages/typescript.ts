@@ -22,6 +22,8 @@ import {
   jsParameterList,
   type JsEnv,
 } from "./call-syntax.js";
+import { extractDispatchContext } from "./typescript-dispatch.js";
+import { extractTypeContracts } from "./typescript-contracts.js";
 
 /** Declared class type of a `this.<name>` receiver, keyed by the field's name. */
 type ClassReceivers = ReadonlyMap<string, string>;
@@ -981,6 +983,8 @@ function extractFromTree(
   for (const stmt of namedChildren(tree.rootNode)) {
     visitStatement(file, stmt, false, functions, env);
   }
+  extractTypeContracts(file, tree, functions);
+  extractDispatchContext(file, tree, functions);
   return functions;
 }
 

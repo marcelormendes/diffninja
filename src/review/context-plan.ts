@@ -70,11 +70,12 @@ const NO_EXPANSION: ReadonlySet<string> = new Set<string>();
  * collapsed descriptor does and does not reveal.
  */
 const STRUCTURED_CONTEXT_CAVEAT =
-  "contextNodes contains selected static, syntactic context for this file: changed, caller, and callee " +
-  "definition bodies read from one snapshot. Argument expressions, parameter declarations, and " +
-  "definition sources are source text, not runtime values; mappings describe supported " +
-  "argument-binding syntax only and are not data-flow analysis or proof of the runtime target; " +
-  "candidate definitions are heuristic, and unknown mappings must not be inferred. Every node " +
+  "contextNodes contains selected static, syntactic context for this file: changed, caller, callee, " +
+  "event/queue-related definitions and type/interface/enum contracts read from one snapshot. " +
+  "Argument expressions, parameter declarations, and definition sources are source text, not runtime " +
+  "values; mappings describe supported argument-binding syntax only, not data-flow analysis or proof " +
+  "of the runtime target. Event/queue edges are candidate static key matches, not proof of delivery; " +
+  "type references describe declarations, not runtime calls. Unknown mappings must not be inferred. Every node " +
   "identifies its snapshot: after describes resulting code, before describes prior or removed " +
   "code, and evidence must not be combined across snapshots as one execution. Context is " +
   "depth- and size-limited: unavailable extraction, omitted arguments, truncated expressions, and " +

@@ -1,5 +1,7 @@
 import { buildCallSitesFromInfo } from "../calltree.js";
-import { allFunctions, type FunctionIndex } from "../extract.js";
+import { allContextDefinitions, type FunctionIndex } from "../extract.js";
+import { resolveDispatchContext } from "../languages/typescript-dispatch.js";
+import { resolveTypeContracts } from "../languages/typescript-contracts.js";
 import { formatSourceLoc } from "../loc.js";
 import type { CallNode, FunctionInfo, SourceLoc } from "../types.js";
 import { CALL_FLOW_MAX_DEPTH } from "./call-flow.js";
@@ -17,6 +19,7 @@ interface Edge {
   node: CallNode;
   owner: Definition;
   target?: Definition;
+  relation?: { kind: "event" | "queue" | "contract"; evidence: string };
 }
 
 interface ContextGraph {
@@ -89,7 +92,8 @@ function locationKey(loc: SourceLoc): string {
 
 /** Expand each body once, rather than building the same descendant tree per caller. */
 function contextGraph(index: FunctionIndex): ContextGraph {
-  const definitions = allFunctions(index).map<Definition>(info => ({ info, outgoing: [], incoming: [] }));
+  const infos = allContextDefinitions(index);
+  const definitions = infos.map<Definition>(info => ({ info, outgoing: [], incoming: [] }));
   const locations = new Map<string, Definition | null>();
   for (const definition of definitions) {
     const { file, line, endLine } = definition.info;
@@ -100,6 +104,7 @@ function contextGraph(index: FunctionIndex): ContextGraph {
   }
   const edges: Edge[] = [];
   for (const owner of definitions) {
+    if (owner.info.review?.kind) continue;
     for (const node of buildCallSitesFromInfo(owner.info, index)) {
       const target = node.definition ? locations.get(locationKey(node.definition)) ?? undefined : undefined;
       const edge = { node, owner, target };
@@ -107,6 +112,23 @@ function contextGraph(index: FunctionIndex): ContextGraph {
       target?.incoming.push(edge);
       edges.push(edge);
     }
+  }
+  const byInfo = new Map(definitions.map(definition => [definition.info, definition]));
+  for (const relation of [...resolveDispatchContext(infos), ...resolveTypeContracts(infos)]) {
+    const owner = byInfo.get(relation.owner), target = byInfo.get(relation.target);
+    if (!owner || !target || target.info.line === undefined) continue;
+    const edge: Edge = {
+      owner, target,
+      relation: { kind: relation.kind, evidence: relation.evidence },
+      node: {
+        key: target.info.key, label: target.info.label, children: [],
+        file: owner.info.file, line: relation.line,
+        definition: { file: target.info.file, line: target.info.line, endLine: target.info.endLine },
+      },
+    };
+    owner.outgoing.push(edge);
+    target.incoming.push(edge);
+    edges.push(edge);
   }
   return { definitions, edges };
 }
@@ -147,6 +169,13 @@ function location(node: { file?: string; line?: number; endLine?: number }): str
 
 function renderEdge({ edge, side, repeated }: SelectedEdge): string {
   const { node, target } = edge;
+  if (edge.relation) return [
+    `${edge.relation.kind} relation ${edge.owner.info.key} -> ${target?.info.key} @ ${location(node)}`,
+    `  snapshot=${side} target=candidate mapping=unknown`,
+    `  evidence=${edge.relation.evidence}`,
+    `  definition=${location(node.definition ?? {})}`,
+    "  static syntax relation; not a runtime call or proof of delivery",
+  ].join("\n");
   const context = node.context;
   const lines = [
     `call ${context?.callee ?? node.key} @ ${location(node)}`,
@@ -223,8 +252,8 @@ function selectContext(graph: ContextGraph, unit: ReviewUnit, side: SnapshotSide
     else distant++;
   }
   const omissions: string[] = [];
-  if (unrelated) omissions.push(`omitted call sites=${unrelated} snapshot=${side} reason=unrelated-to-hunk`);
-  if (distant) omissions.push(`omitted call sites=${distant} snapshot=${side} reason=distant-descendants-or-siblings depth-limit=${CALL_FLOW_MAX_DEPTH}`);
+  if (unrelated) omissions.push(`omitted context edges=${unrelated} snapshot=${side} reason=unrelated-to-hunk`);
+  if (distant) omissions.push(`omitted context edges=${distant} snapshot=${side} reason=distant-descendants-or-siblings depth-limit=${CALL_FLOW_MAX_DEPTH}`);
   return { selected: [...selected.values()], omissions, seeds };
 }
 
@@ -337,7 +366,7 @@ function nodeDetail(plan: ContextNodePlan, unit: ReviewUnit, source: string | nu
     `context node ${plan.key}`,
     `  label=${info.label}`,
     `  location=${loc} snapshot=${plan.side} role=${plan.role} hunk=${unit.id} file=${unit.file}`,
-    `  declared-parameters=${info.params?.text ?? "unavailable"}`,
+    info.review?.kind ? `  declaration-kind=${info.review.kind} (non-callable)` : `  declared-parameters=${info.params?.text ?? "unavailable"}`,
   ];
   if (source === null) lines.push(`  source=${loc} snapshot=${plan.side} unavailable reason=whole-definition-not-readable`);
   else lines.push(`  source=${loc} snapshot=${plan.side} begin`, source, "  source-end");

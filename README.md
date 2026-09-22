@@ -129,13 +129,27 @@ including stacked and custom decorators; method source spans retain their
 decorators so decorator-only changes still select the method body. Simple explicit class-field and
 constructor-property types identify candidate dependency methods; unsupported
 receiver types stay unresolved rather than borrowing the containing class's
-method. These are not type-checked or proven runtime bindings. Decorator
-execution and framework event/queue dispatch are not resolved as call edges.
+method. These are not type-checked or proven runtime bindings.
+
+Review context also follows candidate event and queue relations: static
+`emit`/`emitAsync` keys match `@On*Event` handlers; injected queue `.add` keys
+match `@Processor` consumers' `job.name` cases or `@Process` methods only on a
+matching queue channel. String enum values can connect member keys to literal
+cases. These are source-derived relations, not runtime calls or proof of
+delivery; dynamic keys, aliases, and unrecognized framework syntax can be absent.
+Constant resolution is snapshot-local, including when extraction is cached.
+
+Module-level TypeScript/TSX interfaces, type aliases, and enums are addressable
+non-callable context nodes. Signature, body, and generic type references connect
+them to reviewed methods and other contracts. Relative import bindings take
+precedence; unique module-path suffixes and unimported names are candidate
+matches, not type checking. Unresolved imports do not borrow same-named types.
+Barrel re-exports, nested declarations, and class-field contracts may be absent.
 
 Context prioritizes calls adjacent to the hunk, with depth limited to four,
 at most eight arguments per call, and 120 characters per argument excerpt.
-Snapshot-bound changed definitions, callers, and resolved callees carry their
-complete source plus selected call-site bindings. Bodies not already shown in
+Snapshot-bound changed definitions, callers, callees, dispatch endpoints, and
+type contracts carry complete source plus selected relation evidence. Bodies not already shown in
 the hunk take precedence over duplicate source when admitting context. Up to
 eight definition nodes are addressable per hunk; other nodes are explicitly
 omitted. The initial state targets 12,000
