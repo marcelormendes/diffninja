@@ -6,7 +6,7 @@ import { describe, expect, test } from "vitest";
 import { buildIndex, extractFunctions } from "../src/extract.js";
 import { buildCallContext } from "../src/review/call-context.js";
 import type { ContextSources } from "../src/review/call-context.js";
-import { reviewDiff } from "../src/review/service.js";
+import { boundReportContext, REPORT_CALL_FLOW_CHARS, REPORT_CONTEXT_NODES, reviewDiff } from "../src/review/service.js";
 import { parseDiff } from "../src/review/input.js";
 import type { SourceLoc } from "../src/types.js";
 import type { ReviewContextNode, ReviewUnit } from "../src/review/types.js";
@@ -364,5 +364,33 @@ describe("structured context nodes", () => {
     const reviewUnit = unit(1);
     reviewUnit.diff = "@@ -1 +1 @@\n-x;\n+y;";
     expect(buildCallContext([reviewUnit], buildIndex([]), index).has("caller")).toBe(false);
+  });
+});
+
+describe("report context bound", () => {
+  test("keeps the first nodes and call-flow blocks whole and names what it left out", () => {
+    const reviewUnit = unit(1);
+    reviewUnit.contextNodes = Array.from({ length: REPORT_CONTEXT_NODES + 5 }, (_, index) => ({
+      key: `after:caller${index}`,
+      label: `caller${index}()`,
+      file: "caller.ts",
+      line: index + 1,
+      detail: `function caller${index}() {}`,
+    } satisfies ReviewContextNode));
+    const block = "x".repeat(REPORT_CALL_FLOW_CHARS / 2);
+    reviewUnit.callFlow = [block, block, block, block];
+    boundReportContext(reviewUnit);
+    expect(reviewUnit.contextNodes.map(node => node.key)).toEqual(
+      Array.from({ length: REPORT_CONTEXT_NODES }, (_, index) => `after:caller${index}`),
+    );
+    expect(reviewUnit.callFlow).toEqual([block, block, `omitted call-flow blocks=2 reason=report-size-limit chars=${REPORT_CALL_FLOW_CHARS}`]);
+  });
+
+  test("keeps a single oversized call-flow block rather than an empty flow", () => {
+    const reviewUnit = unit(1);
+    const block = "x".repeat(REPORT_CALL_FLOW_CHARS + 1);
+    reviewUnit.callFlow = [block];
+    boundReportContext(reviewUnit);
+    expect(reviewUnit.callFlow).toEqual([block]);
   });
 });

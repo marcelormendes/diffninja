@@ -36,6 +36,29 @@ function changedLineIdentity(units: readonly ReviewUnit[]): string {
   return changes.sort().join("\n");
 }
 
+/** Most whole context nodes one hunk carries in the report. */
+export const REPORT_CONTEXT_NODES = 8;
+/** Most call-flow block characters one hunk carries in the report. */
+export const REPORT_CALL_FLOW_CHARS = 24_000;
+
+/** Keep the highest-priority context of one hunk, whole, and say what was left out. */
+export function boundReportContext(unit: ReviewUnit): void {
+  if (unit.contextNodes !== undefined && unit.contextNodes.length > REPORT_CONTEXT_NODES) {
+    unit.contextNodes = unit.contextNodes.slice(0, REPORT_CONTEXT_NODES);
+  }
+  if (unit.callFlow === undefined) return;
+  const kept: string[] = [];
+  let used = 0;
+  for (const block of unit.callFlow) {
+    if (used + block.length > REPORT_CALL_FLOW_CHARS && kept.length > 0) break;
+    kept.push(block);
+    used += block.length;
+  }
+  const omitted = unit.callFlow.length - kept.length;
+  if (omitted > 0) kept.push(`omitted call-flow blocks=${omitted} reason=report-size-limit chars=${REPORT_CALL_FLOW_CHARS}`);
+  unit.callFlow = kept;
+}
+
 /** Shared report orchestration; transports own input reading and output persistence. */
 export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}): Promise<ReviewReport> {
   const warnings: string[] = [];
@@ -126,6 +149,10 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
     })));
     evidence.checks = evidence.checks.map(check => check.kind === "broken-reference" ? references.check : check);
   }
+  // Analysis above used every context node; the report carries a bounded share of
+  // it per hunk, so a change to a widely used type cannot produce a report of tens
+  // of megabytes (one real hunk had thousands of callers).
+  for (const unit of units) boundReportContext(unit);
   const result = reviewUnits(units);
   // Structured flows are grouped per changed file in report order, after
   // ranking, so the HTML can order files by the severity of their worst hunk.
