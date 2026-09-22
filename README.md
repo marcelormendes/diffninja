@@ -125,7 +125,8 @@ positional binding; Python also supports named arguments. Imports, member
 dispatch, dynamic targets, and other grammars do not get guessed mappings.
 These are static source expressions, not runtime values or data-flow analysis.
 TypeScript/TSX extraction includes methods of decorated exported classes,
-including stacked and custom decorators. Simple explicit class-field and
+including stacked and custom decorators; method source spans retain their
+decorators so decorator-only changes still select the method body. Simple explicit class-field and
 constructor-property types identify candidate dependency methods; unsupported
 receiver types stay unresolved rather than borrowing the containing class's
 method. These are not type-checked or proven runtime bindings. Decorator
@@ -134,8 +135,10 @@ execution and framework event/queue dispatch are not resolved as call edges.
 Context prioritizes calls adjacent to the hunk, with depth limited to four,
 at most eight arguments per call, and 120 characters per argument excerpt.
 Snapshot-bound changed definitions, callers, and resolved callees carry their
-complete source plus selected call-site bindings. Up to eight definition nodes are addressable per
-hunk; other nodes are explicitly omitted. The initial state targets 12,000
+complete source plus selected call-site bindings. Bodies not already shown in
+the hunk take precedence over duplicate source when admitting context. Up to
+eight definition nodes are addressable per hunk; other nodes are explicitly
+omitted. The initial state targets 12,000
 serialized characters, reserving key, label, file, and line descriptors before
 admitting whole definition details. Definitions that do not fit remain visible
 as collapsed nodes. Expansion never silently truncates a function or includes

@@ -809,7 +809,15 @@ function handleClass(
   // instance fields are not the receivers of `this.<field>` there.
   const staticEnv: TsEnv = { ...classEnv, receivers: NO_RECEIVERS };
 
+  let decoratorStart: number | undefined;
   for (const element of namedChildren(body)) {
+    if (element.type === "decorator") {
+      decoratorStart ??= element.startIndex;
+      continue;
+    }
+    if (element.type === "comment") continue;
+    const definitionStart = decoratorStart ?? element.startIndex;
+    decoratorStart = undefined;
     if (element.type === "method_definition") {
       const keyNode =
         childByType(element, "property_identifier") ??
@@ -841,7 +849,7 @@ function handleClass(
           params,
           fnBody,
           methodExported,
-          element.startIndex,
+          definitionStart,
           element.endIndex,
           env,
         ),

@@ -209,6 +209,32 @@ describe("decorated TypeScript exports", () => {
     ]);
   });
 
+  test.each(["events.ts", "events.tsx"])("keeps decorator-only changes attached to the method source in %s", (file) => {
+    const lines = [
+      "@Register()",
+      "export class Events {",
+      '  @On("updated")',
+      "  @Trace()",
+      "  consume(event) {",
+      "    return this.persist(event);",
+      "  }",
+      "  persist(event) { return event; }",
+      "}",
+    ];
+    const index = buildIndex(extractFunctions(file, lines.join("\n")));
+    const unit: ReviewUnit = {
+      id: "decorator", file, header: "@@ -3 +3 @@",
+      diff: '@@ -3 +3 @@\n-  @On("created")\n+  @On("updated")',
+      added: 1, removed: 1, oldStart: 3, newStart: 3,
+    };
+    const nodes = buildCallContext([unit], buildIndex([]), index, sourcesOf(lines)).get(unit.id)!.nodes;
+    const method = nodes.find(node => node.key === "after:Events.consume")!;
+    expect(method.line).toBe(3);
+    expect(method.detail).toContain(lines.slice(2, 7).join("\n"));
+    expect(buildCallSitesFromInfo(index.get("Events.consume")!, index).map(node => node.key)).toEqual(["Events.persist"]);
+    expect(index.get("Events.persist")!.line).toBe(8);
+  });
+
   test("keeps a body the initial state cannot hold collapsed, then expands it within the budgets", () => {
     const file = "ledger.ts";
     const operations = ["reverse", "adjust", "reconcile"];

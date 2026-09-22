@@ -7,6 +7,9 @@ import { buildIndex, extractFunctions } from "../src/extract.js";
 import { buildCallContext } from "../src/review/call-context.js";
 import type { ContextSources } from "../src/review/call-context.js";
 import { reviewDiff } from "../src/review/service.js";
+import { ContextPlan, MAX_CONTEXT_NODES } from "../src/review/context-plan.js";
+import { buildJevState } from "../src/review/jev.js";
+import { parseDiff } from "../src/review/input.js";
 import type { SourceLoc } from "../src/types.js";
 import type { ReviewContextNode, ReviewUnit } from "../src/review/types.js";
 
@@ -338,6 +341,29 @@ describe("structured context nodes", () => {
     expect(blocks).toContain("reason=distant-descendants-or-siblings depth-limit=4");
     expect(blocks).not.toContain('call sibling @ caller.ts:3');
     expect(blocks).not.toContain("call beyond @ caller.ts:19");
+  });
+
+  test("retains an unseen dependency before new-file bodies already visible in the diff", () => {
+    const lines = Array.from({ length: MAX_CONTEXT_NODES + 1 }, (_, i) =>
+      `export function caller${i}(value) { return dependency(value); }`);
+    const dependency = "export function dependency(value) { if (value < 0) throw new Error('negative'); return value; }";
+    const [reviewUnit] = parseDiff([
+      "diff --git a/caller.ts b/caller.ts", "--- /dev/null", "+++ b/caller.ts",
+      `@@ -0,0 +1,${lines.length} @@`, ...lines.map(line => `+${line}`),
+    ].join("\n"));
+    const index = buildIndex([
+      ...extractFunctions("caller.ts", lines.join("\n")),
+      ...extractFunctions("dependency.ts", dependency),
+    ]);
+    const planned = buildCallContext([reviewUnit], buildIndex([]), index, {
+      after: loc => loc.file === "dependency.ts" ? dependency : lines[loc.line - 1],
+    }).get(reviewUnit.id)!.nodes;
+    const plan = new ContextPlan(buildJevState(reviewUnit), planned);
+    const supplied = plan.state.contextNodes!;
+    expect(supplied.length).toBeLessThanOrEqual(MAX_CONTEXT_NODES);
+    expect(supplied.find(node => node.key === "after:dependency")?.detail).toContain(dependency);
+    // Reordering never discards the original source or its call evidence.
+    expect(planned.find(node => node.key === "after:caller0")?.detail).toContain(lines[0]);
   });
 
   test("reports no evidence rather than an empty node body", () => {

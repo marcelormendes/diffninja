@@ -356,12 +356,8 @@ function nodeDetail(plan: ContextNodePlan, unit: ReviewUnit, source: string | nu
   return lines.join("\n");
 }
 
-function contextNodeOf(plan: ContextNodePlan, unit: ReviewUnit, sources: ContextSources): ReviewContextNode {
+function contextNodeOf(plan: ContextNodePlan, unit: ReviewUnit, source: string | null): ReviewContextNode {
   const info = plan.definition.info;
-  const reader = sources[plan.side];
-  const source = reader === undefined || info.line === undefined
-    ? null
-    : reader({ file: info.file, line: info.line, endLine: info.endLine });
   return {
     key: plan.key,
     label: info.label,
@@ -370,6 +366,19 @@ function contextNodeOf(plan: ContextNodePlan, unit: ReviewUnit, sources: Context
     // descriptor and the detail report.
     line: info.line!,
     detail: nodeDetail(plan, unit, source),
+  };
+}
+
+/** Exact source lines already visible on each side of the untruncated hunk. */
+function hunkSources(unit: ReviewUnit) {
+  const before: string[] = [], after: string[] = [];
+  for (const line of unit.diff.split("\n").slice(1)) {
+    if (line[0] === " " || line[0] === "-") before.push(line.slice(1));
+    if (line[0] === " " || line[0] === "+") after.push(line.slice(1));
+  }
+  return {
+    before: { text: before.join("\n"), start: unit.oldStart, end: unit.oldStart + before.length - 1 },
+    after: { text: after.join("\n"), start: unit.newStart, end: unit.newStart + after.length - 1 },
   };
 }
 
@@ -395,8 +404,22 @@ export function buildCallContext(
     const blocks = selected.map(renderEdge);
     const omissions = [...prior.omissions, ...current.omissions];
     if (omissions.length) blocks.push(omissions.join("\n"));
-    const nodes = nodePlans([{ side: "after", selection: current }, { side: "before", selection: prior }])
-      .map(plan => contextNodeOf(plan, unit, sources));
+    const shown = hunkSources(unit);
+    const nodes: ReviewContextNode[] = [], redundant: ReviewContextNode[] = [];
+    for (const plan of nodePlans([{ side: "after", selection: current }, { side: "before", selection: prior }])) {
+      const info = plan.definition.info;
+      const source = sources[plan.side]?.({ file: info.file, line: info.line!, endLine: info.endLine }) ?? null;
+      const node = contextNodeOf(plan, unit, source);
+      const snapshot = shown[plan.side];
+      // Do not let whole definitions already present in the diff consume the
+      // addressable-node cap before external contracts. Keep them, with all
+      // their call evidence, after definitions whose bodies the hunk cannot show.
+      const fullyShown = info.file === unit.file && info.line! >= snapshot.start &&
+        (info.endLine ?? info.line!) <= snapshot.end && source !== null && source.length > 0 &&
+        snapshot.text.includes(source);
+      (fullyShown ? redundant : nodes).push(node);
+    }
+    nodes.push(...redundant);
     if (blocks.length === 0 && nodes.length === 0) continue;
     result.set(unit.id, { entries: blocks, nodes });
   }
