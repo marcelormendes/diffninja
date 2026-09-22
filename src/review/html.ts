@@ -8,6 +8,7 @@ import {
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
 import { escapeHtml } from "./escape-html.js";
+import { testLikeFile } from "./file-role.js";
 
 /**
  * Render a review report as one self-contained HTML document.
@@ -328,6 +329,12 @@ function renderObservations(item: ReviewItem): string {
   if (undetermined.size > 0) {
     hints.push(
       `${[...undetermined].join(" and ")} could not be determined from the supplied state, so this hunk is marked for a human read. That is not a claim about the code.`,
+    );
+  }
+  // A path fact, not model output: explains why this hunk sits after the others.
+  if (testLikeFile(item.file)) {
+    hints.push(
+      "This path looks like a test file, so it is listed after the judged hunks outside test files, and a changed outcome alone does not mark it for attention. A path convention, not coverage.",
     );
   }
   return [

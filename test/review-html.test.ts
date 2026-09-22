@@ -460,6 +460,15 @@ describe("review HTML", () => {
     expect(other).toContain('<dt>Limit, size, or offset changed</dt><dd class="mono">no</dd>');
   });
 
+  test("explains a test file's placement from its path, and only for test files", () => {
+    const obsOf = (file: string) =>
+      /<details class="obs">([\s\S]*?)<\/details>/.exec(
+        visible(renderReview(report([item({ file, judgment: judgment({ outcome: "changed" }) })]))),
+      )?.[1] ?? "";
+    expect(obsOf("test/checkout.test.ts")).toContain("This path looks like a test file");
+    expect(obsOf("src/checkout.ts")).not.toContain("looks like a test file");
+  });
+
   test("an unknown answer reads as missing evidence, never as a defect or as an absence", () => {
     const html = visible(renderReview(report([item({
       status: "uncertain",
