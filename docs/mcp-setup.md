@@ -91,7 +91,10 @@ is a read-only `127.0.0.1` page with the same report for the human reviewer;
 it lives in memory for this MCP connection (see
 [the report page](reference.md#the-report-page)). For PR inputs, both carry
 `{ "mode": "connected", "url": "http://127.0.0.1:PORT/", "pr":
-"https://github.com/OWNER/REPO/pull/N", "snapshot": ... }`. Open `url` in a
+"https://github.com/OWNER/REPO/pull/N", "snapshot": ... }` plus the local
+analysis of that snapshot: `reviewId`, `reportUrl`, `analysisScope` (whether a
+local clone given as `repo` supplied call flows), and `report`, whose
+`questions` are answered with `record_answers` like a static review's. Open `url` in a
 browser; MCP does not launch one or submit a review itself. Pages live for
 the MCP connection and close on disconnect. Failures return `isError: true`,
 an error message, and no partial report.

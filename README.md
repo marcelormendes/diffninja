@@ -62,6 +62,16 @@ diffninja only carries it to GitHub. It never approves, blocks, or merges
 anything on its own. The page belongs to the agent's MCP connection and closes
 when the agent exits.
 
+Above the diff, a **Reading order** panel shows the same local analysis a
+static review gives, for exactly that revision: every hunk's status and change
+facts with the line each rests on, the checks that ran, a link to the full
+report, and "go to the diff" buttons. Questions for your agent (does this
+change behavior, does a test exercise it, does it serve the stated goal) show
+its answers as they arrive, attributed to the agent's client. If you also tell
+the agent where your local clone is (`repo`), and the clone already has the
+pull request's commits, call flows and definitions are added; diffninja never
+fetches or writes in it.
+
 ## Review a diff or a git range
 
 Ask your agent to review a patch, the working tree, or a range such as
@@ -75,7 +85,8 @@ fulfills them. The result also carries `reportUrl`: a read-only page on
 `127.0.0.1` with the same report for you to read — the agenda, call-flow graphs,
 and every hunk — served from memory for as long as the agent's session lasts.
 The tool writes no report files. Arguments and examples:
-[docs/mcp-setup.md](docs/mcp-setup.md).
+[docs/mcp-setup.md](docs/mcp-setup.md). Trying it on real reviews:
+[docs/pilot.md](docs/pilot.md).
 
 ## How static analysis works
 

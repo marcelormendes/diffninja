@@ -65,6 +65,11 @@ export function renderConnectedPage(csrf: string): string {
     '<div id="snapshot-body"></div>',
     '<p id="message-note" class="note" role="status" aria-live="polite" hidden></p>',
     "</section>",
+    '<section id="analysis-section" class="panel" aria-labelledby="analysis-heading" hidden>',
+    '<h2 id="analysis-heading">Reading order</h2>',
+    '<p class="hint">Local analysis of this revision: nothing left your machine and no model ran here. Facts point at what to read; they are not a verdict. Answers to the questions come from your coding agent and name the client that gave them.</p>',
+    '<div id="analysis-body"></div>',
+    "</section>",
     '<section id="diff-section" class="panel" aria-labelledby="diff-heading" hidden>',
     '<h2 id="diff-heading">Canonical diff</h2>',
     '<p class="hint">Comments attach only to the lines below, from the revision that was loaded. Line comments are a single line of plain text, written by you.</p>',
@@ -147,6 +152,10 @@ function script(csrf: string): string {
   var commentSeq = 0;
   var reattachIndex = -1;
   var draftOwner = '';
+  var analysis = null;
+  var analysisFor = '';
+  var analysisLoading = false;
+  var analysisTimer = null;
   var el = {};
 
   function byId(id) { return document.getElementById(id); }
@@ -766,7 +775,7 @@ function script(csrf: string): string {
     description.appendChild(make('summary', '', 'PR description (claims, not proof)'));
     description.appendChild(make('pre', '', typeof snap.body === 'string' && snap.body ? snap.body : 'No PR description supplied.'));
     el.snapshotBody.appendChild(description);
-    el.snapshotBody.appendChild(make('p', 'note', 'Outcome not established by this connected diff viewer. Compare the title and description with the changed behavior. Export a static report with a local repository to inspect the deterministic evidence and reading agenda; no model evaluation runs in this page.'));
+    el.snapshotBody.appendChild(make('p', 'note', 'Outcome not established by this page. Compare the title and description with the changed behavior; the reading order below points at what to read first, and no model evaluation runs in this page.'));
     var dl = make('dl', 'facts');
     addFact(dl, 'Repository', (typeof snap.owner === 'string' ? snap.owner : 'unknown') + '/' + (typeof snap.repo === 'string' ? snap.repo : 'unknown'), true);
     addLinkFact(dl, 'Pull request', snap.url, '#' + String(snap.number));
@@ -812,6 +821,178 @@ function script(csrf: string): string {
     help.id = inputId + '-help';
     wrap.appendChild(help);
     return wrap;
+  }
+
+  /* ------------------------------------------------------------ analysis -- */
+
+  var STATUS_ORDER = ['attention', 'uncertain', 'low', 'passed'];
+
+  function currentAnalysis() {
+    var snap = snapshot();
+    if (!snap || !analysis || analysis.available !== true || analysis.snapshotId !== snap.id) return null;
+    return analysis;
+  }
+
+  function worstStatusFor(path) {
+    var current = currentAnalysis();
+    if (!current || !Array.isArray(current.hunks)) return '';
+    var best = STATUS_ORDER.length;
+    for (var i = 0; i < current.hunks.length; i += 1) {
+      var hunk = current.hunks[i];
+      if (!hunk || hunk.file !== path) continue;
+      var rank = STATUS_ORDER.indexOf(hunk.status);
+      if (rank >= 0 && rank < best) best = rank;
+    }
+    return best < STATUS_ORDER.length ? STATUS_ORDER[best] : '';
+  }
+
+  function scheduleAnalysis(delay) {
+    if (analysisTimer !== null) clearTimeout(analysisTimer);
+    analysisTimer = setTimeout(function () { analysisTimer = null; loadAnalysis(); }, delay);
+  }
+
+  /** Fetch the analysis for the loaded revision; keep polling while answers are outstanding. */
+  function loadAnalysis() {
+    var snap = snapshot();
+    if (!snap || analysisLoading) return;
+    analysisLoading = true;
+    analysisFor = snap.id;
+    api('GET', '/api/analysis', null).then(function (data) {
+      analysis = data && typeof data === 'object' ? data : null;
+    }, function () {
+      analysis = { available: false, reason: 'The local analysis could not be read from the diffninja server.' };
+    }).then(function () {
+      analysisLoading = false;
+      renderAnalysis();
+      renderDiff();
+      var current = snapshot();
+      if (!current) return;
+      if (analysis && analysis.available === true && analysis.snapshotId !== current.id) { scheduleAnalysis(1000); return; }
+      var pending = analysis && analysis.available === true && analysis.questions && analysis.questions.answered < analysis.questions.total;
+      if (pending) scheduleAnalysis(10000);
+    });
+  }
+
+  function reportLink(url) {
+    if (typeof url !== 'string' || !/^http:\\/\\/127\\.0\\.0\\.1:\\d+\\/report\\/[a-f0-9]{64}$/.test(url)) return null;
+    var link = make('a', '', 'Open the full report (agenda, call flows, every hunk)');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    return link;
+  }
+
+  function renderHunkEntry(hunk, index) {
+    var entry = make('details', 'hunk-entry');
+    if (hunk.status === 'attention' && index < 8) entry.open = true;
+    var summary = make('summary', '');
+    summary.appendChild(make('span', 'chip status-' + (STATUS_ORDER.indexOf(hunk.status) >= 0 ? hunk.status : 'uncertain'), String(hunk.status)));
+    summary.appendChild(make('span', 'mono hunk-where', String(hunk.file) + ':' + String(hunk.line)));
+    var factCount = Array.isArray(hunk.facts) ? hunk.facts.length : 0;
+    if (factCount > 0) summary.appendChild(make('span', 'count', factCount + (factCount === 1 ? ' fact' : ' facts')));
+    entry.appendChild(summary);
+    var go = make('button', 'link-button', 'Go to the diff');
+    go.type = 'button';
+    go.dataset.action = 'goto';
+    go.dataset.path = String(hunk.file);
+    go.dataset.line = String(hunk.line);
+    go.dataset.side = hunk.side === 'LEFT' ? 'LEFT' : 'RIGHT';
+    entry.appendChild(go);
+    if (factCount > 0) {
+      var facts = make('ul', 'fact-list');
+      for (var f = 0; f < hunk.facts.length; f += 1) {
+        var fact = hunk.facts[f];
+        var item = make('li', '');
+        item.appendChild(make('span', 'fact-label', String(fact.label) + ' — ' + String(fact.side) + ' line: '));
+        item.appendChild(make('code', '', String(fact.text)));
+        facts.appendChild(item);
+      }
+      entry.appendChild(facts);
+    }
+    if (typeof hunk.note === 'string') entry.appendChild(make('p', 'note', hunk.note));
+    if (Array.isArray(hunk.questions) && hunk.questions.length > 0) {
+      var questions = make('ul', 'question-list');
+      for (var q = 0; q < hunk.questions.length; q += 1) {
+        var question = hunk.questions[q];
+        var row = make('li', '');
+        row.appendChild(make('span', 'question-text', String(question.text)));
+        var options = Array.isArray(question.options) ? question.options : [];
+        var answered = typeof question.choice === 'string' && options.indexOf(question.choice) >= 0;
+        row.appendChild(make('span', answered ? 'answer' : 'answer pending',
+          answered ? 'Agent (' + String(question.answeredBy) + '): ' + question.choice : 'Not answered yet by the agent.'));
+        questions.appendChild(row);
+      }
+      entry.appendChild(questions);
+    }
+    return entry;
+  }
+
+  function renderAnalysis() {
+    var snap = snapshot();
+    show(el.analysisSection, Boolean(snap) && !(typeof snap.unavailableReason === 'string' && snap.unavailableReason !== ''));
+    el.analysisBody.textContent = '';
+    if (!snap) return;
+    if (!analysis || analysisFor !== snap.id) {
+      el.analysisBody.appendChild(make('p', 'note', 'Reading the changes locally…'));
+      if (!analysisLoading) loadAnalysis();
+      return;
+    }
+    if (analysis.available !== true) {
+      el.analysisBody.appendChild(make('p', 'note', typeof analysis.reason === 'string' ? analysis.reason : 'No local analysis is available for this revision.'));
+      return;
+    }
+    if (analysis.snapshotId !== snap.id) {
+      el.analysisBody.appendChild(make('p', 'note', 'The pull request changed; reading the new revision…'));
+      return;
+    }
+    var counts = analysis.counts || {};
+    var parts = [];
+    for (var c = 0; c < STATUS_ORDER.length; c += 1) parts.push(String(counts[STATUS_ORDER[c]] || 0) + ' ' + STATUS_ORDER[c]);
+    el.analysisBody.appendChild(make('p', 'summary-line', parts.join(' · ')));
+    if (analysis.scope && typeof analysis.scope.note === 'string') el.analysisBody.appendChild(make('p', 'note', analysis.scope.note));
+    var link = reportLink(analysis.reportUrl);
+    if (link) { var linkLine = make('p', ''); linkLine.appendChild(link); el.analysisBody.appendChild(linkLine); }
+    if (Array.isArray(analysis.agenda) && analysis.agenda.length > 0) {
+      el.analysisBody.appendChild(make('h3', 'subhead', 'Start here'));
+      var agenda = make('ol', 'agenda-list');
+      for (var a = 0; a < analysis.agenda.length; a += 1) {
+        var task = analysis.agenda[a];
+        var li = make('li', '');
+        li.appendChild(make('strong', '', String(task.title)));
+        li.appendChild(make('span', 'note', ' — ' + String(task.reason)));
+        agenda.appendChild(li);
+      }
+      el.analysisBody.appendChild(agenda);
+    }
+    if (analysis.questions && analysis.questions.total > 0) {
+      el.analysisBody.appendChild(make('p', 'note', 'Questions for your agent: ' + analysis.questions.answered + ' of ' + analysis.questions.total
+        + ' answered. Ask the agent that opened this page to answer them; they appear here as they arrive.'));
+    }
+    el.analysisBody.appendChild(make('h3', 'subhead', 'Hunks in reading order'));
+    var list = make('div', 'hunk-list');
+    var hunks = Array.isArray(analysis.hunks) ? analysis.hunks : [];
+    for (var h = 0; h < hunks.length; h += 1) list.appendChild(renderHunkEntry(hunks[h], h));
+    el.analysisBody.appendChild(list);
+  }
+
+  function gotoLine(node) {
+    var path = node.getAttribute('data-path');
+    var line = node.getAttribute('data-line');
+    var side = node.getAttribute('data-side');
+    var rows = el.diffBody.querySelectorAll('.diff-row');
+    var target = null;
+    for (var i = 0; i < rows.length; i += 1) {
+      var row = rows[i];
+      if (row.getAttribute('data-path') !== path) continue;
+      if (row.getAttribute('data-line') === line && row.getAttribute('data-side') === side) { target = row; break; }
+      if (target === null && row.getAttribute('data-line') === line) target = row;
+    }
+    if (target === null) return;
+    target.scrollIntoView({ block: 'center' });
+    target.classList.add('is-target');
+    setTimeout(function () { target.classList.remove('is-target'); }, 2000);
+    var action = target.querySelector('button');
+    if (action) action.focus({ preventScroll: true });
   }
 
   function renderDiff() {
@@ -862,12 +1043,17 @@ function script(csrf: string): string {
     var head = make('h4', 'file-head');
     head.appendChild(make('span', 'file-path', group.path));
     head.appendChild(make('span', 'file-count', group.lines.length + ' line' + (group.lines.length === 1 ? '' : 's')));
+    var worst = worstStatusFor(group.path);
+    if (worst !== '') head.appendChild(make('span', 'chip status-' + worst, worst));
     block.appendChild(head);
     var scroll = make('div', 'diff-scroll');
     var rows = make('div', 'diff-rows');
     for (var i = 0; i < group.lines.length; i += 1) {
       var line = group.lines[i];
       var row = make('div', 'diff-row kind-' + String(line.kind));
+      row.dataset.path = line.path;
+      row.dataset.line = String(line.line);
+      row.dataset.side = line.side;
       var attached = commentIndexAt(line);
       var arming = reattachIndex >= 0;
       var action = make('button', 'diff-action' + (arming ? ' is-armed' : ''), arming ? 'Attach' : (attached >= 0 ? 'Edit' : 'Comment'));
@@ -1122,6 +1308,7 @@ function script(csrf: string): string {
     renderIdentity();
     renderSnapshot();
     renderMessage();
+    renderAnalysis();
     renderDiff();
     renderCompose();
     renderPreview();
@@ -1165,6 +1352,7 @@ function script(csrf: string): string {
     if (action === 'preview') { event_.preventDefault(); previewReview(); return; }
     if (action === 'submit') { event_.preventDefault(); submitReview(); return; }
     if (action === 'refresh') { event_.preventDefault(); refreshState(); return; }
+    if (action === 'goto') { event_.preventDefault(); gotoLine(node); return; }
   }
 
   function onChange(event_) {
@@ -1206,6 +1394,8 @@ function script(csrf: string): string {
     el.snapshotSection = byId('snapshot-section');
     el.snapshotBody = byId('snapshot-body');
     el.messageNote = byId('message-note');
+    el.analysisSection = byId('analysis-section');
+    el.analysisBody = byId('analysis-body');
     el.diffSection = byId('diff-section');
     el.diffBody = byId('diff-body');
     el.composeSection = byId('compose-section');
@@ -1302,6 +1492,24 @@ body {
 h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
 h1 { font-size: clamp(1.3rem, 1.05rem + 1.1vw, 1.8rem); overflow-wrap: anywhere; }
 h2 { font-size: 1.02rem; }
+.chip { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 1px 7px; border-radius: 999px; margin-left: 8px; border: 1px solid var(--line); color: var(--ink-soft); }
+.chip.status-attention { color: var(--alarm); border-color: var(--alarm); background: var(--alarm-bg); }
+.chip.status-uncertain { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+.chip.status-low { color: var(--teal); border-color: var(--teal); }
+.hunk-list { display: grid; gap: 6px; }
+.hunk-entry { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; background: var(--sunken); }
+.hunk-entry summary { cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hunk-entry summary .chip { margin-left: 0; }
+.hunk-where { font-size: 13px; overflow-wrap: anywhere; }
+.fact-list, .question-list, .agenda-list { margin: 6px 0; padding-left: 20px; font-size: 13px; }
+.fact-list code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.fact-label { color: var(--ink-soft); }
+.question-list li { margin: 4px 0; }
+.question-text { display: block; }
+.answer { display: block; font-weight: 600; }
+.answer.pending { font-weight: 400; color: var(--ink-soft); font-style: italic; }
+.summary-line { font-weight: 600; }
+.diff-row.is-target { outline: 2px solid var(--cursor); outline-offset: -2px; }
 h3.subhead { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
 p { margin: 0; }
 a { color: var(--teal); overflow-wrap: anywhere; }

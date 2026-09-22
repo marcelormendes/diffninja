@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { ConnectedReview, type ConnectedState, type ReviewPayload } from "./github.js";
 import { renderConnectedPage } from "./connected-html.js";
+import type { ConnectedAnalysisView } from "./connected-analysis.js";
 
 const MAX_BODY = 256 * 1024;
 const loadSchema = z.object({ url: z.string() }).strict();
@@ -14,7 +15,21 @@ const emptySchema = z.object({}).strict();
 const tokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export interface ConnectedSession { server: Server; url: string }
 interface ErrorResponse { error: string; state?: ConnectedState }
-type ApiResponse = ConnectedState | ReviewPayload | ErrorResponse;
+type ApiResponse = ConnectedState | ReviewPayload | ErrorResponse | ConnectedAnalysisView;
+
+/** Read-only extras a connected session can serve beside the review itself. */
+export interface ConnectedOptions {
+  /**
+   * The local analysis of the loaded snapshot, for `GET /api/analysis`. It must
+   * describe the snapshot the review currently holds, or say it is unavailable.
+   */
+  readonly analysis?: () => Promise<ConnectedAnalysisView>;
+}
+
+const NO_ANALYSIS: ConnectedAnalysisView = {
+  available: false,
+  reason: "No local analysis is attached to this session.",
+};
 
 async function readBody(req: IncomingMessage): Promise<string> {
   if (req.headers["content-type"] !== "application/json") throw new Error("Expected application/json.");
@@ -41,7 +56,7 @@ function requestIsTrusted(req: IncomingMessage, origin: string): boolean {
 }
 
 /** A single ephemeral session; never exposes a general GitHub API proxy. */
-export async function serveConnected(review = new ConnectedReview()): Promise<ConnectedSession> {
+export async function serveConnected(review = new ConnectedReview(), options: ConnectedOptions = {}): Promise<ConnectedSession> {
   const csrf = randomBytes(32).toString("hex");
   let origin = "";
   const server = createServer(async (req, res) => {
@@ -56,6 +71,14 @@ export async function serveConnected(review = new ConnectedReview()): Promise<Co
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); res.end(renderConnectedPage(csrf)); return;
     }
     if (req.method === "GET" && req.url === "/api/state") { json(200, review.getState()); return; }
+    if (req.method === "GET" && req.url === "/api/analysis") {
+      try {
+        json(200, options.analysis === undefined ? NO_ANALYSIS : await options.analysis());
+      } catch (error) {
+        json(200, { available: false, reason: `Local analysis failed: ${error instanceof Error ? error.message : "unknown error"}` });
+      }
+      return;
+    }
     const routes = ["/api/load", "/api/preview", "/api/submit", "/api/reconcile"];
     if (req.method !== "POST" || !routes.includes(req.url ?? "")) { json(404, { error: "Not found." }); return; }
     const token = tokenSchema.safeParse(req.headers["x-diffninja-csrf"]);

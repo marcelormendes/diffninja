@@ -74,7 +74,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     page, and never change status, priority, or order. Reviews are reachable only
     from the connection that created them. Report pages are `GET /report/<256-bit token>` only, Host-checked,
     CSP-pinned by hash, no-store, at most 20 per connection, and close with it.
-    Connected success returns `{ mode: "connected", url, pr, snapshot }`.
+    Connected success returns `{ mode: "connected", url, pr, snapshot }` plus,
+    for exactly that snapshot, the local analysis: `reviewId`, `reportUrl`,
+    `analysisScope`, and `report` (or `analysisUnavailable`). The page reads it
+    from `GET /api/analysis` (same Host/Origin checks) and polls for answers.
+    With a PR link, `repo` is an optional absolute local clone used only when it
+    already has the PR's base and head commits: never fetched, checked out, or
+    written. The canonical GitHub patch stays the diff under review.
     Both include the same JSON in text `content`. Failures return `isError: true`
     with the message as text and no partial report.
   - Connected pages belong to the MCP connection and close on disconnect.

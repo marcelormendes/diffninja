@@ -335,6 +335,29 @@ interface ConnectedPayload {
   url: string;
   pr: string;
   snapshot: ConnectedSnapshot;
+  reviewId?: string;
+  reportUrl?: string;
+  report?: ReviewReport;
+  analysisUnavailable?: string;
+}
+
+/** What the connected page reads from `GET /api/analysis`. */
+interface AnalysisView {
+  available: boolean;
+  reason?: string;
+  snapshotId?: string;
+  reviewId?: string;
+  reportUrl?: string;
+  counts?: Record<string, number>;
+  hunks?: Array<{ file: string; line: number; side: string; status: string; facts: unknown[]; questions: Array<{ id: string; choice?: string; answeredBy?: string }> }>;
+  questions?: { total: number; answered: number };
+}
+
+async function connectedAnalysis(url: string): Promise<AnalysisView | null> {
+  const response = await loopback(url + "api/analysis");
+  if (response === null || response.status !== 200) return null;
+  // SAFETY: this loopback server answers with the analysis view it serves to its own page.
+  return JSON.parse(response.body) as AnalysisView;
 }
 
 function ghCalls(log: string): string[] {
@@ -609,6 +632,45 @@ describe("review_diff connected pull request mode", () => {
       // The load went through the real gh runner with the link it was given, and
       // connected review never sends source anywhere of its own.
       expect(ghCalls(log).some(line => line.startsWith(`pr view ${GH_URL} --json`))).toBe(true);
+      expect(fetchAttempts).toEqual([]);
+    });
+  });
+
+  test("the pull request page carries the local analysis of exactly the loaded revision", async () => {
+    await withFakeGh(async () => {
+      blockNetwork();
+      const client = await connectReview();
+
+      const payload = connectedOf(await review(client, { pr: GH_URL }));
+
+      // The agent receives the same local analysis a static review gives.
+      expect(payload.analysisUnavailable).toBeUndefined();
+      expect(payload.reviewId).toMatch(/^[a-f0-9]{32}$/);
+      expect(payload.reportUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/report\/[a-f0-9]{64}$/);
+      expect(payload.report?.items.map(item => item.file)).toEqual(["app.ts"]);
+      expect(payload.report?.pr).toMatchObject({ url: GH_URL, headRef: payload.snapshot.headSha });
+
+      // The page reads it through its own loopback server, bound to the snapshot.
+      const view = await connectedAnalysis(payload.url);
+      expect(view).toMatchObject({ available: true, snapshotId: payload.snapshot.id, reviewId: payload.reviewId, reportUrl: payload.reportUrl });
+      expect(view?.hunks?.[0]).toMatchObject({ file: "app.ts", status: "attention", line: 2, side: "LEFT" });
+
+      // Answers the agent records appear on the pull request page.
+      const question = payload.report!.questions[0];
+      expect(question).toBeDefined();
+      const recorded = await client.callTool({ name: "record_answers", arguments: {
+        reviewId: payload.reviewId, answers: [{ questionId: question.id, choice: "cannot-tell" }],
+      } });
+      expect(recorded.isError).toBeFalsy();
+      const after = await connectedAnalysis(payload.url);
+      expect(after?.questions).toEqual({ total: payload.report!.questions.length, answered: 1 });
+      const answered = after?.hunks?.flatMap(hunk => hunk.questions).find(entry => entry.id === question.id);
+      expect(answered?.choice).toBe("cannot-tell");
+      expect(answered?.answeredBy).toBeTruthy();
+
+      // A repeated call for the same pull request reuses the same analysis.
+      const again = connectedOf(await review(client, { pr: GH_URL }));
+      expect(again.reviewId).toBe(payload.reviewId);
       expect(fetchAttempts).toEqual([]);
     });
   });
