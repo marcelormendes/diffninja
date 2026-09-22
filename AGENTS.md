@@ -1,7 +1,7 @@
 # diffninja
 
 `diffninja` runs inside agent CLIs (Claude Code, Codex, OMP, pi, …) through
-`diffninja-mcp`, a stdio MCP server exposing the single `review_diff` tool. The
+`diffninja-mcp`, a stdio MCP server exposing `review_diff` and `record_answers`. The
 `diffninja` bin only registers that server (`diffninja setup`); there is no
 terminal review mode. PR links select a connected, human-authored GitHub review
 via `gh`, and the tool returns its loopback URL. Static diff/range analysis is
@@ -66,7 +66,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     Static analysis requires exactly one of `diff` or `from`+`to`; `repo` must
     be absolute for a range. In auto, `pr`/`input` require a PR link.
   - Static success returns `structuredContent` equal to the `ReviewReport` plus
-    `reportUrl`. Report pages are `GET /report/<256-bit token>` only, Host-checked,
+    `reportUrl` and `reviewId`; the report carries `questions` (`questions.ts`,
+    deterministic templates, closed options incl. `cannot-tell`, at most 24).
+  - `record_answers`: strict `{ reviewId, answers: [{ questionId, choice }] }`,
+    no free text; any invalid answer refuses the whole call and keeps nothing;
+    answers are attributed to the MCP client's own name/version, re-render the
+    page, and never change status, priority, or order. Reviews are reachable only
+    from the connection that created them. Report pages are `GET /report/<256-bit token>` only, Host-checked,
     CSP-pinned by hash, no-store, at most 20 per connection, and close with it.
     Connected success returns `{ mode: "connected", url, pr, snapshot }`.
     Both include the same JSON in text `content`. Failures return `isError: true`

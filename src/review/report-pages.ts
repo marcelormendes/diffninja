@@ -14,6 +14,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { z } from "zod";
+import type { ReviewReport } from "./types.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
 export const MAX_REPORT_PAGES = 20;
@@ -40,12 +41,38 @@ export function reportPolicy(html: string): string {
 }
 
 interface ReportPage {
-  readonly html: string;
-  readonly policy: string;
+  html: string;
+  policy: string;
+  /** The report behind a published page, kept so recorded answers can re-render it. */
+  readonly report?: ReviewReport;
+  readonly reviewId?: string;
+}
+
+/** A static review published on this connection. */
+export interface PublishedReview {
+  readonly reviewId: string;
+  readonly url: string;
+}
+
+/** One answer as the agent sent it; validated against the question before it is kept. */
+export interface AnswerInput {
+  readonly questionId: string;
+  readonly choice: string;
+}
+
+export interface RecordedAnswers {
+  readonly reviewId: string;
+  readonly recorded: number;
+  readonly answered: number;
+  readonly unanswered: number;
+  readonly reportUrl: string;
 }
 
 export class ReportPages {
   private readonly pages = new Map<string, ReportPage>();
+  private readonly tokens = new Map<string, string>();
+
+  constructor(private readonly render: (report: ReviewReport) => string = () => "") {}
   private listening: Promise<{ server: Server; origin: string }> | undefined;
   private closed = false;
 
@@ -55,17 +82,69 @@ export class ReportPages {
     const { origin } = await (this.listening ??= this.listen());
     const token = randomBytes(32).toString("hex");
     this.pages.set(token, { html, policy: reportPolicy(html) });
-    for (const oldest of this.pages.keys()) {
+    for (const [oldest, page] of this.pages) {
       if (this.pages.size <= MAX_REPORT_PAGES) break;
       this.pages.delete(oldest);
+      if (page.reviewId !== undefined) this.tokens.delete(page.reviewId);
     }
     return `${origin}/report/${token}`;
   }
+
+  /** Serve a static review's page, keeping the report so answers can be recorded. */
+  async publish(report: ReviewReport): Promise<PublishedReview> {
+    const url = await this.add(this.render(report));
+    const token = url.slice(url.lastIndexOf("/") + 1);
+    const reviewId = randomBytes(16).toString("hex");
+    const page = this.pages.get(token)!;
+    this.pages.set(token, { ...page, report, reviewId });
+    this.tokens.set(reviewId, token);
+    return { reviewId, url };
+  }
+
+  /**
+   * Record answers to one review's questions and re-render its page. Every
+   * answer is checked before any is kept — a question this review asked, one of
+   * that question's options, each question at most once per call — so a call
+   * with one bad answer changes nothing. A later answer replaces an earlier one.
+   */
+  record(reviewId: string, answers: readonly AnswerInput[], answeredBy: string): RecordedAnswers {
+    const token = this.tokens.get(reviewId);
+    const page = token === undefined ? undefined : this.pages.get(token);
+    if (token === undefined || page?.report === undefined) {
+      throw new Error("No review with that reviewId on this MCP connection. Reviews last as long as the connection, at most the latest 20.");
+    }
+    const questions = new Map(page.report.questions.map((question) => [question.id, question]));
+    const seen = new Set<string>();
+    answers.forEach((answer, index) => {
+      const question = questions.get(answer.questionId);
+      if (question === undefined) throw new Error(`answers[${index}] names a question this review did not ask.`);
+      if (seen.has(answer.questionId)) throw new Error(`answers[${index}] answers the same question twice in one call.`);
+      if (!question.options.includes(answer.choice)) {
+        throw new Error(`answers[${index}] is not one of that question's options: ${question.options.join(", ")}.`);
+      }
+      seen.add(answer.questionId);
+    });
+    const answeredAt = new Date().toISOString();
+    for (const answer of answers) questions.get(answer.questionId)!.answer = { choice: answer.choice, answeredBy, answeredAt };
+    page.html = this.render(page.report);
+    page.policy = reportPolicy(page.html);
+    const answered = page.report.questions.filter((question) => question.answer !== undefined).length;
+    return {
+      reviewId,
+      recorded: answers.length,
+      answered,
+      unanswered: page.report.questions.length - answered,
+      reportUrl: `${this.origin}/report/${token}`,
+    };
+  }
+
+  private origin = "";
 
   /** Stop serving every page. Repeated calls are harmless. */
   async close(): Promise<void> {
     this.closed = true;
     this.pages.clear();
+    this.tokens.clear();
     const listening = this.listening;
     if (listening === undefined) return;
     const { server } = await listening.catch(() => ({ server: undefined }));
@@ -108,6 +187,7 @@ export class ReportPages {
     });
     const address = z.object({ port: z.number().int().positive() }).parse(server.address());
     origin = `http://127.0.0.1:${address.port}`;
+    this.origin = origin;
     // A close that raced this listen still owns the teardown.
     if (this.closed) {
       await new Promise<void>((resolve) => server.close(() => resolve()));

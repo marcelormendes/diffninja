@@ -30,14 +30,13 @@ function report(callFlows: CallFlowFile[], items: ReviewItem[] = [item()]): Revi
   return {
     title: "Checkout review",
     source: "main to feature",
-    mode: "live",
     createdAt: "2026-09-18T10:00:00Z",
     items,
     callFlow: [],
     callFlows,
     callFlowAvailability: "available",
     warnings: [],
-    modelCalls: 0,
+    questions: [],
   };
 }
 

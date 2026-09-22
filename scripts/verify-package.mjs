@@ -110,12 +110,19 @@ try {
     // spawns .cmd files through cmd.exe, the same path real MCP clients use.
     const command = join(binDir, windows ? "diffninja-mcp.cmd" : "diffninja-mcp");
     await client.connect(new StdioClientTransport({ command, stderr: "inherit", cwd: sandbox }));
-    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["review_diff"]);
+    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["review_diff", "record_answers"]);
     const result = await client.callTool({ name: "review_diff", arguments: { diff: patch } });
     assert(!result.isError);
     assert.equal(result.structuredContent.items.length, 1);
     assert.equal(result.structuredContent.items[0].facts.language, "c-like");
     assert.match(result.structuredContent.reportUrl, /^http:\/\/127\.0\.0\.1:\d+\/report\/[a-f0-9]{64}$/);
+    const questions = result.structuredContent.questions;
+    assert(questions.length > 0);
+    const recorded = await client.callTool({ name: "record_answers", arguments: {
+      reviewId: result.structuredContent.reviewId, answers: [{ questionId: questions[0].id, choice: "cannot-tell" }],
+    } });
+    assert(!recorded.isError);
+    assert.equal(recorded.structuredContent.answered, 1);
     assert.deepEqual(result.structuredContent, JSON.parse(result.content[0].text));
   } finally {
     await client.close();

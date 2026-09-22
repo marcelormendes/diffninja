@@ -117,6 +117,14 @@ The tool writes no report files. Arguments and examples:
    ordered by their own priority: a regression test changes as much as its fix.
    Documentation is not demoted, because prose can be normative. Status is a
    label for filtering and never reorders the report.
+4. **Questions for your agent.** Where a judgment needs meaning rather than
+   syntax, the report asks the agent that requested it — does this hunk change
+   what callers observe, does a test exercise it, does a test change weaken it,
+   do the docs match the code, does the hunk serve the stated goal. Questions
+   are fixed templates with closed options (always including `cannot-tell`);
+   the agent answers through `record_answers`, and the answers appear on the
+   report page attributed to that agent, never reordering anything. diffninja
+   itself still calls no model.
 
 Intent cross-checks keep author claims and generated summaries separate.
 Source matches are navigation evidence, not proof of fulfillment. Broad goals,

@@ -15,6 +15,7 @@ import { buildReviewEvidence } from "./evidence.js";
 import { crossCheckIntent } from "./intent.js";
 import { checkReferences } from "./reference-check.js";
 import { moduleResolver } from "./module-resolution.js";
+import { reviewQuestions } from "./questions.js";
 
 export type ReviewInput =
   | { diff: string; source: string }
@@ -133,5 +134,6 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   return { title: options.pr?.title || "Focused PR review", source, createdAt: new Date().toISOString(),
     pr: options.pr,
     evidence: { ...evidence, intent: crossCheckIntent(options.pr, units, evidence.agenda, evidence.findings) },
-    ...result, callFlow, callFlows, callFlowAvailability, warnings: [...warnings, ...result.warnings] };
+    ...result, callFlow, callFlows, callFlowAvailability, warnings: [...warnings, ...result.warnings],
+    questions: reviewQuestions(result.items, options.pr) };
 }

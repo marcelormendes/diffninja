@@ -83,7 +83,7 @@ function textOf(result: CallToolResult): string {
 }
 
 /** A static result: the report plus the loopback page that serves it to a human. */
-type StaticResult = ReviewReport & { reportUrl: string };
+type StaticResult = ReviewReport & { reportUrl: string; reviewId: string };
 
 function reportOf(result: CallToolResult): StaticResult {
   // SAFETY: this payload is produced by our connected review server; tests below
@@ -101,7 +101,7 @@ describe("review_diff discovery", () => {
     const client = await connectReview();
     const listed = await client.listTools();
 
-    expect(listed.tools.map(tool => tool.name)).toEqual(["review_diff"]);
+    expect(listed.tools.map(tool => tool.name)).toEqual(["review_diff", "record_answers"]);
     const tool = listed.tools[0];
     expect(tool.annotations?.readOnlyHint).toBe(false);
     expect(tool.annotations?.destructiveHint).toBe(false);
@@ -505,6 +505,77 @@ class StdioReviewPeer {
     waiting(message);
   }
 }
+
+describe("record_answers", () => {
+  async function reviewed(client: Client) {
+    const result = await review(client, { diff: patch });
+    expect(result.isError).toBeFalsy();
+    const report = reportOf(result);
+    expect(report.reviewId).toMatch(/^[a-f0-9]{32}$/);
+    expect(report.questions.length).toBeGreaterThan(0);
+    return report;
+  }
+
+  async function answer(client: Client, args: NonNullable<CallToolRequest["params"]["arguments"]>) {
+    return CallToolResultSchema.parse(await client.callTool({ name: "record_answers", arguments: args }));
+  }
+
+  test("records valid answers, attributes them to the client, and re-renders the page", async () => {
+    blockNetwork();
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const [first] = report.questions;
+    const before = await loopback(report.reportUrl);
+    expect(before?.body).toContain("not answered");
+
+    const result = await answer(client, {
+      reviewId: report.reviewId,
+      answers: [{ questionId: first.id, choice: "cannot-tell" }],
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      reviewId: report.reviewId, recorded: 1, answered: 1, unanswered: report.questions.length - 1, reportUrl: report.reportUrl,
+    });
+    expect(result.structuredContent).toEqual(JSON.parse(textOf(result)));
+    const after = await loopback(report.reportUrl);
+    expect(after?.status).toBe(200);
+    expect(after?.body).toContain("cannot-tell");
+    expect(after?.body).toContain("answered by diffninja-mcp-test 0.1.0");
+    // Answers never move a hunk: the order on the page is the report's order.
+    const order = (body: string) => [...body.matchAll(/<span class="path mono">([^<]*)<\/span>/g)].map(match => match[1]);
+    expect(order(after!.body)).toEqual(order(before!.body));
+    expect(fetchAttempts).toEqual([]);
+  });
+
+  test("refuses the whole call, keeping nothing, when any answer is invalid", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const [first] = report.questions;
+    const valid = { questionId: first.id, choice: first.options[0] };
+    const cases: Array<{ args: NonNullable<CallToolRequest["params"]["arguments"]>; expected: RegExp }> = [
+      { args: { reviewId: "0".repeat(32), answers: [valid] }, expected: /no review with that reviewId/i },
+      { args: { reviewId: report.reviewId, answers: [valid, { questionId: "q999", choice: "cannot-tell" }] }, expected: /answers\[1\] names a question/ },
+      { args: { reviewId: report.reviewId, answers: [valid, { questionId: report.questions[1].id, choice: "maybe" }] }, expected: /answers\[1\] is not one of/ },
+      { args: { reviewId: report.reviewId, answers: [valid, valid] }, expected: /same question twice/ },
+      { args: { reviewId: report.reviewId, answers: [{ ...valid, note: "free text" }] }, expected: /unrecognized key|invalid arguments/i },
+    ];
+    for (const { args, expected } of cases) {
+      const result = await answer(client, args);
+      expect(result.isError, JSON.stringify(args)).toBe(true);
+      expect(textOf(result)).toMatch(expected);
+    }
+    const page = await loopback(report.reportUrl);
+    expect(page?.body).not.toContain("answered by");
+  });
+
+  test("a review from another connection is not reachable", async () => {
+    const owner = await connectReview();
+    const report = await reviewed(owner);
+    const other = await connectReview();
+    const result = await answer(other, { reviewId: report.reviewId, answers: [{ questionId: "q1", choice: "cannot-tell" }] });
+    expect(result.isError).toBe(true);
+  });
+});
 
 describe("review_diff connected pull request mode", () => {
   test("a pull request link returns a loaded loopback review page", async () => {

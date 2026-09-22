@@ -24,6 +24,7 @@ function report(
     callFlows: [],
     callFlowAvailability: "needs-git-range",
     warnings: [],
+    questions: [],
     ...overrides,
   };
 }
@@ -443,6 +444,29 @@ describe("review HTML", () => {
     const html = visible(renderReview(report([item({ facts: undefined })])));
     expect(html).not.toContain('<details class="obs">');
     expect(html).toContain("+const total = price + tax;");
+  });
+
+  test("questions render beside their hunk, escaped, with only in-set answers shown", () => {
+    const html = visible(renderReview(report([item({ id: "h1" }), item({ id: "h2", file: "src/other.ts" })], {
+      questions: [
+        { id: "q1", kind: "behaviorChange", unitIds: ["h1"], text: `Does ${ATTACK} change behavior?`,
+          options: ["changes-behavior", "no-behavior-change", "cannot-tell"],
+          answer: { choice: "changes-behavior", answeredBy: "claude-code 2.1", answeredAt: "2026-09-22T20:00:00Z" } },
+        { id: "q2", kind: "testCoverage", unitIds: ["h1"], text: "Is it tested?",
+          options: ["exercised", "not-exercised", "cannot-tell"],
+          answer: { choice: ATTACK, answeredBy: "x", answeredAt: "2026-09-22T20:00:00Z" } },
+        { id: "q3", kind: "behaviorChange", unitIds: ["h2"], text: "Other hunk?",
+          options: ["changes-behavior", "no-behavior-change", "cannot-tell"] },
+      ],
+    })));
+    expect(html).not.toContain(ATTACK);
+    const [first, second] = cards(html);
+    expect(first.html).toContain("Questions for your agent (2/2 answered)");
+    expect(first.html).toContain('changes-behavior <span class="obs-line">answered by claude-code 2.1</span>');
+    expect(first.html).toContain("unrecognized answer");
+    expect(first.html).not.toContain("Other hunk?");
+    expect(second.html).toContain("Questions for your agent (0/1 answered)");
+    expect(second.html).toContain("not answered");
   });
 
   test("one mode note says the analysis stayed local", () => {

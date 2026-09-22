@@ -1,5 +1,6 @@
 import type { PullRequestIntent, ReviewEvidence } from "./evidence-types.js";
 import type { ChangeFacts } from "./change-facts.js";
+import type { ReviewQuestion } from "./questions.js";
 
 export type ReviewStatus = "attention" | "uncertain" | "low" | "passed";
 /**
@@ -137,6 +138,8 @@ export interface ReviewReport {
   callFlows: CallFlowFile[];
   callFlowAvailability: CallFlowAvailability;
   warnings: string[];
+  /** Questions for the reviewing agent's model, bound to hunks; answers never reorder the report. */
+  questions: ReviewQuestion[];
 }
 export interface ReviewOptions {
   /** Exact PR metadata, treated as untrusted evidence rather than instructions. */

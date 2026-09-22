@@ -1,7 +1,7 @@
 # MCP setup
 
-`diffninja-mcp` is a stdio MCP server exposing exactly one tool,
-`review_diff`. The process takes no arguments and reads/writes only JSON-RPC
+`diffninja-mcp` is a stdio MCP server exposing two tools: `review_diff`, and
+`record_answers` for the agent's answers to a review's questions. The process takes no arguments and reads/writes only JSON-RPC
 on stdin/stdout, so the client must launch it directly — anything else
 writing to its stdout corrupts the stream. It never writes report files; the
 report comes back as the tool result. This server is the only way to run a
@@ -84,7 +84,9 @@ Rules enforced by the schema and the tool:
   [check boundaries](reference.md#automatic-check-boundaries).
 
 For static inputs, `structuredContent` **is** the `ReviewReport` plus
-`reportUrl`, with `content` carrying the same object as JSON text. `reportUrl`
+`reportUrl` and `reviewId`, with `content` carrying the same object as JSON
+text. The report's `questions` ask the agent's own model about specific hunks
+(see [`record_answers`](#record_answers)). `reportUrl`
 is a read-only `127.0.0.1` page with the same report for the human reviewer;
 it lives in memory for this MCP connection (see
 [the report page](reference.md#the-report-page)). For PR inputs, both carry
@@ -93,6 +95,32 @@ it lives in memory for this MCP connection (see
 browser; MCP does not launch one or submit a review itself. Pages live for
 the MCP connection and close on disconnect. Failures return `isError: true`,
 an error message, and no partial report.
+
+## `record_answers`
+
+diffninja calls no model. Judgments that need meaning rather than syntax are
+asked of the agent that requested the review, as `questions` in the static
+result: does a hunk change what callers or users observe, does a test in (or
+outside) the diff exercise it, does a test change weaken what it checks, does
+changed documentation match the code, does a hunk serve the stated goal. Each
+question is bound to hunks and has a closed set of options that always includes
+`cannot-tell`; at most 24 are asked, earliest hunks first.
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `reviewId` | string | The `reviewId` a static `review_diff` result returned on this connection. |
+| `answers` | array | 1–100 `{ "questionId": "q1", "choice": "cannot-tell" }` objects, each choice one of that question's options. No free text. |
+
+The whole call is refused, keeping nothing, if any answer names an unknown
+question, repeats one, or uses an option the question does not list. A later
+answer replaces an earlier one. Answers appear on the report page beside their
+hunk, attributed to the MCP client that recorded them (its own name and
+version, not a model identity), and never change any status, priority, or the
+order. The result is `{ reviewId, recorded, answered, unanswered, reportUrl }`.
+
+```json
+{ "reviewId": "4f1c…", "answers": [{ "questionId": "q1", "choice": "changes-behavior" }, { "questionId": "q2", "choice": "cannot-tell" }] }
+```
 
 ## Call examples
 

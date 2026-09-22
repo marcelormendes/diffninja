@@ -1,4 +1,5 @@
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
+import type { ReviewQuestion } from "./questions.js";
 import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
@@ -42,7 +43,7 @@ export function renderReview(report: ReviewReport): string {
           renderNav(report.items),
           "</div>",
           '<p class="empty" id="filter-empty" hidden>No hunks match the selected statuses.</p>',
-          renderItems(report.items),
+          renderItems(report.items, report.questions),
         ].join("\n");
   return [
     "<!doctype html>",
@@ -203,15 +204,15 @@ function renderNav(items: readonly ReviewItem[]): string {
   ].join("\n");
 }
 
-function renderItems(items: readonly ReviewItem[]): string {
+function renderItems(items: readonly ReviewItem[], questions: readonly ReviewQuestion[]): string {
   const cards = items
-    .map((item, index) => renderItem(item, index + 1))
+    .map((item, index) => renderItem(item, index + 1, questions.filter((question) => question.unitIds[0] === item.id)))
     .join("\n");
   return `<section class="cards" aria-label="Hunks">${cards}</section>`;
 }
 
 /** Plain file header row: rank focus button, path, line growth. */
-function renderItem(item: ReviewItem, rank: number): string {
+function renderItem(item: ReviewItem, rank: number, questions: readonly ReviewQuestion[]): string {
   const status = escapeHtml(item.status);
   return [
     // Closed by default: a fresh report opens on the agenda, and the diff stays
@@ -225,12 +226,12 @@ function renderItem(item: ReviewItem, rank: number): string {
     `<span class="growth mono"><span class="plus">+${formatInteger(item.added)}</span> <span class="minus">-${formatInteger(item.removed)}</span></span>`,
     `<button type="button" class="focus-button enhanced" data-focus aria-label="Focus hunk ${rank}">Focus</button>`,
     "</summary>",
-    renderItemBody(item),
+    renderItemBody(item, questions),
     "</details>",
   ].join("\n");
 }
 
-function renderItemBody(item: ReviewItem): string {
+function renderItemBody(item: ReviewItem, questions: readonly ReviewQuestion[]): string {
   const special =
     item.special === undefined || item.special === ""
       ? ""
@@ -239,11 +240,41 @@ function renderItemBody(item: ReviewItem): string {
     '<div class="body">',
     special,
     renderFacts(item),
+    renderQuestions(questions),
     renderDiff(item.diff),
     "</div>",
   ]
     .filter((part) => part !== "")
     .join("\n");
+}
+
+/**
+ * Questions this report asked the reviewing agent about this hunk, with the
+ * answer when one was recorded. An answer is printed only when it is one of the
+ * question's own options, attributed to the MCP client that recorded it; it is
+ * another reader's view, never a verdict, and it never reorders the report.
+ */
+function renderQuestions(questions: readonly ReviewQuestion[]): string {
+  if (questions.length === 0) return "";
+  const rows = questions.map((question) => {
+    const answer = question.answer;
+    const shown =
+      answer === undefined
+        ? '<span class="obs-line">not answered</span>'
+        : question.options.includes(answer.choice)
+          ? `${escapeHtml(answer.choice)} <span class="obs-line">answered by ${escapeHtml(answer.answeredBy)}</span>`
+          : escapeHtml("unrecognized answer");
+    return `<dt>${escapeHtml(question.text)}</dt><dd class="mono">${shown}</dd>`;
+  });
+  return [
+    '<details class="obs">',
+    `<summary>Questions for your agent (${questions.filter((question) => question.answer !== undefined).length}/${questions.length} answered)</summary>`,
+    '<div class="obs-body">',
+    '<p class="note">diffninja asks these of the agent that requested the review; answers are that agent&#39;s reading, not a verdict, and never change the order or the status.</p>',
+    `<dl class="obs-list">${rows.join("")}</dl>`,
+    "</div>",
+    "</details>",
+  ].join("\n");
 }
 
 /** Human label per fact, in the order the report shows them. */
