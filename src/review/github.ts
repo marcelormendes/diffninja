@@ -646,6 +646,9 @@ interface ListedFile {
   filename: string;
   previous: string | null;
   patch: string | null;
+  /** GitHub's own line counts for the file; present even when it omits the patch. */
+  additions: number | null;
+  deletions: number | null;
 }
 
 function listedFiles(listing: GhJson): ListedFile[] | null {
@@ -655,7 +658,13 @@ function listedFiles(listing: GhJson): ListedFile[] | null {
     if (!isGhObject(row)) return null;
     const filename = textField(row, "filename");
     if (filename === null) return null;
-    entries.push({ filename, previous: textField(row, "previous_filename"), patch: textField(row, "patch") });
+    entries.push({
+      filename,
+      previous: textField(row, "previous_filename"),
+      patch: textField(row, "patch"),
+      additions: numberField(row, "additions"),
+      deletions: numberField(row, "deletions"),
+    });
   }
   return entries;
 }
@@ -720,6 +729,20 @@ function samePatch(raw: string[], patch: string): boolean {
  * the paginated file list of that same pull request. Anything else means one of
  * the two answers was truncated, so no report is built at all.
  */
+/** Whether a patch adds and removes exactly the lines GitHub counts for the file. */
+function countsAgree(rows: readonly string[], listed: ListedFile): boolean {
+  if (listed.additions === null || listed.deletions === null) return false;
+  let added = 0;
+  let removed = 0;
+  let inHunk = false;
+  for (const row of rows) {
+    if (row.startsWith("@@")) inHunk = true;
+    else if (inHunk && row.startsWith("+")) added += 1;
+    else if (inHunk && row.startsWith("-")) removed += 1;
+  }
+  return added === listed.additions && removed === listed.deletions;
+}
+
 interface Coverage {
   readonly problem: string | null;
   /**
@@ -744,7 +767,10 @@ function checkCoverage(files: ParsedFile[], listing: GhJson): Coverage {
     used.add(index);
     const patch = entries[index].patch;
     if (patch === null) {
-      if (file.patch.length > 0) return fail(incompleteProblem(file.path));
+      // GitHub omits the patch of a large file from its file list. The diff is
+      // still accepted for it when its added and removed line counts equal the
+      // counts GitHub reports for that file; anything else is incomplete.
+      if (file.patch.length > 0 && !countsAgree(file.patch, entries[index])) return fail(incompleteProblem(file.path));
       continue;
     }
     if (!samePatch(file.patch, patch)) {

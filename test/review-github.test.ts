@@ -982,6 +982,14 @@ describe("connected review canonical diff validation", () => {
     truncatedPatch.files = JSON.stringify([listedFile("app.ts", null)]);
     expect(await problemFor(truncatedPatch)).toMatch(/incomplete diff for app.ts/);
 
+    // GitHub omits a large file's patch from the list but still counts its lines:
+    // a diff whose counts agree is accepted, one whose counts differ is not.
+    const omitted = new FakeGh();
+    omitted.files = JSON.stringify([{ ...listedFile("app.ts", null), additions: 2, deletions: 1 }]);
+    const accepted = await loadedSession(omitted);
+    expect(accepted.state.status).toBe("ready");
+    expect(accepted.state.snapshot?.unavailableReason).toBeUndefined();
+
     const disagrees = new FakeGh();
     disagrees.files = JSON.stringify([listedFile("app.ts", "@@ -1,3 +1,4 @@ function run()\n keep()\n-gone()\n+added()\n+other()\n last()")]);
     expect(await problemFor(disagrees)).toMatch(/disagree about app.ts/);
