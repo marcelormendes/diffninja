@@ -1,5 +1,5 @@
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
-import { CHANGE_FACT_QUESTIONS, type ChangeFactQuestion } from "./change-facts.js";
+import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
 import { escapeHtml } from "./escape-html.js";
@@ -254,6 +254,11 @@ const FACT_LABEL = {
   failurePropagated: "Failure handed to the caller",
   failureDeferred: "Failure deferred or retried",
   failureDiscarded: "Failure discarded",
+  instructionChanged: "Instruction to readers changed",
+  referenceChanged: "Link or reference changed",
+  gateWeakened: "CI gate weakened",
+  permissionChanged: "Permission or secret access changed",
+  pinChanged: "Version pin changed",
 } satisfies Record<ChangeFactQuestion, string>;
 
 /**
@@ -270,7 +275,7 @@ function renderFacts(item: ReviewItem): string {
   if (facts.language === null) {
     notes.push("diffninja does not read this file type, so no facts were established. Read this hunk yourself.");
   } else {
-    list = CHANGE_FACT_QUESTIONS.map((question) => {
+    list = factQuestionsFor(facts.language).map((question) => {
       const evidence = facts.evidence[question];
       const answer = facts.answers[question];
       const shown =
@@ -279,7 +284,13 @@ function renderFacts(item: ReviewItem): string {
           : escapeHtml(answer === "yes" ? "yes" : "no");
       return `<dt>${escapeHtml(FACT_LABEL[question])}</dt><dd class="mono">${shown}</dd>`;
     }).join("");
-    if (facts.inert) notes.push("Formatting or comments only: the code is identical once comments and layout are ignored.");
+    if (facts.inert) {
+      notes.push(
+        facts.language === "prose"
+          ? "Reflow only: the same words in the same order."
+          : "Formatting or comments only: the text is identical once comments and layout are ignored.",
+      );
+    }
   }
   // A path fact: explains why this hunk sits after the others.
   if (facts.language !== null && testLikeFile(item.file)) {

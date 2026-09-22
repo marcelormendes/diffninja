@@ -86,22 +86,31 @@ The tool writes no report files. Arguments and examples:
    including unchanged consumers, using an explicitly trusted installed compiler.
    Unsupported or incomplete checks say so.
 2. **Change facts per hunk.** The added and removed lines are read lexically —
-   strings and comments set aside, moved lines cancelling out — for six facts:
+   strings and comments set aside, moved lines cancelling out. Code gets six facts:
    comparison changed, limit changed (a numeric bound, or `<` turned into `<=`),
    input check changed (type/shape checks, or a changed guard in front of a
    raise), failure handed to the caller, failure deferred or retried, failure
-   discarded (an empty or defaulting `catch`, `except: pass`, …). Each `yes`
-   cites its changed line. `no` speaks only about the lines the hunk shows. A
-   change that only touches formatting or comments is recognized as such. JS/TS,
-   Java, C#, Go, Rust, C/C++, Kotlin, Swift, PHP, Python and Ruby are read; any
-   other file type says that no facts were established instead of claiming none.
-3. **Status and order.** A code change outside a test file reads **attention**;
-   a test-file change reads **attention** only when it changes a limit or
-   discards a failure, **low** otherwise; a formatting-only change **passed**;
+   discarded (an empty or defaulting `catch`, `except: pass`, …). Documentation
+   (`.md`, `.rst`, `.txt`, …) is asked whether an instruction to readers changed
+   (must, never, only, at most, …), a link target changed, or a numeric limit
+   changed. Configuration (`.yml`, `.json`, `.toml`, Dockerfiles, `.env`, …) is
+   asked whether a CI gate was weakened (`continue-on-error`, `|| true`, a
+   failure turned into a warning, a check step removed), permissions or secret
+   access changed, a version pin changed, or a limit changed. Each `yes` cites
+   its changed line. `no` speaks only about the lines the hunk shows. A change
+   that only touches formatting, comments, or line breaks is recognized as such.
+   JS/TS, Java, C#, Go, Rust, C/C++, Kotlin, Swift, PHP, Python, Ruby,
+   documentation and configuration are read; any other file type says that no
+   facts were established instead of claiming none.
+3. **Status and order.** A code or configuration change outside a test file
+   reads **attention**; documentation reads **attention** when it changes an
+   instruction, a link, or a limit, **low** otherwise; a test-file change reads
+   **attention** only when it changes a limit, discards a failure, or weakens a
+   gate, **low** otherwise; a formatting-only change **passed**;
    an unread file type **uncertain**, for a person to read. Priority orders hunks:
-   a fixed base, plus 10 for a real change, plus the heaviest fact of the boundary
-   group (comparison, limit, validation) and of the failure group (propagated,
-   deferred, discarded) — each group counts once, never summed. The report lists
+   a fixed base, plus 10 for a real change, plus the heaviest fact of the
+   boundary group (what the change says or bounds) and of the failure group
+   (failures, CI gates, permissions) — each group counts once, never summed. The report lists
    manual work first (binary and other metadata-only units), then the read hunks
    by priority, then passes. Hunks in test files (by path convention: `test/`,
    `*.test.ts`, `test_*.py`, `*_test.go`, …) come after the other hunks, still

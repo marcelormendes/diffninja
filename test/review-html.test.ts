@@ -422,12 +422,9 @@ describe("review HTML", () => {
 
   test("an unread file type says so instead of listing answers", () => {
     const html = visible(renderReview(report([item({
-      file: "docs/guide.md",
+      file: "db/query.sql",
       status: "uncertain",
-      facts: { language: null, inert: null, answers: facts({
-        comparisonChanged: "unknown", limitChanged: "unknown", validationChanged: "unknown",
-        failurePropagated: "unknown", failureDeferred: "unknown", failureDiscarded: "unknown",
-      }).answers, evidence: {} },
+      facts: { language: null, inert: null, answers: {}, evidence: {} },
     })])));
     const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
     expect(obs).toContain("diffninja does not read this file type");

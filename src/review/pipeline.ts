@@ -9,22 +9,30 @@
  *     link, submodule) and a unit with no diff text go to manual review;
  *   - an exact no-op hunk and a blank-only change to a .md/.txt document pass;
  *   - every other hunk gets its local change facts ({@link changeFactsOf}): a
- *     formatting- or comment-only code change passes, a file type diffninja
- *     cannot read is `uncertain` for a human to read, a code change outside a
- *     test file is `attention`, and a test-file change is `attention` only when
- *     it changes a limit or discards a failure, `low` otherwise.
+ *     formatting- or comment-only change passes, a file type diffninja cannot
+ *     read is `uncertain` for a human to read, a code or configuration change
+ *     outside a test file is `attention`, documentation is `attention` when it
+ *     changes an instruction, a link, or a limit and `low` otherwise, and a
+ *     test-file change is `attention` only when it changes a limit, discards a
+ *     failure, or weakens a gate, `low` otherwise.
  *
  * Priority orders hunks within the report: a fixed base, a weight for a change
- * that is not inert, and the heaviest fact of the boundary group (comparison,
- * limit, validation) and of the failure group (propagated, deferred, discarded).
- * Each group contributes its maximum, never a sum, and `unknown` adds nothing.
+ * that is not inert, and the heaviest fact of the boundary group (what the
+ * change says or bounds) and of the failure group (failures, gates,
+ * permissions). Each group contributes its maximum, never a sum.
  *
  * The report order puts manual work first, then the read hunks by priority —
  * those outside test files before those in test files — and the passes last;
  * input order breaks ties. Status is a label to filter on and never reorders it.
  */
 
-import { CHANGE_FACT_QUESTIONS, changeFactsOf, type ChangeFactQuestion, type ChangeFacts } from "./change-facts.js";
+import {
+  CHANGE_FACT_QUESTIONS,
+  changeFactsOf,
+  factQuestionsFor,
+  type ChangeFactQuestion,
+  type ChangeFacts,
+} from "./change-facts.js";
 import { testLikeFile } from "./file-role.js";
 import type { ReviewItem, ReviewStatus, ReviewUnit } from "./types.js";
 
@@ -34,7 +42,7 @@ export const BASE_PRIORITY = 5;
 /** Weight of a change that is not inert: the code, or the text, really differs. */
 export const CHANGED_PRIORITY = 10;
 
-/** Weight of each fact when it is `yes`; `no` and `unknown` add nothing. */
+/** Weight of each fact when it is `yes`; `no` adds nothing. */
 export const FACT_PRIORITY = {
   comparisonChanged: 6,
   limitChanged: 15,
@@ -42,10 +50,24 @@ export const FACT_PRIORITY = {
   failurePropagated: 3,
   failureDeferred: 6,
   failureDiscarded: 15,
+  instructionChanged: 10,
+  referenceChanged: 6,
+  gateWeakened: 15,
+  permissionChanged: 15,
+  pinChanged: 6,
 } satisfies Record<ChangeFactQuestion, number>;
 
-const BOUNDARY_FACTS = ["comparisonChanged", "limitChanged", "validationChanged"] as const;
-const FAILURE_FACTS = ["failurePropagated", "failureDeferred", "failureDiscarded"] as const;
+/** What the change says or bounds: conditions, limits, checks, instructions, links, pins. */
+const BOUNDARY_FACTS = [
+  "comparisonChanged", "limitChanged", "validationChanged", "instructionChanged", "referenceChanged", "pinChanged",
+] as const;
+/** What happens when things fail, or who may do what: failures, CI gates, permissions. */
+const FAILURE_FACTS = [
+  "failurePropagated", "failureDeferred", "failureDiscarded", "gateWeakened", "permissionChanged",
+] as const;
+
+/** Facts strong enough to raise a test-file hunk to attention on their own. */
+const TEST_FILE_ATTENTION_FACTS = ["limitChanged", "failureDiscarded", "gateWeakened"] as const;
 
 /** Fixed priorities for hunks the facts do not rank. */
 export const MANUAL_REVIEW_PRIORITY = 70;
@@ -76,13 +98,19 @@ const FACT_LABEL = {
   failurePropagated: "failure handed to the caller",
   failureDeferred: "failure deferred or retried",
   failureDiscarded: "failure discarded",
+  instructionChanged: "instruction to readers changed",
+  referenceChanged: "link or reference changed",
+  gateWeakened: "CI gate weakened",
+  permissionChanged: "permission or secret access changed",
+  pinChanged: "version pin changed",
 } satisfies Record<ChangeFactQuestion, string>;
 
 const STATUS_REASON = {
-  attention: "attention: code outside a test file changed, or a test changed a limit or discarded a failure",
+  attention:
+    "attention: code or configuration outside a test file changed, documentation changed an instruction, link, or limit, or a test changed a limit, discarded a failure, or weakened a gate",
   uncertain: "uncertain: diffninja does not read this file type, so no facts were established and a person reads it",
-  low: "low: a test-file change that neither changes a limit nor discards a failure",
-  passed: "passed: the code is identical once comments and layout are ignored",
+  low: "low: a test-file change, or a documentation change with no instruction, link, or limit change",
+  passed: "passed: the text is identical once comments and layout are ignored",
 } satisfies Record<ReviewStatus, string>;
 
 export interface ReviewPipelineResult {
@@ -140,8 +168,11 @@ function manualReason(unit: ReviewUnit): string | null {
 function statusOf(unit: ReviewUnit, facts: ChangeFacts): ReviewStatus {
   if (facts.language === null) return "uncertain";
   if (facts.inert) return "passed";
-  if (!testLikeFile(unit.file)) return "attention";
-  return facts.answers.limitChanged === "yes" || facts.answers.failureDiscarded === "yes" ? "attention" : "low";
+  const yes = (question: ChangeFactQuestion) => facts.answers[question] === "yes";
+  if (testLikeFile(unit.file)) return TEST_FILE_ATTENTION_FACTS.some(yes) ? "attention" : "low";
+  // Prose matters when it tells a reader something new to do, follow, or rely on.
+  if (facts.language === "prose") return factQuestionsFor("prose").some(yes) ? "attention" : "low";
+  return "attention";
 }
 
 function priorityOf(facts: ChangeFacts): number {

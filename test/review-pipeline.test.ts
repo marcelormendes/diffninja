@@ -89,11 +89,35 @@ describe("status", () => {
 
   test("a file type diffninja cannot read is uncertain, never passed or low", () => {
     const { items } = reviewUnits([
-      makeUnit({ id: "guide", file: "docs/guide.md", diff: hunk("-Never retry.", "+Retry once.") }),
+      makeUnit({ id: "query", file: "db/query.sql", diff: hunk("-SELECT 1;", "+SELECT 2;") }),
     ]);
     expect(items[0].status).toBe("uncertain");
     expect(items[0].priority).toBe(BASE_PRIORITY + CHANGED_PRIORITY);
-    expect(new Set(Object.values(items[0].facts!.answers))).toEqual(new Set(["unknown"]));
+    expect(items[0].facts!.answers).toEqual({});
+  });
+
+  test("documentation is attention when it changes an instruction, a link, or a limit, low otherwise", () => {
+    const { items } = reviewUnits([
+      makeUnit({ id: "rule", file: "docs/guide.md", diff: hunk("-Retry when it fails.", "+Never retry a failed payment.") }),
+      makeUnit({ id: "link", file: "docs/links.md", diff: hunk("-See [docs](https://a.dev/old).", "+See [docs](https://a.dev/new).") }),
+      makeUnit({ id: "prose", file: "docs/intro.md", diff: hunk("-Welcome to the project.", "+Welcome to our project.") }),
+      makeUnit({ id: "reflow", file: "docs/wrap.md", diff: hunk("-one two", "-three", "+one", "+two three") }),
+    ]);
+    expect(byId(items, "rule")).toMatchObject({ status: "attention" });
+    expect(byId(items, "link")).toMatchObject({ status: "attention" });
+    expect(byId(items, "prose")).toMatchObject({ status: "low" });
+    expect(byId(items, "reflow")).toMatchObject({ status: "passed", priority: TRIVIAL_PRIORITY });
+    expect(byId(items, "rule").reasons[0]).toBe("instruction to readers changed — added line: Never retry a failed payment.");
+  });
+
+  test("configuration outside tests is attention; a weakened CI gate outranks a plain edit", () => {
+    const { items } = reviewUnits([
+      makeUnit({ id: "value", file: "config/app.yml", diff: hunk("-name: web", "+name: api") }),
+      makeUnit({ id: "gate", file: ".github/workflows/ci.yml", diff: hunk("       - run: npm test", "+        continue-on-error: true") }),
+    ]);
+    expect(items.map((item) => item.id)).toEqual(["gate", "value"]);
+    expect(byId(items, "value").status).toBe("attention");
+    expect(byId(items, "gate").priority).toBe(BASE_PRIORITY + CHANGED_PRIORITY + FACT_PRIORITY.gateWeakened);
   });
 
   test("special and empty units go to manual review without facts", () => {
@@ -140,6 +164,7 @@ describe("report order", () => {
       makeUnit({ id: "a", diff: hunk("-if (x > 1) retry();", "+if (x >= 1) retry();") }),
       makeUnit({ id: "b", file: "test/b.test.ts", diff: hunk("+expect(run()).toBe(1);") }),
       makeUnit({ id: "c", file: "docs/c.md", diff: hunk("+Always retry.") }),
+      makeUnit({ id: "d", file: "db/d.sql", diff: hunk("+SELECT 1;") }),
     ];
     expect(reviewUnits(units())).toEqual(reviewUnits(units()));
   });

@@ -120,11 +120,56 @@ describe("change facts", () => {
     );
   });
 
-  test("answers unknown everywhere for a language it cannot read, never no", () => {
-    const facts = changeFactsOf({ file: "docs/guide.md", diff: hunk("-Never retry.", "+Retry once when the limit > 3.") });
+  test("answers nothing for a file type it cannot read, never no", () => {
+    const facts = changeFactsOf({ file: "schema/query.sql", diff: hunk("-SELECT 1;", "+SELECT 2 WHERE limit > 3;") });
     expect(facts.language).toBeNull();
     expect(facts.inert).toBeNull();
-    expect(new Set(Object.values(facts.answers))).toEqual(new Set(["unknown"]));
+    expect(facts.answers).toEqual({});
     expect(facts.evidence).toEqual({});
+  });
+
+  test("prose: instructions, link targets, and numeric limits; a heading is not a comment", () => {
+    expect(yesOf("README.md", hunk("-## Retries", "+## Retries", "-You may retry.", "+You must not retry more than once."))).toEqual([
+      "instructionChanged",
+    ]);
+    expect(yesOf("docs/a.md", hunk("-[guide](https://a.dev/v1/guide)", "+[guide](https://a.dev/v2/guide)"))).toEqual([
+      "referenceChanged",
+    ]);
+    expect(yesOf("docs/a.rst", hunk("-The request timeout is 30 seconds.", "+The request timeout is 5 seconds."))).toEqual([
+      "limitChanged",
+    ]);
+    expect(yesOf("docs/a.md", hunk("-Welcome, reader.", "+Welcome, dear reader."))).toEqual([]);
+    expect(changeFactsOf({ file: "docs/a.md", diff: hunk("-a b", "-c", "+a", "+b c") }).inert).toBe(true);
+  });
+
+  test("config: weakened gates, in every common form, and removed check steps", () => {
+    for (const added of [
+      "+        continue-on-error: true",
+      "+      run: npm test || true",
+      "+  allow_failure: true",
+      "+          statusCodes: '{\"403\":\"warn\"}'",
+      "+    if: false",
+    ]) {
+      expect(yesOf(".github/workflows/ci.yml", hunk(added)), added).toContain("gateWeakened");
+    }
+    expect(yesOf(".github/workflows/ci.yml", hunk("       - run: npm ci", "-      - run: npm test"))).toContain("gateWeakened");
+    // Removing a weakening setting strengthens the gate.
+    expect(yesOf(".github/workflows/ci.yml", hunk("-        continue-on-error: true"))).not.toContain("gateWeakened");
+    // A changed check command is not a removed check.
+    expect(yesOf(".github/workflows/ci.yml", hunk("-      - run: npm test", "+      - run: npm test -- --coverage"))).not.toContain(
+      "gateWeakened",
+    );
+  });
+
+  test("config: permissions, pins, limits, and comment-only edits", () => {
+    expect(yesOf(".github/workflows/ci.yml", hunk("+permissions:", "+  contents: write"))).toContain("permissionChanged");
+    expect(yesOf(".github/workflows/ci.yml", hunk("-      - uses: actions/checkout@v4", "+      - uses: actions/checkout@main"))).toEqual([
+      "pinChanged",
+    ]);
+    expect(yesOf("package.json", hunk('-    "lodash": "^4.17.20",', '+    "lodash": "*",'))).toContain("pinChanged");
+    expect(yesOf("deploy.yml", hunk("-    timeout-minutes: 10", "+    timeout-minutes: 60"))).toContain("limitChanged");
+    expect(changeFactsOf({ file: "deploy.yml", diff: hunk("-replicas: 2 # old", "+replicas: 2") }).inert).toBe(true);
+    // JSON has no comments: a # inside a value is content.
+    expect(changeFactsOf({ file: "a.json", diff: hunk('-  "tag": "a"', '+  "tag": "a #b"') }).inert).toBe(false);
   });
 });

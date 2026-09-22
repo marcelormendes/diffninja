@@ -1,19 +1,22 @@
 /**
  * Local, deterministic facts about the added and removed lines of one hunk.
  *
- * This answers, without any model and without the code leaving the machine, the
- * same six existence questions the review used to send to a model: did a
- * condition or comparison change, a limit, an input check, and did the lines hand
- * an error to the caller, defer it, or discard it. Each `yes` carries the line
- * that produced it, so a reviewer sees exactly what the fact is about.
+ * Without any model and without the text leaving the machine, it answers
+ * existence questions that depend on what the file is. Code: did a condition or
+ * comparison change, a limit, an input check, and did the lines hand an error to
+ * the caller, defer it, or discard it. Documentation: did an instruction to
+ * readers, a link target, or a numeric limit change. Configuration: was a CI gate
+ * weakened, did permissions or secret access change, a version pin, a limit. Each
+ * `yes` carries the line that produced it, so a reviewer sees what it is about.
  *
- * The analysis is lexical, not a parse: strings become a placeholder, comments
- * are removed, and patterns are matched on what remains, on the changed lines of
+ * The analysis is lexical, not a parse: in code, strings become a placeholder and
+ * comments are removed; in configuration only comments are; and patterns are
+ * matched on what remains, on the changed lines of
  * each side and on the lines around them that the hunk shows. That keeps it usable
  * on a patch with no repository, and it keeps its limits plain:
  *
- *   - only languages with a known comment and string syntax are read; any other
- *     file answers `unknown` everywhere, never `no`;
+ *   - only file types listed here are read; any other file answers no question
+ *     at all, never `no`;
  *   - `no` means the changed lines the hunk shows contain no such pattern, never
  *     that the property is absent from the file or the program;
  *   - a line moved without change cancels out, because every question compares
@@ -22,8 +25,8 @@
 
 import type { ReviewUnit } from "./types.js";
 
-/** The six questions, in the order the report shows them. */
-export const CHANGE_FACT_QUESTIONS = [
+/** Questions asked of source code, in the order the report shows them. */
+export const CODE_FACT_QUESTIONS = [
   "comparisonChanged",
   "limitChanged",
   "validationChanged",
@@ -32,12 +35,31 @@ export const CHANGE_FACT_QUESTIONS = [
   "failureDiscarded",
 ] as const;
 
+/** Questions asked of prose (documentation): what a reader is told to do or rely on. */
+export const PROSE_FACT_QUESTIONS = ["instructionChanged", "referenceChanged", "limitChanged"] as const;
+
+/** Questions asked of configuration: CI gates, permissions, pins, and bounds. */
+export const CONFIG_FACT_QUESTIONS = ["gateWeakened", "permissionChanged", "pinChanged", "limitChanged"] as const;
+
+/** Every question, once, in report order. */
+export const CHANGE_FACT_QUESTIONS = [
+  ...CODE_FACT_QUESTIONS,
+  "instructionChanged",
+  "referenceChanged",
+  "gateWeakened",
+  "permissionChanged",
+  "pinChanged",
+] as const;
+
 export type ChangeFactQuestion = (typeof CHANGE_FACT_QUESTIONS)[number];
 
-export type ChangeFactAnswer = "yes" | "no" | "unknown";
+export type ChangeFactAnswer = "yes" | "no";
 
-/** Lexical families: how comments and strings are written, and whether indentation is syntax. */
-export type ChangeFactLanguage = "c-like" | "python" | "ruby";
+/** Source families: how comments and strings are written, and whether indentation is syntax. */
+export type CodeLanguage = "c-like" | "python" | "ruby";
+
+/** What kind of text a file is, and so which questions apply to it. */
+export type ChangeFactLanguage = CodeLanguage | "prose" | "config";
 
 /** The changed line a `yes` rests on, exactly as the diff shows it. */
 export interface ChangeFactEvidence {
@@ -46,14 +68,15 @@ export interface ChangeFactEvidence {
 }
 
 export interface ChangeFacts {
-  /** Null when the file's language is not one this analysis can read. */
+  /** Null when this analysis cannot read the file type; then no question is answered. */
   readonly language: ChangeFactLanguage | null;
   /**
-   * True when the removed and added code are the same once comments and layout
-   * are ignored: a formatting- or comment-only change. Null for an unread language.
+   * True when the removed and added text are the same once comments and layout
+   * (for prose, line breaks and spacing) are ignored. Null for an unread type.
    */
   readonly inert: boolean | null;
-  readonly answers: Readonly<Record<ChangeFactQuestion, ChangeFactAnswer>>;
+  /** Exactly the questions {@link factQuestionsFor} lists for the language. */
+  readonly answers: Readonly<Partial<Record<ChangeFactQuestion, ChangeFactAnswer>>>;
   readonly evidence: Readonly<Partial<Record<ChangeFactQuestion, ChangeFactEvidence>>>;
 }
 
@@ -61,6 +84,10 @@ const C_LIKE_FILE =
   /\.(?:[cm]?[jt]sx?|java|kts?|cs|go|rs|c|h|cc|cpp|cxx|hpp|hh|swift|php|scala|dart|groovy)$/i;
 const PYTHON_FILE = /\.pyi?$/i;
 const RUBY_FILE = /\.rb$/i;
+const PROSE_FILE = /\.(?:md|mdx|markdown|rst|txt|adoc|asciidoc)$/i;
+const CONFIG_FILE =
+  /\.(?:ya?ml|json|jsonc|json5|toml|ini|cfg|conf|properties)$|(?:^|\/)(?:\.env(?:\.[\w.-]+)?|Dockerfile(?:\.[\w.-]+)?|[\w.-]+\.dockerfile)$/i;
+const JSON_FILE = /\.json[c5]?$/i;
 
 /** Evidence text is the source line, bounded so one long line cannot dominate a report. */
 const EVIDENCE_TEXT_LIMIT = 160;
@@ -69,7 +96,17 @@ export function changeFactLanguageOf(file: string): ChangeFactLanguage | null {
   if (C_LIKE_FILE.test(file)) return "c-like";
   if (PYTHON_FILE.test(file)) return "python";
   if (RUBY_FILE.test(file)) return "ruby";
+  if (PROSE_FILE.test(file)) return "prose";
+  if (CONFIG_FILE.test(file)) return "config";
   return null;
+}
+
+/** The questions a file of this kind is asked; none for an unread type. */
+export function factQuestionsFor(language: ChangeFactLanguage | null): readonly ChangeFactQuestion[] {
+  if (language === null) return [];
+  if (language === "prose") return PROSE_FACT_QUESTIONS;
+  if (language === "config") return CONFIG_FACT_QUESTIONS;
+  return CODE_FACT_QUESTIONS;
 }
 
 /* ------------------------------------------------------------- scanning */
@@ -86,7 +123,7 @@ interface ScanState {
  * One line with strings replaced by `S` and comments removed. `state` carries a
  * block comment or multi-line string into the next line of the same side.
  */
-function scanLine(line: string, language: ChangeFactLanguage, state: ScanState): string {
+function scanLine(line: string, language: CodeLanguage, state: ScanState): string {
   let out = "";
   let index = 0;
   while (index < line.length) {
@@ -147,6 +184,27 @@ function scanLine(line: string, language: ChangeFactLanguage, state: ScanState):
   return out;
 }
 
+/**
+ * One configuration line without its `#` comment. Quoted values are kept: in
+ * configuration the value is the point, and `"warn"` must stay readable. JSON
+ * has no comments, so its lines are kept whole.
+ */
+function scanConfigLine(line: string, json: boolean): string {
+  if (json) return line;
+  let quote: string | null = null;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (quote !== null) {
+      if (char === "\\") index += 1;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === "#" && (index === 0 || /\s/.test(line[index - 1]))) return line.slice(0, index);
+  }
+  return line;
+}
+
 /** Index of an unescaped `delimiter` at or after `from`, or -1. */
 function closingIndex(line: string, from: number, delimiter: string): number {
   for (let index = from; index < line.length; index++) {
@@ -182,7 +240,19 @@ interface Sides {
   readonly after: SideLine[];
 }
 
-function sidesOf(diff: string, language: ChangeFactLanguage): Sides {
+/** How one side's lines become comparable text; state carries across a side. */
+type LineScanner = (line: string, state: ScanState) => string;
+
+function scannerFor(language: ChangeFactLanguage, file: string): LineScanner {
+  if (language === "prose") return (line) => line;
+  if (language === "config") {
+    const json = JSON_FILE.test(file);
+    return (line) => scanConfigLine(line, json);
+  }
+  return (line, state) => scanLine(line, language, state);
+}
+
+function sidesOf(diff: string, scan: LineScanner): Sides {
   const before: SideLine[] = [];
   const after: SideLine[] = [];
   const beforeState: ScanState = { open: null };
@@ -199,7 +269,7 @@ function sidesOf(diff: string, language: ChangeFactLanguage): Sides {
     const raw = line.slice(1);
     const entry = (state: ScanState, changed: boolean): SideLine => ({
       raw,
-      code: scanLine(raw, language, state).replace(/\s+/g, " ").trim(),
+      code: scan(raw, state).replace(/\s+/g, " ").trim(),
       changed,
       indent: raw.length - raw.trimStart().length,
     });
@@ -253,7 +323,7 @@ const BLOCK_HANDLER = {
   "c-like": /(?:\bcatch\s*(?:\([^)]*\))?|\bif\s*\(?\s*err\s*!=\s*nil\s*\)?)\s*\{\s*$/,
   python: /^except\b[^:]*:\s*$/,
   ruby: /^rescue\b/,
-} satisfies Record<ChangeFactLanguage, RegExp>;
+} satisfies Record<CodeLanguage, RegExp>;
 const DISCARDING_BODY = new RegExp(
   String.raw`^(?:pass|continue|break;?|return(?:\s+${DEFAULT_VALUE}(?:\s*,\s*nil)?)?\s*;?|nil)$`,
 );
@@ -298,7 +368,7 @@ interface ComparisonAtom {
   readonly right: string;
 }
 
-function comparisonAtoms(code: string, language: ChangeFactLanguage): ComparisonAtom[] {
+function comparisonAtoms(code: string, language: CodeLanguage): ComparisonAtom[] {
   const atoms: ComparisonAtom[] = [];
   const patterns = language === "python" ? [COMPARISON_OPERATOR, PYTHON_COMPARISON_OPERATOR] : [COMPARISON_OPERATOR];
   for (const pattern of patterns) {
@@ -332,7 +402,7 @@ function conditionOf(code: string): string | null {
   return null;
 }
 
-function conditionHits(lines: readonly SideLine[], language: ChangeFactLanguage): Hit[] {
+function conditionHits(lines: readonly SideLine[], language: CodeLanguage): Hit[] {
   const hits: Hit[] = [];
   for (const line of lines) {
     if (!line.changed || line.code === "") continue;
@@ -361,7 +431,7 @@ const isNumber = (token: string) => /^-?\d[\d_]*(?:\.\d+)?(?:e-?\d+)?$/i.test(to
  * non-strict operator swapped, or a numeric side changed; or a line naming a limit
  * whose only difference is a number.
  */
-function limitHit(removed: readonly Hit[], added: readonly Hit[], language: ChangeFactLanguage): Hit | null {
+function limitHit(removed: readonly Hit[], added: readonly Hit[], language: CodeLanguage): Hit | null {
   const removedAtoms = removed.flatMap((hit) => comparisonAtoms(hit.line.code, language).map((atom) => ({ atom, hit })));
   const addedAtoms = added.flatMap((hit) => comparisonAtoms(hit.line.code, language).map((atom) => ({ atom, hit })));
   for (const { atom: before } of removedAtoms) {
@@ -414,7 +484,7 @@ function guardHits(lines: readonly SideLine[], changedConditions: ReadonlySet<Si
 }
 
 /** Handlers that swallow the error, anchored on a changed line of this side. */
-function discardHits(lines: readonly SideLine[], language: ChangeFactLanguage): Hit[] {
+function discardHits(lines: readonly SideLine[], language: CodeLanguage): Hit[] {
   const hits: Hit[] = [];
   lines.forEach((line, index) => {
     if (line.code === "") return;
@@ -469,7 +539,7 @@ function firstEvidence(diff: HitDifference): ChangeFactEvidence | null {
   return null;
 }
 
-function isInert(sides: Sides, language: ChangeFactLanguage): boolean {
+function isInert(sides: Sides, language: CodeLanguage | "config"): boolean {
   const key = (line: SideLine) => (language === "python" ? `${line.indent}:${compact(line.code)}` : compact(line.code));
   const code = (lines: readonly SideLine[]) => lines.filter((line) => line.changed && line.code !== "").map(key);
   const before = code(sides.before);
@@ -477,32 +547,80 @@ function isInert(sides: Sides, language: ChangeFactLanguage): boolean {
   return before.length === after.length && before.every((value, index) => value === after[index]);
 }
 
-/** Every question answered `answer`; a fresh object each time, so callers may fill it. */
-function uniformAnswers(answer: ChangeFactAnswer) {
-  return {
-    comparisonChanged: answer,
-    limitChanged: answer,
-    validationChanged: answer,
-    failurePropagated: answer,
-    failureDeferred: answer,
-    failureDiscarded: answer,
-  } satisfies Record<ChangeFactQuestion, ChangeFactAnswer>;
+/* ----------------------------------------------------- prose and config */
+
+/** Words that tell a reader what they must, may, or may not do or rely on. */
+const NORMATIVE =
+  /\b(?:must|shall|should|required|requires|never|always|only|cannot|can't|do not|don't|deprecated|breaking|at most|at least|not supported|unsupported|recommended)\b/i;
+/** A link target or bare URL. */
+const REFERENCE = /\]\(\s*<?([^)\s>]+)|(https?:\/\/[^\s)>"'\]]+)/g;
+
+/** Settings that turn a failing CI check into a passing or advisory one. */
+const GATE_WEAKENING =
+  /continue-on-error:\s*true|allow_failure:\s*true|\|\|\s*true\b|\bset\s+\+e\b|--no-verify\b|\bif:\s*false\b|\bskip\b|\bwarn(?:ing)?\b|\bignore\b|fail_?[oO]n_?[eE]rror\W+false|--passWithNoTests|\bexit\s+0\b|--force\b/i;
+/** A step that runs a check; fewer of them after the change is a weaker gate. */
+const CHECK_STEP =
+  /\b(?:run|script|command)\b.*\b(?:test|tests|lint|check|audit|verify|typecheck|tsc|vitest|jest|pytest|mypy|eslint|oxlint)\b|\buses:.*\b(?:codeql|lint|test|scan)/i;
+const PERMISSION =
+  /\bpermissions\b|:\s*write(?:-all)?\b|\bwrite-all\b|\bpull_request_target\b|\bsecrets\.|\bid-token\b|\bGITHUB_TOKEN\b|\bprivileged:\s*true|\ballowPrivilegeEscalation\b|\brunAsUser:\s*0\b|^USER\s+root\b|\bsudo\b/i;
+const PIN = /\buses:\s*\S+@|\bimage:\s*\S+|^FROM\s|\bversion\b|"[@\w./-]+"\s*:\s*"\s*[\^~<>=*]?\s*(?:v?\d|latest|\*)/i;
+
+/** Changed lines of one side whose text carries each link target they name. */
+function referenceHits(lines: readonly SideLine[]): Hit[] {
+  const hits: Hit[] = [];
+  for (const line of lines) {
+    if (!line.changed) continue;
+    for (const match of line.raw.matchAll(REFERENCE)) hits.push({ key: match[1] ?? match[2], line });
+  }
+  return hits;
 }
 
-/** The six facts for one hunk, each `yes` with the changed line it rests on. */
-export function changeFactsOf(unit: Pick<ReviewUnit, "file" | "diff">): ChangeFacts {
-  const language = changeFactLanguageOf(unit.file);
-  if (language === null) return { language, inert: null, answers: uniformAnswers("unknown"), evidence: {} };
+/** Changed lines matching `pattern`, keyed by their text with case and spacing ignored. */
+function textHits(lines: readonly SideLine[], pattern: RegExp): Hit[] {
+  return lines
+    .filter((line) => line.changed && line.code !== "" && pattern.test(line.code))
+    .map((line) => ({ key: line.code.toLowerCase(), line }));
+}
 
-  const sides = sidesOf(unit.diff, language);
-  const answers = uniformAnswers("no");
-  const evidence: Partial<Record<ChangeFactQuestion, ChangeFactEvidence>> = {};
-  const record = (question: ChangeFactQuestion, found: ChangeFactEvidence | null) => {
-    if (found === null) return;
-    answers[question] = "yes";
-    evidence[question] = found;
-  };
+/** The same words in the same order on both sides: reflowed or respaced prose. */
+function proseInert(sides: Sides): boolean {
+  const words = (lines: readonly SideLine[]) =>
+    lines.filter((line) => line.changed).map((line) => line.code).join(" ").split(/\s+/).filter((word) => word !== "");
+  const before = words(sides.before);
+  const after = words(sides.after);
+  return before.length === after.length && before.every((word, index) => word === after[index]);
+}
 
+type Recorder = (question: ChangeFactQuestion, found: ChangeFactEvidence | null) => void;
+
+function proseFacts(sides: Sides, record: Recorder): void {
+  record("instructionChanged", firstEvidence(difference(textHits(sides.before, NORMATIVE), textHits(sides.after, NORMATIVE))));
+  record("referenceChanged", firstEvidence(difference(referenceHits(sides.before), referenceHits(sides.after))));
+  const limit = numericLimitHit(sides.before, sides.after);
+  record("limitChanged", limit === null ? null : evidenceOf(limit, "added"));
+}
+
+function configFacts(sides: Sides, record: Recorder): void {
+  const weakening = difference(textHits(sides.before, GATE_WEAKENING), textHits(sides.after, GATE_WEAKENING));
+  const checksBefore = textHits(sides.before, CHECK_STEP);
+  const checksAfter = textHits(sides.after, CHECK_STEP);
+  const removedCheck = difference(checksBefore, checksAfter).removed;
+  // Added weakening settings, or fewer check steps than before; removing a
+  // weakening setting strengthens the gate and is not reported here.
+  const gate =
+    weakening.added.length > 0
+      ? evidenceOf(weakening.added[0], "added")
+      : checksBefore.length > checksAfter.length && removedCheck.length > 0
+        ? evidenceOf(removedCheck[0], "removed")
+        : null;
+  record("gateWeakened", gate);
+  record("permissionChanged", firstEvidence(difference(textHits(sides.before, PERMISSION), textHits(sides.after, PERMISSION))));
+  record("pinChanged", firstEvidence(difference(textHits(sides.before, PIN), textHits(sides.after, PIN))));
+  const limit = numericLimitHit(sides.before, sides.after);
+  record("limitChanged", limit === null ? null : evidenceOf(limit, "added"));
+}
+
+function codeFacts(sides: Sides, language: CodeLanguage, record: Recorder): void {
   const conditions = difference(conditionHits(sides.before, language), conditionHits(sides.after, language));
   record("comparisonChanged", firstEvidence(conditions));
 
@@ -527,6 +645,31 @@ export function changeFactsOf(unit: Pick<ReviewUnit, "file" | "diff">): ChangeFa
   );
   record("failureDeferred", firstEvidence(difference(lineHits(sides.before, DEFERRAL), lineHits(sides.after, DEFERRAL))));
   record("failureDiscarded", firstEvidence(difference(discardHits(sides.before, language), discardHits(sides.after, language))));
+}
 
+/** The facts for one hunk, each `yes` with the changed line it rests on. */
+export function changeFactsOf(unit: Pick<ReviewUnit, "file" | "diff">): ChangeFacts {
+  const language = changeFactLanguageOf(unit.file);
+  if (language === null) return { language, inert: null, answers: {}, evidence: {} };
+
+  const sides = sidesOf(unit.diff, scannerFor(language, unit.file));
+  const answers: Partial<Record<ChangeFactQuestion, ChangeFactAnswer>> = {};
+  for (const question of factQuestionsFor(language)) answers[question] = "no";
+  const evidence: Partial<Record<ChangeFactQuestion, ChangeFactEvidence>> = {};
+  const record: Recorder = (question, found) => {
+    if (found === null) return;
+    answers[question] = "yes";
+    evidence[question] = found;
+  };
+
+  if (language === "prose") {
+    proseFacts(sides, record);
+    return { language, inert: proseInert(sides), answers, evidence };
+  }
+  if (language === "config") {
+    configFacts(sides, record);
+    return { language, inert: isInert(sides, language), answers, evidence };
+  }
+  codeFacts(sides, language, record);
   return { language, inert: isInert(sides, language), answers, evidence };
 }

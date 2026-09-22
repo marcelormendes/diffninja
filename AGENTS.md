@@ -6,8 +6,8 @@
 terminal review mode. PR links select a connected, human-authored GitHub review
 via `gh`, and the tool returns its loopback URL. Static diff/range analysis is
 local and deterministic: no model is called and no source leaves the machine.
-Each hunk gets six lexical change facts (`change-facts.ts`) with the changed line
-each rests on, and is ranked in code. No review writes report files: a static
+Each hunk gets lexical change facts (`change-facts.ts`: code, prose, and config
+questions) with the changed line each rests on, and is ranked in code. No review writes report files: a static
 result adds `reportUrl`, a read-only loopback page (`report-pages.ts`) serving
 the `html.ts` report from memory. The call-flow
 engine underneath is forked from `calldiff` (Tanishq Kancharla, MIT, see
@@ -92,9 +92,10 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   answers `unknown` everywhere and reads `uncertain`, never `no` or `passed`.
   Every `yes` carries the changed line it rests on. The same input always yields
   the same report. Preserve explicit uncertainty and snapshot provenance.
-- Status: code outside a test file is `attention`; a test file is `attention`
-  only for a limit change or a discarded failure, else `low`; a formatting- or
-  comment-only code change `passed`. Order: manual units, read hunks by
+- Status: code or configuration outside a test file is `attention`; prose is
+  `attention` only for an instruction, link, or limit change, else `low`; a test
+  file is `attention` only for a limit change, a discarded failure, or a weakened
+  gate, else `low`; a formatting-, comment-, or reflow-only change `passed`. Order: manual units, read hunks by
   priority (test files after the rest), passes. Docs are never demoted by path.
 - Semantic interpretation belongs to the host agent's model or the human, never
   to a model diffninja calls itself.
