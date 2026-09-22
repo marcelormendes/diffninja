@@ -954,6 +954,21 @@ describe("connected review canonical diff validation", () => {
     expect(await problemFor(truncated)).toMatch(/incomplete diff/);
   });
 
+  it("accepts the same changes split into different hunks, anchoring only where GitHub's patch shows a line", async () => {
+    // GitHub's file list shows one hunk; its diff endpoint shows the same changes
+    // with one more context line. The changes agree, so the pull request loads.
+    const split = new FakeGh();
+    split.diff = "diff --git a/app.ts b/app.ts\n--- a/app.ts\n+++ b/app.ts\n@@ -1,4 +1,5 @@ function run()\n keep()\n-gone()\n+added()\n+more()\n last()\n tail()\n";
+    split.files = JSON.stringify([listedFile("app.ts", APP_PATCH)]);
+    const { review, state } = await loadedSession(split);
+    expect(state.status).toBe("ready");
+    expect(state.snapshot?.unavailableReason).toBeUndefined();
+    // A changed line anchors as usual; the extra context line GitHub's own patch
+    // does not show cannot carry a comment GitHub would refuse.
+    expect((await review.preview(reviewInput(state, { comments: [{ path: "app.ts", line: 2, side: "RIGHT", body: "ok" }] }))).comments).toHaveLength(1);
+    expect(await rejected(review.preview(reviewInput(state, { comments: [{ path: "app.ts", line: 5, side: "RIGHT", body: "tail" }] })))).toMatch(/does not match a line/);
+  });
+
   it("refuses a diff that does not agree with the file list", async () => {
     const missing = new FakeGh();
     missing.files = JSON.stringify([listedFile("other.ts", APP_PATCH)]);

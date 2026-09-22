@@ -666,6 +666,49 @@ function normalizePatch(text: string): string[] {
   return rows;
 }
 
+/** Changed rows keyed by side, line, and text, plus every line a review may anchor to. */
+interface PatchChanges {
+  readonly changes: string[];
+  readonly anchors: Set<string>;
+}
+
+/**
+ * The changed lines of one file's patch and the lines it lets a review anchor to,
+ * read from hunk headers and rows alone. Two patches of the same change can
+ * differ in how GitHub splits hunks and how much context each shows; they cannot
+ * differ in these changed rows without describing a different change.
+ */
+function patchChanges(path: string, rows: readonly string[]): PatchChanges | null {
+  const changes: string[] = [];
+  const anchors = new Set<string>();
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  for (const row of rows) {
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
+    if (header !== null) {
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || row === NO_NEWLINE_MARKER) continue;
+    if (row.startsWith("+")) {
+      changes.push(`+${newLine}:${row.slice(1)}`);
+      anchors.add(anchorKey(path, newLine++, "RIGHT"));
+    } else if (row.startsWith("-")) {
+      changes.push(`-${oldLine}:${row.slice(1)}`);
+      anchors.add(anchorKey(path, oldLine++, "LEFT"));
+    } else if (row.startsWith(" ")) {
+      anchors.add(anchorKey(path, newLine++, "RIGHT"));
+      anchors.add(anchorKey(path, oldLine++, "LEFT"));
+    } else {
+      return null;
+    }
+  }
+  return { changes, anchors };
+}
+
 function samePatch(raw: string[], patch: string): boolean {
   const rows = normalizePatch(patch);
   const expected = raw.filter((row) => row !== NO_NEWLINE_MARKER);
@@ -677,32 +720,51 @@ function samePatch(raw: string[], patch: string): boolean {
  * the paginated file list of that same pull request. Anything else means one of
  * the two answers was truncated, so no report is built at all.
  */
-function checkCoverage(files: ParsedFile[], listing: GhJson): string | null {
+interface Coverage {
+  readonly problem: string | null;
+  /**
+   * Files whose two patches describe the same changes with different hunk
+   * splits or context, mapped to the anchors GitHub's own file patch allows.
+   */
+  readonly narrowed: Map<string, Set<string>>;
+}
+
+function checkCoverage(files: ParsedFile[], listing: GhJson): Coverage {
+  const narrowed = new Map<string, Set<string>>();
+  const fail = (problem: string): Coverage => ({ problem, narrowed });
   const entries = listedFiles(listing);
-  if (entries === null) return "GitHub did not return a usable file list for this pull request.";
+  if (entries === null) return fail("GitHub did not return a usable file list for this pull request.");
   const used = new Set<number>();
   for (const file of files) {
     const index = entries.findIndex((entry, position) => !used.has(position)
       && (entry.filename === file.path || entry.filename === file.oldPath || entry.previous === file.oldPath));
     if (index === -1) {
-      return `GitHub's diff includes ${file.path}, but its file list for the same pull request does not.`;
+      return fail(`GitHub's diff includes ${file.path}, but its file list for the same pull request does not.`);
     }
     used.add(index);
     const patch = entries[index].patch;
     if (patch === null) {
-      if (file.patch.length > 0) return incompleteProblem(file.path);
+      if (file.patch.length > 0) return fail(incompleteProblem(file.path));
       continue;
     }
     if (!samePatch(file.patch, patch)) {
-      return `GitHub's file list and its diff disagree about ${file.path}; refusing to review an unverified diff.`;
+      const fromDiff = patchChanges(file.path, file.patch);
+      const fromList = patchChanges(file.path, normalizePatch(patch));
+      const sameChanges = fromDiff !== null && fromList !== null
+        && fromDiff.changes.length === fromList.changes.length
+        && fromDiff.changes.every((change, position) => change === fromList.changes[position]);
+      if (!sameChanges) {
+        return fail(`GitHub's file list and its diff disagree about ${file.path}; refusing to review an unverified diff.`);
+      }
+      narrowed.set(file.path, fromList.anchors);
     }
   }
   for (let index = 0; index < entries.length; index++) {
     if (!used.has(index)) {
-      return `GitHub's file list includes ${entries[index].filename}, but the diff for the same pull request does not.`;
+      return fail(`GitHub's file list includes ${entries[index].filename}, but the diff for the same pull request does not.`);
     }
   }
-  return null;
+  return { problem: null, narrowed };
 }
 
 function validateCanonicalDiff(rawDiff: string, listing: GhJson): ParsedDiff {
@@ -710,7 +772,17 @@ function validateCanonicalDiff(rawDiff: string, listing: GhJson): ParsedDiff {
   // A rejected parse already carries no files, lines, or anchors of its own.
   if (parsed.problem !== null) return parsed;
   const coverage = checkCoverage(parsed.files, listing);
-  return coverage === null ? parsed : failedDiff(coverage);
+  if (coverage.problem !== null) return failedDiff(coverage.problem);
+  if (coverage.narrowed.size === 0) return parsed;
+  // Same changes, different hunk split or context: a comment may only land on a
+  // line GitHub's own patch for that file shows, which includes every change.
+  const anchors = new Set<string>();
+  for (const anchor of parsed.anchors) {
+    const path = anchor.slice(0, anchor.indexOf("\u0000"));
+    const allowed = coverage.narrowed.get(path);
+    if (allowed === undefined || allowed.has(anchor)) anchors.add(anchor);
+  }
+  return { ...parsed, anchors };
 }
 
 /* ------------------------------------------------------------------ session */
