@@ -53,6 +53,7 @@ export const FACT_PRIORITY = {
   failureDiscarded: 15,
   contractChanged: 10,
   dataChanged: 15,
+  queryChanged: 10,
   instructionChanged: 10,
   referenceChanged: 6,
   gateWeakened: 15,
@@ -70,7 +71,7 @@ const FAILURE_FACTS = [
 ] as const;
 
 /** What others build on or what is stored: public declarations, schema, and data. */
-const SURFACE_FACTS = ["contractChanged", "dataChanged"] as const;
+const SURFACE_FACTS = ["contractChanged", "dataChanged", "queryChanged"] as const;
 
 /** Facts strong enough to raise a test-file hunk to attention on their own. */
 const TEST_FILE_ATTENTION_FACTS = ["limitChanged", "failureDiscarded", "gateWeakened"] as const;
@@ -106,6 +107,7 @@ const FACT_LABEL = {
   failureDiscarded: "failure discarded",
   contractChanged: "public contract or declaration changed",
   dataChanged: "schema or stored data changed",
+  queryChanged: "database query changed",
   instructionChanged: "instruction to readers changed",
   referenceChanged: "link or reference changed",
   gateWeakened: "CI gate weakened",

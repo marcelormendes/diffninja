@@ -26,6 +26,7 @@ const FACT_LABEL = {
   failureDiscarded: "failure discarded",
   contractChanged: "public contract or declaration changed",
   dataChanged: "schema or stored data changed",
+  queryChanged: "database query changed",
   instructionChanged: "instruction to readers changed",
   referenceChanged: "link or reference changed",
   gateWeakened: "CI gate weakened",

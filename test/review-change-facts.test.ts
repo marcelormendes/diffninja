@@ -31,6 +31,7 @@ describe("change facts", () => {
       failureDiscarded: "no",
       contractChanged: "no",
       dataChanged: "no",
+      queryChanged: "no",
     });
     expect(facts.evidence.limitChanged).toEqual({ side: "added", text: "if (amount < 0) throw new Error('invalid');" });
     expect(facts.inert).toBe(false);
@@ -153,6 +154,44 @@ describe("change facts", () => {
     for (const line of ["+  private normalize(value: string): string {", "+  if (ready) {", "+  await this.repo.save(entity);", "+const x = 'export function fake() {';"]) {
       expect(yesOf("src/a.ts", hunk(line)), line).not.toContain("contractChanged");
     }
+  });
+
+  test("precision: defaults, type positions, assertions, and migrations are not facts", () => {
+    expect(yesOf("src/a.ts", hunk("+  const charges = response?.payload?.charges ?? [];"))).toEqual([]);
+    expect(yesOf("src/a.ts", hunk("+  config: ConstructorParameters<typeof RateLimiter>[0],"))).not.toContain("validationChanged");
+    expect(yesOf("src/a.spec.ts", hunk("+  charges.forEach((c) => expect(typeof c.amount).toBe('number'));"))).not.toContain("validationChanged");
+    expect(yesOf("src/a.ts", hunk("+  if (typeof value !== 'number') throw new TypeError('value');"))).toContain("validationChanged");
+    expect(yesOf("src/db/migrations/1700.js", hunk("+  async up(queryInterface) {"))).not.toContain("contractChanged");
+  });
+
+  test("a hunk that starts inside a block comment reads its continuation lines as comment", () => {
+    expect(yesOf("src/a.ts", hunk("   * transitions, requeue). The HTTP call", "+ * retries with backoff when the provider throws", "   */"))).toEqual([]);
+    expect(yesOf("src/a.ts", hunk("+ */ if (count > max) throw new Error('x');"))).toContain("comparisonChanged");
+  });
+
+  test("error formatting, value defaults, and suppression counts are not facts", () => {
+    expect(yesOf("src/a.ts", hunk("+  error: error instanceof Error ? error.message : String(error),"))).not.toContain("validationChanged");
+    expect(yesOf("src/a.ts", hunk("+  const needsEligibility = options.internetEligible || options.internetOptOut;"))).toEqual([]);
+    expect(yesOf("src/a.ts", hunk("+  rawStatuses.includes(EnrollmentStatus.Active) ||"))).toContain("comparisonChanged");
+    expect(yesOf("apps/api/eslint-suppressions.json", hunk('-      "count": 20', '+      "count": 21'))).toEqual([]);
+    expect(yesOf("test/a.spec.ts", hunk("+      expect.objectContaining({ anomaly_count: 240 }),", "-      expect.objectContaining({ anomaly_count: 5 }),"))).toEqual([]);
+    expect(yesOf("test/a.spec.ts", hunk("+  if (calls === 2) {", "+    throw new Error('db down');", "+  }"))).not.toContain("validationChanged");
+    expect(yesOf("src/db/migrations/test/1700.spec.ts", hunk("+import { INestApplication } from '@nestjs/common';"))).not.toContain("dataChanged");
+    expect(changeFactsOf({ file: "src/db/migrations/1700.js", diff: hunk("+'use strict';", "+", "+module.exports = {", "+  async up(q) {", "+    await q.addIndex('leases', ['status']);") }).evidence.dataChanged?.text).toBe(
+      "await q.addIndex('leases', ['status']);",
+    );
+  });
+
+  test("a database query written in the code's strings", () => {
+    expect(yesOf("src/search.service.ts", hunk(
+      "   const rows = await this.db.query(`",
+      "-    SELECT id, name FROM properties WHERE active",
+      "+    SELECT id, name, score FROM ranked WHERE score > :min ORDER BY score DESC",
+      "   `);",
+    ))).toContain("queryChanged");
+    // Words in prose or identifiers are not SQL.
+    expect(yesOf("src/a.ts", hunk("+  const message = 'select a plan from the list';"))).not.toContain("queryChanged");
+    expect(yesOf("src/a.ts", hunk("+  const fromDate = where(select);"))).not.toContain("queryChanged");
   });
 
   test("schema and stored data: SQL in migrations and .sql files, and migration builder calls", () => {

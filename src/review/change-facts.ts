@@ -23,6 +23,7 @@
  *     what the removed lines had with what the added lines have.
  */
 
+import { testLikeFile } from "./file-role.js";
 import type { ReviewUnit } from "./types.js";
 
 /** Questions asked of source code, in the order the report shows them. */
@@ -35,6 +36,7 @@ export const CODE_FACT_QUESTIONS = [
   "failureDiscarded",
   "contractChanged",
   "dataChanged",
+  "queryChanged",
 ] as const;
 
 /** Questions asked of SQL files: schema and data changes. */
@@ -155,6 +157,15 @@ function scanLine(line: string, language: CodeLanguage, state: ScanState, keepSt
     }
     const rest = line.slice(index);
     if (language === "c-like" && rest.startsWith("//")) break;
+    // A hunk can start inside a block comment it never shows opening: a line
+    // that begins `* ` or `*/` is that comment's continuation, not code.
+    if (language === "c-like" && out.trim() === "" && /^\*(?:\s|\/|$)/.test(rest)) {
+      if (rest.includes("*/")) {
+        index = line.indexOf("*/", index) + 2;
+        continue;
+      }
+      break;
+    }
     if (language === "c-like" && rest.startsWith("/*")) {
       state.open = "comment";
       index += 2;
@@ -320,7 +331,10 @@ function sidesOf(diff: string, scanners: Scanners): Sides {
 const COMPARISON_OPERATOR = /(===|!==|==|!=|(?<![<=])<=|(?<![>=])>=|(?<=\s)<(?=\s)|(?<=\s)>(?=\s))/g;
 const PYTHON_COMPARISON_OPERATOR = /(\bis not\b|\bnot in\b|\bis\b)/g;
 const CONDITION_KEYWORD = /\b(if|elif|while|unless|until|switch|when)\b/;
-const LOGICAL_OPERATOR = /(&&|\|\||\?\?|\band\b|\bor\b)/;
+// `??` supplies a default and is not a condition a reviewer checks.
+const LOGICAL_OPERATOR = /(&&|\|\||\band\b|\bor\b)/;
+/** Where a logical operator is a condition: continuing one, or a returned boolean. */
+const CONDITION_LINE = /^(?:return\b|&&|\|\||!|\()|(?:&&|\|\||\()\s*$/;
 const TERNARY = /\s\?\s[^:]*\s:\s/;
 
 const LIMIT_WORD =
@@ -330,13 +344,15 @@ const NUMBER = /(?<![\w$.])-?\d[\d_]*(?:\.\d+)?(?:e-?\d+)?\b/gi;
 const HAS_NUMBER = new RegExp(NUMBER.source, "i");
 
 const VALIDATION =
-  /\b(?:typeof|instanceof|isinstance|issubclass)\b|\bArray\.isArray\b|\bNumber\.is(?:Integer|Finite|NaN|SafeInteger)\b|\bis_a\?|\bkind_of\?|\binvariant\(|\b(?:validate|ensure)\w*\(|\bz\.\w+\(|\bJoi\.|\byup\.|\.safeParse\(/;
+  // `typeof` only as a runtime check, compared with a value: never in a type
+  // position (`ConstructorParameters<typeof X>`) or inside an assertion.
+  /\btypeof\s+[\w$.?[\]]+\s*[!=]==?|[!=]==?\s*typeof\b|\binstanceof\s+(?!\w*(?:Error|Exception)\b)|\b(?:isinstance|issubclass)\b|\bArray\.isArray\b|\bNumber\.is(?:Integer|Finite|NaN|SafeInteger)\b|\bis_a\?|\bkind_of\?|\binvariant\(|\b(?:validate|ensure)\w*\(|\bz\.\w+\(|\bJoi\.|\byup\.|\.safeParse\(/;
 
 const PROPAGATION =
   /\bthrow\b|\braise\b|\breject\(|\bPromise\.reject\b|\breturn\s+(?:nil\s*,\s*)?err\b|\bErr\(|\bpanic!?\(|\bnext\(\s*(?:err|error)\b|\b(?:cb|callback|done)\(\s*(?:err|error)\b|\bfmt\.Errorf\(|\berrors\.New\(/;
 
 /** A test assertion: its expected numbers are expectations, never bounds. */
-const ASSERTION = /\b(?:expect|assert\w*|should)\s*\(|\bt\.\w+\(|\.to(?:Be|Equal|StrictEqual|HaveLength)\w*\(/;
+const ASSERTION = /\b(?:expect|assert\w*|should)\s*[.(]|\bt\.\w+\(|\.to(?:Be|Equal|StrictEqual|HaveLength|Match|Contain)\w*\(/;
 
 const DEFERRAL = /\b(?:retry|retries|retrying|retried|backoff|requeue|reschedul\w*|dead_?letter|dlq)\w*/i;
 
@@ -430,7 +446,9 @@ function conditionOf(code: string): string | null {
     rest = rest.replace(/\s*[:{]\s*$/, "");
     return compact(`${keyword[0]} ${rest}`);
   }
-  if (LOGICAL_OPERATOR.test(code) || TERNARY.test(code)) return compact(code);
+  // A line of a multi-line condition, or a returned boolean; an assignment such
+  // as `const x = a || b` combines values and is not a condition by itself.
+  if ((LOGICAL_OPERATOR.test(code) && CONDITION_LINE.test(code)) || TERNARY.test(code)) return compact(code);
   return null;
 }
 
@@ -655,6 +673,18 @@ function literalHits(lines: readonly SideLine[], pattern: RegExp): Hit[] {
     .map((line) => ({ key: compact(line.literal), line }));
 }
 
+/**
+ * SQL written inside the code's strings: upper-case clause keywords that appear
+ * in a line's string text but not in its code, so identifiers and prose do not count.
+ */
+const SQL_QUERY = /\b(?:SELECT|FROM|WHERE|JOIN|GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET|UNION|CASE WHEN|RETURNING|ON CONFLICT|WITH [a-z_]+ AS)\b/;
+
+function queryHits(lines: readonly SideLine[]): Hit[] {
+  return lines
+    .filter((line) => line.changed && SQL_QUERY.test(line.literal) && !SQL_QUERY.test(line.code))
+    .map((line) => ({ key: `sql:${compact(line.literal)}`, line }));
+}
+
 function contractHits(lines: readonly SideLine[]): Hit[] {
   return lines
     .filter((line) => line.changed && line.code !== "" && CONTRACT.some((pattern) => pattern.test(line.code)))
@@ -668,7 +698,10 @@ function proseFacts(sides: Sides, record: Recorder): void {
   record("limitChanged", limit === null ? null : evidenceOf(limit, "added"));
 }
 
-function configFacts(sides: Sides, record: Recorder): void {
+/** Bookkeeping files whose numbers record state, not bounds. */
+const BOOKKEEPING_FILE = /(?:suppressions?|baseline|snapshot|lock)[\w.-]*\.(?:json|ya?ml|toml)$/i;
+
+function configFacts(sides: Sides, record: Recorder, file: string): void {
   const weakening = difference(textHits(sides.before, GATE_WEAKENING), textHits(sides.after, GATE_WEAKENING));
   const checksBefore = textHits(sides.before, CHECK_STEP);
   const checksAfter = textHits(sides.after, CHECK_STEP);
@@ -684,7 +717,7 @@ function configFacts(sides: Sides, record: Recorder): void {
   record("gateWeakened", gate);
   record("permissionChanged", firstEvidence(difference(textHits(sides.before, PERMISSION), textHits(sides.after, PERMISSION))));
   record("pinChanged", firstEvidence(difference(textHits(sides.before, PIN), textHits(sides.after, PIN))));
-  const limit = numericLimitHit(sides.before, sides.after);
+  const limit = BOOKKEEPING_FILE.test(file) ? null : numericLimitHit(sides.before, sides.after);
   record("limitChanged", limit === null ? null : evidenceOf(limit, "added"));
 }
 
@@ -697,10 +730,11 @@ function codeFacts(sides: Sides, language: CodeLanguage, record: Recorder, file:
 
   const changedConditionLines = new Set([...conditions.removed, ...conditions.added].map((hit) => hit.line));
   const validation = difference(
-    [...lineHits(sides.before, VALIDATION), ...guardHits(sides.before, changedConditionLines)],
-    [...lineHits(sides.after, VALIDATION), ...guardHits(sides.after, changedConditionLines)],
+    [...lineHits(sides.before, VALIDATION).filter((hit) => !ASSERTION.test(hit.line.code)), ...guardHits(sides.before, changedConditionLines)],
+    [...lineHits(sides.after, VALIDATION).filter((hit) => !ASSERTION.test(hit.line.code)), ...guardHits(sides.after, changedConditionLines)],
   );
-  record("validationChanged", firstEvidence(validation));
+  // A test's checks and mocks are not input validation of the code under review.
+  record("validationChanged", testLikeFile(file) ? null : firstEvidence(validation));
 
   record(
     "failurePropagated",
@@ -713,16 +747,24 @@ function codeFacts(sides: Sides, language: CodeLanguage, record: Recorder, file:
   );
   record("failureDeferred", firstEvidence(difference(lineHits(sides.before, DEFERRAL), lineHits(sides.after, DEFERRAL))));
   record("failureDiscarded", firstEvidence(difference(discardHits(sides.before, language), discardHits(sides.after, language))));
-  record("contractChanged", firstEvidence(difference(contractHits(sides.before), contractHits(sides.after))));
+  // A migration's up/down is not a contract others build on; its data fact covers it.
+  if (!MIGRATION_PATH.test(file)) {
+    record("contractChanged", firstEvidence(difference(contractHits(sides.before), contractHits(sides.after))));
+  }
+  record("queryChanged", firstEvidence(difference(queryHits(sides.before), queryHits(sides.after))));
   const data = firstEvidence(difference(literalHits(sides.before, DATA_CHANGE), literalHits(sides.after, DATA_CHANGE)));
-  record("dataChanged", data ?? (MIGRATION_PATH.test(file) ? firstChangedLine(sides) : null));
+  record("dataChanged", data ?? (MIGRATION_PATH.test(file) && !testLikeFile(file) ? firstChangedLine(sides) : null));
 }
 
-/** The first changed line with code on it, added side first: what a migration hunk does. */
+/** Lines that say nothing about what a migration does. */
+const TRIVIAL_LINE = /^(?:S;?|import\b|export\s*\{|(?:const|let|var)\s+[\w{}\s,:]+=\s*require\(|[{}()[\];,]+$|module\.exports\s*=\s*\{$)/;
+
+/** The first telling changed line, added side first: what a migration hunk does. */
 function firstChangedLine(sides: Sides): ChangeFactEvidence | null {
-  const added = sides.after.find((line) => line.changed && line.code !== "");
+  const telling = (line: SideLine) => line.changed && line.code !== "" && !TRIVIAL_LINE.test(line.code);
+  const added = sides.after.find(telling);
   if (added !== undefined) return evidenceOf({ key: "", line: added }, "added");
-  const removed = sides.before.find((line) => line.changed && line.code !== "");
+  const removed = sides.before.find(telling);
   return removed === undefined ? null : evidenceOf({ key: "", line: removed }, "removed");
 }
 
@@ -746,7 +788,7 @@ export function changeFactsOf(unit: Pick<ReviewUnit, "file" | "diff">): ChangeFa
     return { language, inert: proseInert(sides), answers, evidence };
   }
   if (language === "config") {
-    configFacts(sides, record);
+    configFacts(sides, record, unit.file);
     return { language, inert: isInert(sides, language), answers, evidence };
   }
   if (language === "sql") {
