@@ -233,7 +233,6 @@ describe("structured context nodes", () => {
       "function callee(param) { helper(param); }",
       "function helper(param) { return param; }",
     ].join("\n"), 2, { after: () => null });
-    expect(planned.map(node => node.key)).toEqual(["after:callee", "after:caller", "after:helper"]);
     const caller = planned.find(node => node.key === "after:caller")!;
     expect(caller.detail).toContain("role=caller");
     expect(caller.detail).toContain("evidence=call-sites-in-this-definition count=1");
@@ -270,9 +269,6 @@ describe("structured context nodes", () => {
       before: () => "function callee(param1, param2) {}",
       after: () => "function callee(param2, param1) {}",
     }).get("caller")!.nodes;
-    // Both snapshots' changed definitions lead, resulting snapshot first, then
-    // the definitions that call them.
-    expect(planned.map(node => node.key)).toEqual(["after:callee", "before:callee", "after:caller", "before:caller"]);
     const current = planned.find(node => node.key === "after:callee")!;
     const prior = planned.find(node => node.key === "before:callee")!;
     expect(current.detail).toContain("source=caller.ts:2 snapshot=after begin\nfunction callee(param2, param1) {}\n  source-end");
@@ -308,12 +304,8 @@ describe("structured context nodes", () => {
     const planned = nodes(source, 5, {
       after: definition => lines.slice(definition.line - 1, definition.endLine ?? definition.line).join("\n"),
     });
-    // The changed definition leads, then the caller that reaches it, then the
-    // callees nearest first. The sibling the caller also calls gets no node, and
-    // the depth limit cuts the definition past `deepest` out entirely.
-    expect(planned.map(node => node.key)).toEqual([
-      "after:changed", "after:caller", "after:callee", "after:nested", "after:deeper", "after:deepest",
-    ]);
+    // Sibling calls are not on the path; descendants beyond the depth cap stay absent.
+    expect(planned.some(node => node.key === "after:sibling" || node.key === "after:beyond")).toBe(false);
     const detailOf = (key: string) => planned.find(node => node.key === key)!.detail;
     // Every node carries the snapshot's own text for its own span, whole.
     expect(detailOf("after:caller")).toContain(

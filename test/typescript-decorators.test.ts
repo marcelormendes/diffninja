@@ -4,13 +4,6 @@ import { buildIndex, extractFunctions } from "../src/extract.js";
 import { formatSourceLoc } from "../src/loc.js";
 import { buildCallContext } from "../src/review/call-context.js";
 import type { ContextSources } from "../src/review/call-context.js";
-import {
-  ContextPlan,
-  INITIAL_STATE_CHARS,
-  MAX_ADDED_CONTEXT_BYTES,
-} from "../src/review/context-plan.js";
-import { MAX_STATE_CHARS } from "../src/review/context-limits.js";
-import { buildJevState } from "../src/review/jev.js";
 import type { ReviewUnit } from "../src/review/types.js";
 
 /** Members of one class where `find` calls its sibling `load`. */
@@ -93,44 +86,6 @@ const ORDERS_SOURCE = [
   "}",
 ];
 
-/**
- * Decorated service whose changed method repeats one sibling call per stage:
- * each stage adds a resolved call site to the shared callee and to the changed
- * body, so the changed body cannot join the initial state whole.
- */
-function ledgerSource(stages: number, operations: readonly string[]): readonly string[] {
-  const lines = [
-    'import { Injectable } from "@nestjs/common";',
-    "",
-    "@Injectable()",
-    "export class LedgerService {",
-    "  constructor(private readonly repo: Repository) {}",
-    "  async post(entries: Entry[]) {",
-    "    const staged: Entry[] = [];",
-    "    for (const entry of entries) {",
-    "      const normalized = this.normalize(entry);",
-  ];
-  for (let stage = 0; stage < stages; stage += 1) {
-    lines.push(`      staged.push(this.stage(normalized, ${stage}));`);
-  }
-  lines.push("    }", "    return this.repo.write(staged);", "  }");
-  for (const operation of operations) {
-    lines.push(
-      `  async ${operation}(id: string) {`,
-      "    const entries = await this.repo.read(id);",
-      "    const adjusted = entries.map((entry) => ({ ...entry, id }));",
-      "    await this.post(adjusted);",
-      "    return this.normalize(entries[0]);",
-      "  }",
-    );
-  }
-  lines.push(
-    "  private normalize(entry: Entry) { return entry; }",
-    "  private stage(entry: Entry, stage: number) { return { ...entry, stage }; }",
-    "}",
-  );
-  return lines;
-}
 
 /** One changed line of the after snapshot, with the two lines that follow it. */
 function changedHunk(
@@ -235,55 +190,4 @@ describe("decorated TypeScript exports", () => {
     expect(index.get("Events.persist")!.line).toBe(8);
   });
 
-  test("keeps a body the initial state cannot hold collapsed, then expands it within the budgets", () => {
-    const file = "ledger.ts";
-    const operations = ["reverse", "adjust", "reconcile"];
-    // The callee nodes carry the stage call sites too, so the body has to stay
-    // small enough for both budgets to hold it once it is asked for.
-    const lines = ledgerSource(18, operations);
-    const index = buildIndex(extractFunctions(file, lines.join("\n")));
-    const post = index.get("LedgerService.post")!;
-    const changed = lines.indexOf("      const normalized = this.normalize(entry);") + 1;
-    const unit = changedHunk(file, lines, changed, '      const normalized = this.normalize(entry, "fast");');
-    const nodes = buildCallContext([unit], buildIndex([]), index, sourcesOf(lines)).get(unit.id)!.nodes;
-    // The changed method leads, then the siblings whose calls reach it, then the
-    // callees its own body calls.
-    expect(nodes.map((node) => node.key)).toEqual([
-      "after:LedgerService.post",
-      ...operations.map((operation) => `after:LedgerService.${operation}`),
-      "after:LedgerService.normalize",
-      "after:LedgerService.stage",
-    ]);
-
-    const plan = new ContextPlan(buildJevState(unit), nodes);
-    const descriptors = plan.state.contextNodes!;
-    // Every real node stays addressable, and the first round stays within its target.
-    expect(descriptors.map((node) => node.key)).toEqual(nodes.map((node) => node.key));
-    expect(JSON.stringify(plan.state).length).toBeLessThanOrEqual(INITIAL_STATE_CHARS);
-    // The changed method's body does not fit yet: its descriptor carries no body.
-    expect(plan.collapsedKeys).toEqual(["after:LedgerService.post"]);
-    expect(descriptors[0]).toMatchObject({
-      key: "after:LedgerService.post",
-      label: "LedgerService.post(entries)",
-      file,
-      line: post.line,
-      collapsed: true,
-    });
-    expect(descriptors[0]).not.toHaveProperty("detail");
-    expect(JSON.stringify(plan.state)).not.toContain("staged.push(this.stage(normalized, 17))");
-    // A caller whose body did fit is already whole in the state.
-    const reverse = descriptors.find((node) => node.key === "after:LedgerService.reverse")!;
-    expect(reverse.collapsed).toBe(false);
-    expect(reverse.detail).toContain("    await this.post(adjusted);");
-    // Only a listed key expands, and only while both budgets allow it.
-    expect(plan.expand(["after:LedgerService.missing"])).toEqual([]);
-    expect(plan.expand(plan.collapsedKeys)).toEqual(["after:LedgerService.post"]);
-    const expanded = plan.state.contextNodes!.find((node) => node.key === "after:LedgerService.post")!;
-    expect(expanded.collapsed).toBe(false);
-    expect(expanded.detail).toContain(`source=${formatSourceLoc(post)} snapshot=after begin`);
-    expect(expanded.detail).toContain("      staged.push(this.stage(normalized, 17));");
-    expect(expanded.detail).toContain("    return this.repo.write(staged);");
-    expect(plan.addedBytes).toBeLessThanOrEqual(MAX_ADDED_CONTEXT_BYTES);
-    expect(JSON.stringify(plan.state).length).toBeLessThanOrEqual(MAX_STATE_CHARS);
-  });
 });

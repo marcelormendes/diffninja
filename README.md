@@ -151,8 +151,13 @@ at most eight arguments per call, and 120 characters per argument excerpt.
 Snapshot-bound changed definitions, callers, callees, dispatch endpoints, and
 type contracts carry complete source plus selected relation evidence. Bodies not already shown in
 the hunk take precedence over duplicate source when admitting context. Unseen
-type/dispatch boundary evidence precedes ordinary caller chains, nearest first.
-Collapsed dispatch endpoints identify their publisher/listener/queue role. Up to
+type declarations and dispatch endpoints precede ordinary caller chains, nearest
+first, with resulting-snapshot evidence ahead of prior-snapshot duplicates.
+Collapsed dispatch endpoints identify their publisher/listener/queue role.
+Unresolved own-call expressions remain verbatim in a whole source body rather
+than repeating unknown-binding boilerplate; without source, their extracted
+evidence is retained. All resolved bindings and dispatch/type relations remain.
+Up to
 eight definition nodes are addressable per hunk; other nodes are explicitly
 omitted. The initial state targets 12,000
 serialized characters, reserving key, label, file, and line descriptors before

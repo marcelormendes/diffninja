@@ -314,7 +314,7 @@ function nodePlans(
       if (near) distances.set(near, Math.min(distances.get(near) ?? Infinity, entry.distance - 1));
       if (far) distances.set(far, Math.min(distances.get(far) ?? Infinity, entry.distance));
       if (entry.edge.relation) {
-        boundaries.add(entry.edge.owner);
+        if (entry.edge.relation.kind !== "contract") boundaries.add(entry.edge.owner);
         if (entry.edge.target) boundaries.add(entry.edge.target);
       }
     }
@@ -355,14 +355,15 @@ function nodePlans(
     }
   }
 
-  // Unseen boundary evidence must not lose every descriptor to a long caller
-  // chain. Within each tier, nearest definitions lead; the after snapshot wins
-  // ties. Whole bodies already shown in the hunk are still demoted below.
+  // Prefer resulting-code evidence to prior-snapshot duplicates. A contract's
+  // target is the boundary, not every method that happens to mention a type:
+  // promoting both lets those methods crowd the declarations out again.
   const tier = (plan: ContextNodePlan) => plan.role === "changed-definition" ? 0
     : boundaries.has(plan.definition) ? 1 : 2;
-  return plans.sort((a, b) => tier(a) - tier(b)
+  return plans.sort((a, b) => Number(a.side === "before") - Number(b.side === "before")
+    || tier(a) - tier(b)
     || (distances.get(a.definition) ?? Infinity) - (distances.get(b.definition) ?? Infinity)
-    || Number(a.side === "before") - Number(b.side === "before"));
+    || Number(a.role === "caller") - Number(b.role === "caller"));
 }
 
 /** Section headers of a node detail, in the order the evidence is shown. */
@@ -392,7 +393,16 @@ function nodeDetail(plan: ContextNodePlan, unit: ReviewUnit, source: string | nu
   else lines.push(`  source=${loc} snapshot=${plan.side} begin`, source, "  source-end");
   let evidence = 0;
   for (const section of EVIDENCE_SECTIONS) {
-    const edges = plan[section.of];
+    // With whole source present, unresolved own-call expressions are already
+    // verbatim in that body. Their unknown-binding boilerplate adds no target
+    // evidence. Keep it when source is absent, and keep every resolved relation.
+    const supplied = plan[section.of];
+    const edges = source !== null && section.of === "calls"
+      ? supplied.filter(entry => entry.edge.target !== undefined || entry.edge.relation !== undefined)
+      : supplied;
+    if (edges.length < supplied.length) {
+      lines.push(`  unresolved own-call evidence=${supplied.length - edges.length} source-only; targets and argument mappings unknown`);
+    }
     if (edges.length === 0) continue;
     evidence += edges.length;
     lines.push(`  evidence=${section.label} count=${edges.length}`);

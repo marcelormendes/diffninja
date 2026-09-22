@@ -192,7 +192,7 @@ function mappedKeyNames(node: SyntaxNode): string[] {
 function namesDeclaration(node: SyntaxNode): boolean {
   const parent = node.parent;
   if (!parent) return false;
-  return Object.hasOwn(NAME_FIELDS, parent.type) && parent.childForFieldName("name") === node;
+  return Object.hasOwn(NAME_FIELDS, parent.type) && parent.childForFieldName("name")?.id === node.id;
 }
 
 /**

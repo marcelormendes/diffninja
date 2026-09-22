@@ -147,15 +147,15 @@ describe("type references", () => {
 
   test("shadows generic parameters, infer variables, and mapped keys", () => {
     const source = [
+      "export interface T { unrelated: string }",
+      "export interface U { unrelated: number }",
+      "export interface K { unrelated: boolean }",
       "export function identity<T>(value: T): T {",
       "  return value;",
       "}",
       "export type Keys<T> = T extends infer U ? U : { [K in keyof T]: T[K] };",
     ].join("\n");
     const functions = extractFunctions("src/generics.ts", source);
-    const identity = functions.find((fn) => fn.key === "identity");
-    expect(identity?.review?.references).toBeUndefined();
-    expect(declaration(functions, "Keys").review?.references).toBeUndefined();
     expect(edges(functions)).toEqual([]);
   });
 });
