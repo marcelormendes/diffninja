@@ -5,7 +5,7 @@ agent. Ask Claude Code, Codex, pi, or another MCP-capable agent CLI to review a
 GitHub PR link and diffninja returns a review workspace where you read the diff,
 write inline comments, and submit the review yourself. Give the agent a diff or
 a git range and diffninja returns an evidence-backed reading agenda alongside
-the complete diff, as structured data the agent can walk you through.
+the complete diff, as structured data for the agent and as a page for you.
 
 diffninja is an MCP server (`review_diff`) plus a `diffninja setup` command that
 registers it. It has no terminal review mode.
@@ -72,7 +72,10 @@ expected outcome when supplied (`expectedOutcome`), a short reading agenda,
 bounded automatic findings, explicit check coverage, and every hunk, ranked as
 **attention**, **uncertain**, **low**, or **passed**; git ranges add call flows
 and snapshot-bound source. Claims in a description are not proof that the code
-fulfills them. The tool writes no report files. Arguments and examples:
+fulfills them. The result also carries `reportUrl`: a read-only page on
+`127.0.0.1` with the same report for you to read — the agenda, call-flow graphs,
+and every hunk — served from memory for as long as the agent's session lasts.
+The tool writes no report files. Arguments and examples:
 [docs/mcp-setup.md](docs/mcp-setup.md).
 
 ## How static analysis works

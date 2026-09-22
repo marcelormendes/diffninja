@@ -82,10 +82,13 @@ function textOf(result: CallToolResult): string {
   return result.content.map(part => part.type === "text" ? part.text : "").join("\n");
 }
 
-function reportOf(result: CallToolResult): ReviewReport {
+/** A static result: the report plus the loopback page that serves it to a human. */
+type StaticResult = ReviewReport & { reportUrl: string };
+
+function reportOf(result: CallToolResult): StaticResult {
   // SAFETY: this payload is produced by our connected review server; tests below
   // assert its report fields and equality with the structured protocol payload.
-  return JSON.parse(textOf(result)) as ReviewReport;
+  return JSON.parse(textOf(result)) as StaticResult;
 }
 
 async function withMissingApiKey(run: () => Promise<void>): Promise<void> {
@@ -769,8 +772,12 @@ describe("review_diff connected pull request mode", () => {
       expect(textOf(linkOnly)).not.toMatch(/127\.0\.0\.1/);
 
       expect(ghCalls(log)).toEqual([]);
-      expect(await listeningServers()).toBe(baseline);
+      // The only listener is this connection's read-only report page, never a
+      // connected review page.
+      expect(report.reportUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/report\/[a-f0-9]{64}$/);
+      expect(await listeningServers()).toBe(baseline + 1);
       expect(fetchAttempts).toEqual([]);
+      await client.close();
     });
   });
 

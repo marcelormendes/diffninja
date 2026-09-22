@@ -85,8 +85,11 @@ Rules enforced by the schema and the tool:
   PR code; unsupported/incomplete checks are explicit. See
   [check boundaries](reference.md#automatic-check-boundaries).
 
-For static inputs, `structuredContent` **is** the `ReviewReport`, with
-`content` carrying the same report as JSON text. For PR inputs, both carry
+For static inputs, `structuredContent` **is** the `ReviewReport` plus
+`reportUrl`, with `content` carrying the same object as JSON text. `reportUrl`
+is a read-only `127.0.0.1` page with the same report for the human reviewer;
+it lives in memory for this MCP connection (see
+[the report page](reference.md#the-report-page)). For PR inputs, both carry
 `{ "mode": "connected", "url": "http://127.0.0.1:PORT/", "pr":
 "https://github.com/OWNER/REPO/pull/N", "snapshot": ... }`. Open `url` in a
 browser; MCP does not launch one or submit a review itself. Pages live for

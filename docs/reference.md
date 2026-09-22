@@ -13,6 +13,60 @@ automatic findings, checked/not-checked scope, and every hunk with its status,
 priority, reasons, and judgment. Navigation matches do not establish that an
 author or generated claim is fulfilled.
 
+## The report page
+
+Every static review also returns `reportUrl`, a read-only page on
+`127.0.0.1` that serves the same report as one self-contained HTML document.
+It makes no external requests and has no frontend dependencies. Hunks
+start folded; full diffs and native folding remain available with JavaScript
+disabled. Light/dark colors follow your system preference.
+
+- **Expand all / Collapse all** affect the currently visible hunks.
+- **Status chips** show or hide attention, uncertain, low and passed hunks
+  without changing their expanded state. Colors appear on hunk headers, left
+  borders and navigation dots. Hunk model scores and assessment commentary stay
+  in JSON; the Outcome view shows deterministic evidence and its limits.
+- **Focus** or a numbered badge isolates a hunk full-width. Use the **Report**
+  breadcrumb or **Escape** to return to your previous folds and scroll
+  position.
+- **j/k** or **ArrowDown/ArrowUp** move the visible cursor; **Enter** toggles
+  its hunk; **f** focuses it. Focused buttons and links retain native Enter
+  behavior.
+- **Jump to a hunk** opens its target; on small screens the jump list is a
+  toolbar dropdown. Without JavaScript the ordinary anchor links remain
+  visible.
+
+Use **Outcome | Call flow | Diff** to switch views. Outcome leads with exact
+expected-outcome metadata, intent cross-checks, the first five reading tasks,
+automatic findings, and checked/not-checked scope. Source cards fold natively;
+their file, line range, and snapshot identify the evidence. Navigation matches
+do not establish that an author or generated claim is fulfilled. Agenda links
+clear filters/focus when needed so their target cannot remain hidden.
+
+Call flow files follow their most severe hunk, with a **View diff** link to that
+hunk. The coverage count states how many changed files have trees.
+
+- **Tree** folds with native disclosure arrows. Click a function name to zoom
+  into its subtree; **Source** opens the function definition.
+- **Graph** opens at readable size in a bounded canvas. Drag or swipe to pan;
+  use **− / +** to zoom, **Overview** to fit the shape, and **Readable** to
+  reset around the selected function. A focused canvas supports arrow-key pan,
+  **+ / −** zoom and **Home** reset. Ordinary wheel scrolling scrolls the
+  page. Click a box to select it and inspect source without cropping the
+  graph; its `+` control or a numbered edge focuses the receiver's branch.
+  **Depth 1 / 2 / 3 / all** limits edges below that branch.
+- **Sequence** shows root-to-leaf `A → B → C` chip strips, not runtime
+  execution order. It displays up to 10 paths per file in the current focus.
+  Graph and Sequence DOM is materialized on first use; the complete tree and diff
+  remain available without JavaScript.
+
+The page belongs to the agent's MCP connection: it is served from memory, never
+written to disk, and stops when the agent exits. Each report has its own
+256-bit URL token; a connection keeps its 20 most recent reports. The server
+answers only `GET /report/<token>`, rejects any other Host, forbids caching and
+framing, and allows the inline script and stylesheet only by their SHA-256
+hashes. The URL carries source code access: do not share it.
+
 Source is embedded in the report when it is generated, including resolved
 definitions in files outside the diff. It comes from the immutable **to**
 commit, or **from** for removed calls, with a path, line range, and commit

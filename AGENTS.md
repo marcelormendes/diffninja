@@ -8,8 +8,8 @@ via `gh`, and the tool returns its loopback URL. Static diff/range analysis send
 (one unordered outcome Choice and six independent yes/no/unknown atomic
 questions; one HTTP attempt per evaluable hunk) and
 ranks observations in code. Confidence never controls ranking or acquisition.
-No review writes report files. `html.ts` (the static HTML report) currently
-has no transport: it is kept, tested, pending a decision to serve it via MCP. The call-flow
+No review writes report files: a static result adds `reportUrl`, a read-only
+loopback page (`report-pages.ts`) serving the `html.ts` report from memory. The call-flow
 engine underneath is forked from `calldiff` (Tanishq Kancharla, MIT, see
 LICENSE and the attribution section in README.md). See `README.md` for usage.
 
@@ -49,7 +49,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `pr-input.ts` — shared PR-link detection and canonicalization.
     `github.ts` / `connected.ts` — snapshot-bound review and loopback transport.
   - `mcp.ts` — `createReviewServer()`: builds an `McpServer` and registers
-    `review_diff`. `mcp-cli.ts` — executable entry that connects the server to
+    `review_diff`. `report-pages.ts` — per-connection read-only report pages. `mcp-cli.ts` — executable entry that connects the server to
     `StdioServerTransport`; it accepts no arguments and must keep stdout
     reserved for the protocol (diagnostics go to stderr).
 - `review_diff` invariants (see `src/review/mcp.ts`; README documents the
@@ -64,7 +64,9 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     Static skips detection, treats links as source, and rejects pr/input.
     Static analysis requires exactly one of `diff` or `from`+`to`; `repo` must
     be absolute for a range. In auto, `pr`/`input` require a PR link.
-  - Static success returns `structuredContent` equal to the `ReviewReport`.
+  - Static success returns `structuredContent` equal to the `ReviewReport` plus
+    `reportUrl`. Report pages are `GET /report/<256-bit token>` only, Host-checked,
+    CSP-pinned by hash, no-store, at most 20 per connection, and close with it.
     Connected success returns `{ mode: "connected", url, pr, snapshot }`.
     Both include the same JSON in text `content`. Failures return `isError: true`
     with the message as text and no partial report.
