@@ -761,12 +761,14 @@ function visitStatement(
   env: JsEnv,
 ) {
   if (node.type === "export_statement") {
-    const found =
-      namedChildren(node).find((c) => c.type !== "export_clause") ?? null;
+    // Decorators can precede the declaration inside an export statement.
+    // Select grammar fields, not the first named child (which may be metadata).
+    const found = node.childForFieldName("declaration") ??
+      node.childForFieldName("value");
     if (!found) return;
     const decl = stripTypeWrappers(found);
 
-    const isDefault = node.text.startsWith("export default");
+    const isDefault = node.children.some((child) => child.type === "default");
 
     if (
       decl.type === "function_declaration" ||

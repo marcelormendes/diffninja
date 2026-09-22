@@ -124,6 +124,9 @@ and binding uncertainty. Unambiguous same-file JS/TS and Python calls support
 positional binding; Python also supports named arguments. Imports, member
 dispatch, dynamic targets, and other grammars do not get guessed mappings.
 These are static source expressions, not runtime values or data-flow analysis.
+TypeScript/TSX extraction includes methods of decorated exported classes,
+including stacked and custom decorators. Decorator execution and framework
+event/queue dispatch are not resolved as call edges.
 
 Context prioritizes calls adjacent to the hunk, with depth limited to four,
 at most eight arguments per call, and 120 characters per argument excerpt.
