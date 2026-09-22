@@ -304,6 +304,21 @@ function nodePlans(
   // which are the caller contracts a hunk alone cannot show, then the
   // definitions their selected calls resolve to, nearest first, which are the
   // callee bodies a call signature alone cannot show.
+  const distances = new Map<Definition, number>();
+  const boundaries = new Set<Definition>();
+  for (const { selection } of sides) {
+    for (const seed of selection.seeds) distances.set(seed, 0);
+    for (const entry of selection.selected) {
+      const near = entry.direction === "incoming" ? entry.edge.target : entry.edge.owner;
+      const far = entry.direction === "incoming" ? entry.edge.owner : entry.edge.target;
+      if (near) distances.set(near, Math.min(distances.get(near) ?? Infinity, entry.distance - 1));
+      if (far) distances.set(far, Math.min(distances.get(far) ?? Infinity, entry.distance));
+      if (entry.edge.relation) {
+        boundaries.add(entry.edge.owner);
+        if (entry.edge.target) boundaries.add(entry.edge.target);
+      }
+    }
+  }
   for (const { side, selection } of sides) for (const seed of selection.seeds) add(seed, side, "changed-definition");
   for (const { side, selection } of sides) {
     for (const entry of selection.selected) {
@@ -340,9 +355,14 @@ function nodePlans(
     }
   }
 
-  // A prior-snapshot definition stays a node even when its own evidence is only
-  // the call site, so the removed side remains addressable by key and location.
-  return plans;
+  // Unseen boundary evidence must not lose every descriptor to a long caller
+  // chain. Within each tier, nearest definitions lead; the after snapshot wins
+  // ties. Whole bodies already shown in the hunk are still demoted below.
+  const tier = (plan: ContextNodePlan) => plan.role === "changed-definition" ? 0
+    : boundaries.has(plan.definition) ? 1 : 2;
+  return plans.sort((a, b) => tier(a) - tier(b)
+    || (distances.get(a.definition) ?? Infinity) - (distances.get(b.definition) ?? Infinity)
+    || Number(a.side === "before") - Number(b.side === "before"));
 }
 
 /** Section headers of a node detail, in the order the evidence is shown. */
@@ -387,9 +407,18 @@ function nodeDetail(plan: ContextNodePlan, unit: ReviewUnit, source: string | nu
 
 function contextNodeOf(plan: ContextNodePlan, unit: ReviewUnit, source: string | null): ReviewContextNode {
   const info = plan.definition.info;
+  const roles = new Set<string>();
+  for (const { edge } of plan.calls) {
+    if (edge.relation?.kind === "event") roles.add("event publisher");
+    if (edge.relation?.kind === "queue") roles.add("queue producer");
+  }
+  for (const { edge } of plan.reachedBy) {
+    if (edge.relation?.kind === "event") roles.add("event listener");
+    if (edge.relation?.kind === "queue") roles.add("queue consumer");
+  }
   return {
     key: plan.key,
-    label: info.label,
+    label: roles.size ? `${info.label} [${[...roles].join(", ")}]` : info.label,
     file: info.file,
     // Every node was admitted with a location, so this is the same line the
     // descriptor and the detail report.

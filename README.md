@@ -150,7 +150,9 @@ Context prioritizes calls adjacent to the hunk, with depth limited to four,
 at most eight arguments per call, and 120 characters per argument excerpt.
 Snapshot-bound changed definitions, callers, callees, dispatch endpoints, and
 type contracts carry complete source plus selected relation evidence. Bodies not already shown in
-the hunk take precedence over duplicate source when admitting context. Up to
+the hunk take precedence over duplicate source when admitting context. Unseen
+type/dispatch boundary evidence precedes ordinary caller chains, nearest first.
+Collapsed dispatch endpoints identify their publisher/listener/queue role. Up to
 eight definition nodes are addressable per hunk; other nodes are explicitly
 omitted. The initial state targets 12,000
 serialized characters, reserving key, label, file, and line descriptors before

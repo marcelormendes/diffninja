@@ -32,6 +32,18 @@ describe("addressable non-call context", () => {
     expect(calls.some(call => call.definition?.file === "types.ts")).toBe(false);
   });
 
+  test("keeps response contracts addressable despite a crowded caller graph", () => {
+    const { unit, context } = fixture({
+      "types.ts": "export interface BatchResponse { errors: string[]; }",
+      "api.ts": "import { BatchResponse } from './types';\nexport function create(): BatchResponse { return send(); }",
+      "sync.ts": "export function sync() { return create(); }",
+      "callers.ts": Array.from({ length: 12 }, (_, n) => `export function caller${n}() { return sync(); }`).join("\n"),
+    }, "sync.ts", 1);
+    const plan = new ContextPlan(buildJevState(unit), context.nodes);
+    expect(plan.state.contextNodes?.some(node => node.file === "types.ts")).toBe(true);
+    expect(plan.state.contextNodes?.some(node => node.file === "api.ts")).toBe(true);
+  });
+
   test("a changed interface selects its declaration and syntactic consumers", () => {
     const { context } = fixture({
       "types.ts": "export interface Result {\n  errors: string[];\n}",
