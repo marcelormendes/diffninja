@@ -12,6 +12,7 @@ import {
   type LanguageExtractor,
   type SyntaxNode,
   type Tree,
+  sameNode,
 } from "./types.js";
 
 function isPrivate(node: SyntaxNode): boolean {
@@ -120,7 +121,7 @@ function collectStatements(
       const consequent =
         blocks[0] ??
         kids.find(
-          (c) => c.type !== "parenthesized_expression" && c !== cond,
+          (c) => c.type !== "parenthesized_expression" && !sameNode(c, cond),
         ) ??
         null;
       const alternate = blocks[1] ?? null;

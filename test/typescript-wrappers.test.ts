@@ -1,4 +1,5 @@
-import { expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
+import { extractFunctions } from "../src/extract.js";
 import { outdent } from "outdent";
 import { diffOutdent } from "./diff-outdent.js";
 import { workspace } from "./workspace.js";
@@ -362,4 +363,26 @@ test("typescript: a wrapped local helper expands from the caller", () => {
     -    ├─ chargeCard()
     +    └─ refund()
   `));
+});
+
+describe("node identity", () => {
+  it("names a wrapped callback the same way on every extraction", () => {
+    // `c !== id` on tree-sitter nodes depended on garbage collection: the
+    // declarator's own name sometimes passed as its value, dropping `records`.
+    const source = [
+      "function load(lines: string[]) {",
+      "  const records = lines",
+      "    .map((line) => parse(line))",
+      "    .filter((r): r is Row => r !== null);",
+      "  return records;",
+      "}",
+      ...Array.from({ length: 200 }, (_, i) => `const filler${i} = [${i}].map((x) => x + ${i});`),
+    ].join("\n");
+    const seen = new Set<string>();
+    for (let run = 0; run < 40; run++) {
+      seen.add(extractFunctions("a.ts", source).map((fn) => fn.key).join("|"));
+    }
+    expect(seen.size).toBe(1);
+    expect([...seen][0].split("|")).toContain("records");
+  });
 });

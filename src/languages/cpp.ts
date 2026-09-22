@@ -12,6 +12,7 @@ import {
   type LanguageExtractor,
   type SyntaxNode,
   type Tree,
+  sameNode,
 } from "./types.js";
 
 function unwrapDeclarator(node: SyntaxNode | null): SyntaxNode | null {
@@ -24,7 +25,7 @@ function unwrapDeclarator(node: SyntaxNode | null): SyntaxNode | null {
       childByType(cur, "reference_declarator") ??
       childByType(cur, "parenthesized_declarator") ??
       null;
-    if (!next || next === cur) break;
+    if (!next || sameNode(next, cur)) break;
     cur = next;
   }
   return cur?.type === "function_declarator" ? cur : null;

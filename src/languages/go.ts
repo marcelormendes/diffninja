@@ -12,6 +12,7 @@ import {
   type LanguageExtractor,
   type SyntaxNode,
   type Tree,
+  sameNode,
 } from "./types.js";
 
 function isExported(name: string): boolean {
@@ -81,7 +82,7 @@ function collectIf(
   const kids = namedChildren(node);
   const consequent = kids.find((c) => c.type === "block") ?? null;
   const alt =
-    kids.find((c) => c !== consequent && (c.type === "block" || c.type === "if_statement")) ??
+    kids.find((c) => !sameNode(c, consequent) && (c.type === "block" || c.type === "if_statement")) ??
     null;
   const before = consequent
     ? kids.slice(0, kids.indexOf(consequent))
@@ -264,7 +265,7 @@ function collectStatements(
       // Do not walk into func_literal callees/bodies
       for (const child of namedChildren(node)) {
         if (child.type === "func_literal") continue;
-        if (child === callee) continue;
+        if (sameNode(child, callee)) continue;
         walk(child);
       }
       return;

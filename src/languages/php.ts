@@ -12,6 +12,7 @@ import {
   type LanguageExtractor,
   type SyntaxNode,
   type Tree,
+  sameNode,
 } from "./types.js";
 
 function isPrivate(node: SyntaxNode): boolean {
@@ -338,7 +339,7 @@ function collectStatements(
       } else {
         const scope =
           childByType(node, "relative_scope") ??
-          namedChildren(node).find((c) => c.type === "name" && c !== method) ??
+          namedChildren(node).find((c) => c.type === "name" && !sameNode(c, method)) ??
           null;
         const scopeText = scope?.text ?? null;
         if (

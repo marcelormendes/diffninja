@@ -14,6 +14,7 @@ import {
   type LanguageExtractor,
   type SyntaxNode,
   type Tree,
+  sameNode,
 } from "./types.js";
 import {
   jsCallSyntax,
@@ -605,7 +606,7 @@ function extractDeclaratorFunction(
   // The initialiser is the declarator's value child — everything but the
   // name and any type annotation — with its type wrappers peeled off.
   const value = namedChildren(d).find(
-    (c) => c !== id && c.type !== "type_annotation",
+    (c) => !sameNode(c, id) && c.type !== "type_annotation",
   );
   const init = value ? stripTypeWrappers(value) : null;
   if (!init) return;

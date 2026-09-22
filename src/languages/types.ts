@@ -26,6 +26,16 @@ export function namedChildren(node: SyntaxNode): SyntaxNode[] {
   return out;
 }
 
+/**
+ * Whether two handles name the same syntax node. The native binding may return
+ * a fresh JS object for a node on each access, and whether it does depends on
+ * garbage collection, so `===` on nodes gives different answers from run to run.
+ * A node's id is stable within its tree.
+ */
+export function sameNode(a: SyntaxNode | null | undefined, b: SyntaxNode | null | undefined): boolean {
+  return a !== null && a !== undefined && b !== null && b !== undefined && a.id === b.id;
+}
+
 export function childByType(node: SyntaxNode, type: string): SyntaxNode | null {
   return namedChildren(node).find((c) => c.type === type) ?? null;
 }

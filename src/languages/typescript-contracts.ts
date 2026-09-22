@@ -28,6 +28,7 @@
  */
 import type Parser from "tree-sitter";
 import type { FunctionInfo } from "../types.js";
+import { sameNode } from "./types.js";
 
 type Tree = Parser.Tree;
 type SyntaxNode = Parser.SyntaxNode;
@@ -204,7 +205,7 @@ function qualifiedTypeRoot(
 ): { root: SyntaxNode; written: string } | null {
   const parent = node.parent;
   if (!parent || parent.type !== "nested_type_identifier") return null;
-  if (parent.childForFieldName("name") !== node) return null;
+  if (!sameNode(parent.childForFieldName("name"), node)) return null;
   let module: SyntaxNode | null = parent.childForFieldName("module");
   while (
     module &&

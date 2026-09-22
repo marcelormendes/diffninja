@@ -20,7 +20,7 @@ import {
   type DeclaredParams,
   type ParamSlot,
 } from "../types.js";
-import { childByType, namedChildren, type SyntaxNode } from "./types.js";
+import { childByType, namedChildren, type SyntaxNode, sameNode } from "./types.js";
 
 /* ------------------------------------------------------------------- text */
 
@@ -721,7 +721,7 @@ function jsBodyBindings(body: SyntaxNode | null, scope: Scope): void {
             child.type === "generator_function_declaration")
         ) {
           declare(scope, name, {
-            callable: node === body,
+            callable: sameNode(node, body),
             params: jsFunctionValueParams(child),
             kind: "function",
           });
@@ -741,7 +741,7 @@ function jsBodyBindings(body: SyntaxNode | null, scope: Scope): void {
       ) {
         for (const declarator of namedChildren(child)) {
           if (declarator.type !== "variable_declarator") continue;
-          if (node === body) declareDeclarator(declarator, scope);
+          if (sameNode(node, body)) declareDeclarator(declarator, scope);
           else shadowPattern(declarator.childForFieldName("name"), scope, "local");
         }
         continue;
@@ -975,7 +975,7 @@ function pythonImportNames(node: SyntaxNode): string[] {
       continue;
     }
     if (child.type === "dotted_name") {
-      if (node.type === "import_from_statement" && child === node.childForFieldName("module_name")) {
+      if (node.type === "import_from_statement" && sameNode(child, node.childForFieldName("module_name"))) {
         continue;
       }
       names.push(namedChildren(child)[0]?.text ?? child.text);
