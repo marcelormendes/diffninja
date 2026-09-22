@@ -125,12 +125,12 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
     })));
     evidence.checks = evidence.checks.map(check => check.kind === "broken-reference" ? references.check : check);
   }
-  const result = await reviewUnits(units, options);
+  const result = reviewUnits(units);
   // Structured flows are grouped per changed file in report order, after
   // ranking, so the HTML can order files by the severity of their worst hunk.
   const callFlows = buildCallFlows(reportOrderedTextHunkFiles(result.items, units), trees, nodeDetail);
   if (callFlows.length > 0) callFlowAvailability = "available";
-  return { title: options.pr?.title || "Focused PR review", source, mode: options.mock ? "mock" : "live", createdAt: new Date().toISOString(),
+  return { title: options.pr?.title || "Focused PR review", source, createdAt: new Date().toISOString(),
     pr: options.pr,
     evidence: { ...evidence, intent: crossCheckIntent(options.pr, units, evidence.agenda, evidence.findings) },
     ...result, callFlow, callFlows, callFlowAvailability, warnings: [...warnings, ...result.warnings] };

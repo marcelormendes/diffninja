@@ -560,7 +560,7 @@ describe("report call flows", () => {
       writeFileSync(join(dir, "checkout.ts"), "export function checkout() { charge(); }\nfunction authorize() {}\nfunction charge() {}\n");
       commitAll(dir, "head");
 
-      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" }, { mock: true });
+      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" });
 
       expect(report.callFlowAvailability).toBe("available");
       expect(report.callFlows.map(entry => entry.file)).toEqual(["checkout.ts"]);
@@ -599,9 +599,8 @@ describe("report call flows", () => {
       const from = shortRef(dir, "HEAD~1");
       const to = shortRef(dir, "HEAD");
 
-      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" }, { mock: true });
+      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" });
 
-      expect(report.mode).toBe("mock");
       expect(report.callFlowAvailability).toBe("available");
       const entry = report.callFlows.find(flow => flow.file === "checkout.ts");
       expect(entry?.truncated).toBe(false);
@@ -669,7 +668,7 @@ describe("report call flows", () => {
       const from = shortRef(dir, "HEAD~1");
       const to = shortRef(dir, "HEAD");
 
-      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" }, { mock: true });
+      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" });
       const nodes = flatten(report.callFlows.flatMap(entry => entry.trees));
       const node = (key: string) => nodes.find(flat => flat.node.key === key)?.node;
 
@@ -707,7 +706,7 @@ describe("report call flows", () => {
       execFileSync("git", ["add", "."], { cwd: dir });
       execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-m", "head"], { cwd: dir });
 
-      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" }, { mock: true });
+      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" });
 
       expect(report.callFlows).toEqual([]);
       expect(report.callFlowAvailability).toBe("no-changes");
@@ -728,7 +727,7 @@ describe("report call flows", () => {
       "",
     ].join("\n");
 
-    const report = await reviewDiff({ diff: patch, source: "patch" }, { mock: true });
+    const report = await reviewDiff({ diff: patch, source: "patch" });
 
     expect(report.callFlows).toEqual([]);
     expect(report.callFlowAvailability).toBe("needs-git-range");

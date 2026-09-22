@@ -21,7 +21,7 @@ const originalFetch = globalThis.fetch;
 let fetchAttempts: string[] = [];
 
 /**
- * Provenance requests leave the process; mock runs must not. Any attempt is
+ * Provenance requests leave the process; static reviews must not. Any attempt is
  * recorded and fails the request, so a violation surfaces as a test failure
  * rather than as a slow network call.
  */
@@ -91,17 +91,6 @@ function reportOf(result: CallToolResult): StaticResult {
   return JSON.parse(textOf(result)) as StaticResult;
 }
 
-async function withMissingApiKey(run: () => Promise<void>): Promise<void> {
-  const saved = process.env.TYPESAFE_API_KEY;
-  delete process.env.TYPESAFE_API_KEY;
-  try {
-    await run();
-  } finally {
-    if (saved === undefined) delete process.env.TYPESAFE_API_KEY;
-    else process.env.TYPESAFE_API_KEY = saved;
-  }
-}
-
 afterEach(async () => {
   globalThis.fetch = originalFetch;
   while (closers.length > 0) await closers.pop()!();
@@ -117,7 +106,7 @@ describe("review_diff discovery", () => {
     expect(tool.annotations?.readOnlyHint).toBe(false);
     expect(tool.annotations?.destructiveHint).toBe(false);
     const schema = tool.inputSchema;
-    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(["diff", "expectedOutcome", "from", "input", "mock", "mode", "pr", "referenceProject", "repo", "to"]);
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(["diff", "expectedOutcome", "from", "input", "mode", "pr", "referenceProject", "repo", "to"]);
     expect(schema.additionalProperties).toBe(false);
     // mode is the intent assertion: one of the three documented values.
     expect(schema.properties?.mode).toMatchObject({ enum: ["auto", "connected", "static"] });
@@ -125,27 +114,21 @@ describe("review_diff discovery", () => {
 });
 
 describe("review_diff over the MCP protocol", () => {
-  test("ranks the checkout patch in mock mode and touches no network", async () => {
+  test("ranks the checkout patch locally and touches no network", async () => {
     blockNetwork();
     const client = await connectReview();
 
-    const result = await review(client, { diff: patch, mock: true });
+    const result = await review(client, { diff: patch });
 
     expect(result.isError).toBeFalsy();
     const report = reportOf(result);
-    expect(report.mode).toBe("mock");
-    expect(report.modelCalls).toBe(0);
     expect(report.items).toHaveLength(5);
-    expect(report.warnings.join("\n")).toMatch(/mock mode/i);
-    expect(report.warnings.join("\n")).toMatch(/no API call/i);
 
     // The text payload and the structured payload are the same report.
     expect(result.structuredContent).toEqual(report);
 
-    // Ordered by the report contract: the work no model settled first (highest
-    // priority first), then the judged hunks by numeric priority descending
-    // whatever their status (test files after the rest), then the deterministic
-    // pass. Status never reorders.
+    // Ordered by the report contract: manual work first, then the read hunks by
+    // priority (test files after the rest), then the passes. Status never reorders.
     const placement = report.items.map(placementOf);
     expect(placement).toEqual([...placement].sort((left, right) => left - right));
     for (const [index, item] of report.items.entries()) {
@@ -159,29 +142,25 @@ describe("review_diff over the MCP protocol", () => {
       }
     }
     expect(report.items.at(-1)).toMatchObject({ file: "docs/review-notes.txt", status: "passed" });
-    // Every judged hunk is labeled as a fixture; the deterministic pass is not judged at all.
-    const judged = report.items.filter(item => item.judgment !== undefined);
-    expect(judged).toHaveLength(4);
-    expect(judged.every(item => item.reasons.some(reason => /mock mode/i.test(reason)))).toBe(true);
-    expect(report.items.find(item => item.status === "passed")?.judgment).toBeUndefined();
+    // Every read hunk carries its local facts; the blank-only pass carries none.
+    expect(report.items.filter(item => item.facts !== undefined)).toHaveLength(4);
+    expect(report.items.find(item => item.status === "passed")?.facts).toBeUndefined();
 
     expect(fetchAttempts).toEqual([]);
   });
 
   test("accepts an empty diff as no changes instead of failing", async () => {
     const client = await connectReview();
-    const result = await review(client, { diff: "", mock: true });
+    const result = await review(client, { diff: "" });
 
     expect(result.isError).toBeFalsy();
     const report = reportOf(result);
     expect(report.items).toEqual([]);
-    expect(report.modelCalls).toBe(0);
-    expect(report.mode).toBe("mock");
     expect(report.callFlows).toEqual([]);
     expect(report.callFlowAvailability).toBe("needs-git-range");
   });
 
-  test("rejects unusable requests with named tool errors and no model call", async () => {
+  test("rejects unusable requests with named tool errors", async () => {
     blockNetwork();
     const client = await connectReview();
     const cases: Array<{ args: NonNullable<CallToolRequest["params"]["arguments"]>; expected: RegExp }> = [
@@ -210,7 +189,7 @@ describe("review_diff over the MCP protocol", () => {
     blockNetwork();
     const client = await connectReview();
 
-    const result = await review(client, { diff: patch, mock: true, apiKey: "forbidden-test-value" });
+    const result = await review(client, { diff: patch, apiKey: "forbidden-test-value" });
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("review_diff");
@@ -219,17 +198,11 @@ describe("review_diff over the MCP protocol", () => {
     expect(fetchAttempts).toEqual([]);
   });
 
-  test("fails closed when live mode has no credentials, without a network attempt", async () => {
-    await withMissingApiKey(async () => {
-      blockNetwork();
-      const client = await connectReview();
-
-      const result = await review(client, { diff: patch });
-
-      expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("TYPESAFE_API_KEY");
-      expect(fetchAttempts).toEqual([]);
-    });
+  test("refuses the removed mock argument instead of silently ignoring it", async () => {
+    const client = await connectReview();
+    const result = await review(client, { diff: patch, mock: true });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/unrecognized key|invalid arguments/i);
   });
 
   test("ranks a git range and keeps the removed authorize call in the call flow", async () => {
@@ -248,12 +221,10 @@ describe("review_diff over the MCP protocol", () => {
       const before = readdirSync(dir).sort();
 
       const client = await connectReview();
-      const result = await review(client, { repo: dir, from: "HEAD~1", to: "HEAD", mock: true });
+      const result = await review(client, { repo: dir, from: "HEAD~1", to: "HEAD" });
 
       expect(result.isError).toBeFalsy();
       const report = reportOf(result);
-      expect(report.mode).toBe("mock");
-      expect(report.modelCalls).toBe(0);
       expect(report.source).toContain("HEAD~1 → HEAD");
       expect(report.callFlow.join("\n")).toContain("authorize");
       expect(report.callFlow.join("\n")).toContain("charge");
@@ -541,7 +512,7 @@ describe("review_diff connected pull request mode", () => {
       blockNetwork();
       const client = await connectReview();
 
-      const result = await review(client, { pr: GH_URL, diff: patch, repo: "/ignored-local-repo", mock: true });
+      const result = await review(client, { pr: GH_URL, diff: patch, repo: "/ignored-local-repo" });
 
       expect(result.isError).toBeFalsy();
       const payload = connectedOf(result);
@@ -720,7 +691,7 @@ describe("review_diff connected pull request mode", () => {
       const withoutLink: Array<NonNullable<CallToolRequest["params"]["arguments"]>> = [
         { mode: "connected" },
         { mode: "connected", diff: "" },
-        { mode: "connected", diff: patch, mock: true },
+        { mode: "connected", diff: patch },
         { mode: "connected", input: "PR 123" },
         { mode: "connected", input: "Revise o PR do auth, por favor." },
         { mode: "connected", input: "review octocat/hello" },
@@ -754,19 +725,18 @@ describe("review_diff connected pull request mode", () => {
       const baseline = await listeningServers();
       const client = await connectReview();
 
-      const result = await review(client, { mode: "static", diff: URL_IN_DIFF, mock: true });
+      const result = await review(client, { mode: "static", diff: URL_IN_DIFF });
 
       expect(result.isError).toBeFalsy();
       const report = reportOf(result);
       // The link inside the diff is source text, so this is a static report.
-      expect(report.mode).toBe("mock");
       expect(report.source).toBe("MCP inline diff");
       expect(report.items).toHaveLength(1);
       expect(report.items[0].file).toBe("notes.md");
 
       // A bare link passed as the diff is not navigated either: it is not
       // unified diff text, so the call fails instead of loading a page.
-      const linkOnly = await review(client, { mode: "static", diff: GH_URL, mock: true });
+      const linkOnly = await review(client, { mode: "static", diff: GH_URL });
       expect(linkOnly.isError).toBe(true);
       expect(linkOnly.structuredContent).toBeUndefined();
       expect(textOf(linkOnly)).not.toMatch(/127\.0\.0\.1/);
@@ -790,7 +760,7 @@ describe("review_diff connected pull request mode", () => {
         { mode: "static", pr: GH_URL },
         { mode: "static", pr: GH_URL, diff: patch },
         { mode: "static", input: "Please review this." },
-        { mode: "static", input: GH_URL, mock: true },
+        { mode: "static", input: GH_URL },
       ];
       for (const args of conflicts) {
         const result = await review(client, args);

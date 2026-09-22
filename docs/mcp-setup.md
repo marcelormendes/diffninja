@@ -37,10 +37,10 @@ binary; if that install fails it registers an `npx`-based entry instead and
 tells you. Flags: `--cli claude,codex` to pick CLIs, `--dry-run` to preview
 (no install, no writes), `--uninstall` to remove, `--no-install` to skip the
 global install. Codex is written to `~/.codex/config.toml`, or to
-`$CODEX_HOME/config.toml` when that variable is set. The
-TypeSafe API key is never written into config files; each entry references it
-from the environment that launches the CLI, so export `TYPESAFE_API_KEY` in
-your shell for live reviews.
+`$CODEX_HOME/config.toml` when that variable is set. Entries carry no API key
+or environment: reviews run locally, and pull requests reuse your `gh` session.
+Re-running setup rewrites an entry from an older version that forwarded
+`TYPESAFE_API_KEY`.
 
 The sections below are the manual equivalents, one CLI at a time.
 
@@ -55,7 +55,6 @@ The sections below are the manual equivalents, one CLI at a time.
 | `to` | string | Head ref or commit for a range review. Endpoints are compared directly, not the merge base. |
 | `pr` | string | GitHub PR link; starts a connected review. |
 | `input` | string | Free text containing a GitHub PR link; starts a connected review. |
-| `mock` | boolean | Offline fixture judgments for static analysis only. Ignored for connected reviews, which still read GitHub. |
 | `expectedOutcome` | `{ "title": string, "description": string }` | Exact, untrusted expected-outcome metadata for static analysis. Links here never select a PR. |
 | `referenceProject` | string | Static git range only: repository-relative tsconfig for opt-in diagnostics using the trusted installed TypeScript compiler. |
 
@@ -73,8 +72,7 @@ Rules enforced by the schema and the tool:
 - For static analysis, provide **exactly one** input: `diff`, or `from`
   **and** `to`. `repo` is accepted only for a range review and must be an
   absolute path.
-- Live static analysis (no `mock`) requires `TYPESAFE_API_KEY` in the server
-  process environment. There is no API key argument.
+- Static analysis is local: no model, no API key, no network for inline diffs.
 - Range reviews use the bundled `calldiff` engine for call flows; inline
   diffs report patch-only warnings instead, since full files are unavailable.
 - `expectedOutcome` preserves both strings in `report.pr`. It supports source
@@ -107,27 +105,19 @@ an error message, and no partial report.
 ```
 
 ```json
-{ "repo": "/absolute/path/to/repo", "from": "main", "to": "HEAD", "mock": true }
-```
-
-```json
 { "repo": "/absolute/path/to/repo", "from": "HEAD~1", "to": "HEAD" }
 ```
 
-The last one is live: it sends the changed hunks and matching call flows to
-TypeSafe and needs `TYPESAFE_API_KEY`. In static mode the report carries
-`source` and `mode` (`live` or `mock`). Mock judgments are placeholders from
-fixtures — they do not mean a hunk is safe.
-The result also includes deterministic evidence, a short reading agenda, and
-check coverage. Live Jev evaluation makes one HTTP attempt per evaluable hunk,
-with a fixed-order typed question set and no retries or adaptive rounds.
-Confidence does not rank hunks; stochastic judgments may differ between runs
-without changing the deterministic evidence agenda.
+Every static result carries each hunk's status, priority, reasons, and local
+change facts (each `yes` with the changed line it rests on), plus deterministic
+evidence, a short reading agenda, and check coverage. Nothing is sent anywhere,
+and the same input always gives the same result. The facts point at what to
+read; interpreting what the change means is up to you and your agent.
 
 Git-range call-flow analysis inherits calldiff's on-demand npm grammar
 installation into `CALLDIFF_GRAMMAR_CACHE` (default
-`~/.cache/calldiff/grammars`). This can write cache files and access npm even
-with `mock: true`; the tool therefore advertises `readOnlyHint: false`,
+`~/.cache/calldiff/grammars`). This can write cache files and access npm; the
+tool therefore advertises `readOnlyHint: false`,
 although it does not edit repository source. For strictly offline reviews,
 supply inline diff text or preinstall the required grammars (see
 [reference.md](reference.md#install-time-notes)).
@@ -144,16 +134,13 @@ Project scope, committed as `.mcp.json` at the repo root:
     "diffninja": {
       "type": "stdio",
       "command": "node",
-      "args": ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"],
-      "env": { "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}" }
+      "args": ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"]
     }
   }
 }
 ```
 
-Claude Code expands `${VAR}` in an `env` value, so the entry references the
-key from the environment that launched it rather than containing one. Drop
-the `env` block for mock-only use. To add it to local or user scope instead:
+To add it to local or user scope instead:
 
 ```bash
 claude mcp add --transport stdio diffninja \
@@ -161,8 +148,7 @@ claude mcp add --transport stdio diffninja \
 ```
 
 Check it with `claude mcp list` or `/mcp`, then approve the project server on
-first use. Live reviews need `TYPESAFE_API_KEY` exported in the shell that
-starts Claude Code.
+first use.
 
 ### Codex
 
@@ -173,20 +159,14 @@ starts Claude Code.
 [mcp_servers.diffninja]
 command = "node"
 args = ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"]
-env_vars = ["TYPESAFE_API_KEY"]   # forwarded from your shell; omit for mock-only
 ```
 
-`env_vars` forwards a variable that is already set in the local environment,
-so the key stays out of the file. Or:
+Or:
 
 ```bash
 codex mcp add diffninja -- node /absolute/path/to/diffninja/dist/review/mcp-cli.js
 codex mcp list      # verify
 ```
-
-The CLI form writes the same table without the forward, so add `env_vars` to
-the entry (or edit the file) before running a live review; a mock-only setup
-needs neither.
 
 ### OMP
 
@@ -197,16 +177,13 @@ OMP reads MCP servers natively. Project file `.omp/mcp.json`:
   "mcpServers": {
     "diffninja": {
       "command": "node",
-      "args": ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"],
-      "env": { "TYPESAFE_API_KEY": "TYPESAFE_API_KEY" }
+      "args": ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"]
     }
   }
 }
 ```
 
-`type` defaults to `stdio`, and an `env` value that names an environment
-variable is resolved from the launching environment, so the key is referenced
-rather than stored; drop the `env` block for mock-only. The same entry works
+`type` defaults to `stdio`. The same entry works
 in the user file `~/.omp/agent/mcp.json`, or
 `~/.omp/profiles/<name>/agent/mcp.json` under a named profile. Manage it
 in-session with `/mcp add`, `/mcp list`, `/mcp test diffninja`, and
@@ -241,9 +218,8 @@ Add the server to `~/.pi/agent/mcp.json` (global) or `.pi/mcp.json`
 
 The extension adds a `transport` field and a `lifecycle` (`lazy` starts the
 server on `/mcp:start diffninja`, `eager` at session start), and it prefixes
-the tool as `mcp_diffninja_review_diff`. Live reviews need
-`TYPESAFE_API_KEY` in the environment that launches pi. The extension is a
+the tool as `mcp_diffninja_review_diff`. The extension is a
 third-party package, not part of pi itself:
 <https://pi.dev/packages/pi-mcp-extension>. Without the extension — or in a
-harness with no MCP client at all — use the CLI, or wire a generic MCP
-adapter you configure yourself.
+harness with no MCP client at all — wire a generic MCP adapter you configure
+yourself; diffninja has no terminal review mode.

@@ -4,9 +4,9 @@
  *
  * The setup installs the package globally first so the registration points
  * at a permanent binary instead of the npx cache. When the global install is
- * unavailable it falls back to an npx-based entry and says so. The TypeSafe
- * API key is only referenced from the launching environment, never written
- * into a config file.
+ * unavailable it falls back to an npx-based entry and says so. The server
+ * needs no key or environment: reviews are local, and connected reviews reuse
+ * the `gh` session.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -38,9 +38,8 @@ Options:
   --no-install   Skip the global install and register npx-based entries.
   --help         Show this help.
 
-The TypeSafe API key is never written into config files; each entry references
-it from the environment that launches the CLI. Set TYPESAFE_API_KEY for live
-reviews. Without it the server still answers in mock mode.
+The server needs no API key: static reviews run locally, and pull request
+reviews reuse your authenticated gh session.
 `;
 
 export const CLI_NAMES = ["claude", "codex", "omp", "pi"] as const;
@@ -59,7 +58,7 @@ export interface SetupOptions {
   quiet?: boolean;
   homeDir?: string;
   pathDirs?: string[];
-  /** Environment to read `CODEX_HOME` and `TYPESAFE_API_KEY` from. */
+  /** Environment to read `CODEX_HOME` from. */
   env?: NodeJS.ProcessEnv;
 }
 
@@ -528,12 +527,11 @@ function mergeJsonServer(
 }
 
 function claudeServer(entry: McpEntry): JsonObject {
-  return { type: "stdio", command: entry.command, args: entry.args, env: { TYPESAFE_API_KEY: "${TYPESAFE_API_KEY}" } };
+  return { type: "stdio", command: entry.command, args: entry.args };
 }
 
 function ompServer(entry: McpEntry): JsonObject {
-  // OMP resolves an env value that names a variable from the launching environment.
-  return { command: entry.command, args: entry.args, env: { TYPESAFE_API_KEY: "TYPESAFE_API_KEY" } };
+  return { command: entry.command, args: entry.args };
 }
 
 function piServer(entry: McpEntry): JsonObject {
@@ -544,8 +542,7 @@ function piServer(entry: McpEntry): JsonObject {
 const CODEX_SERVER_PATH = ["mcp_servers", "diffninja"] as const;
 
 function codexValues(entry: McpEntry): TomlTable {
-  // env_vars forwards a variable from the launching shell; the key never lands in the file.
-  return { command: entry.command, args: entry.args, env_vars: ["TYPESAFE_API_KEY"] };
+  return { command: entry.command, args: entry.args };
 }
 
 /**
@@ -647,9 +644,6 @@ export async function runSetup(options: SetupOptions = {}, deps: SetupDeps = {})
     }
     if (reports.some((report) => report.cli === "pi" && report.detected && report.action !== "not-detected")) {
       console.log("note: pi needs the pi-mcp-extension for MCP support (pi install npm:pi-mcp-extension)");
-    }
-    if (!uninstall && env["TYPESAFE_API_KEY"] === undefined) {
-      console.log("note: TYPESAFE_API_KEY is not set; live reviews need it in the shell that launches each CLI");
     }
   }
 

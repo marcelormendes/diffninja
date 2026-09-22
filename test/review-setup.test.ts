@@ -168,14 +168,35 @@ describe("runSetup", () => {
         type: "stdio",
         command: "node",
         args: [join(home, "fake-global-root", "diffninja", "dist", "review", "mcp-cli.js")],
-        env: { TYPESAFE_API_KEY: "${TYPESAFE_API_KEY}" },
       });
       const codexToml = readFileSync(join(home, ".codex", "config.toml"), "utf8");
       expect(codexToml).toContain("[mcp_servers.diffninja]");
       expect(codexToml).toContain('model = "gpt"');
-      expect(codexToml).toContain('env_vars = ["TYPESAFE_API_KEY"]');
+      // Reviews are local: no entry references an API key.
+      expect(codexToml).not.toContain("TYPESAFE_API_KEY");
       const ompJson = JSON.parse(readFileSync(join(home, ".omp", "agent", "mcp.json"), "utf8"));
-      expect(ompJson.mcpServers.diffninja.env).toEqual({ TYPESAFE_API_KEY: "TYPESAFE_API_KEY" });
+      expect(ompJson.mcpServers.diffninja.env).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rewrites entries from an older setup without the API key reference", async () => {
+    const home = fakeHome();
+    try {
+      const mcp = join(home, "fake-global-root", "diffninja", "dist", "review", "mcp-cli.js");
+      writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { diffninja: {
+        type: "stdio", command: "node", args: [mcp], env: { TYPESAFE_API_KEY: "${TYPESAFE_API_KEY}" },
+      } } }));
+      mkdirSync(join(home, ".codex"), { recursive: true });
+      writeFileSync(join(home, ".codex", "config.toml"),
+        `[mcp_servers.diffninja]\ncommand = "node"\nargs = ["${mcp}"]\nenv_vars = ["TYPESAFE_API_KEY"]\n`);
+      const report = await runSetup(options(home), { npm: fakeNpm(home) });
+      const byCli = Object.fromEntries(report.clis.map((r) => [r.cli, r]));
+      expect(byCli["claude"].action).toBe("configured");
+      expect(byCli["codex"].action).toBe("configured");
+      expect(JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers.diffninja.env).toBeUndefined();
+      expect(readFileSync(join(home, ".codex", "config.toml"), "utf8")).not.toContain("TYPESAFE_API_KEY");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { renderReview } from "../src/review/html.js";
-import type { Judgment, ReviewItem, ReviewReport } from "../src/review/types.js";
+import type { ReviewItem, ReviewReport } from "../src/review/types.js";
+import type { ChangeFacts } from "../src/review/change-facts.js";
 import type {
   AutomaticFinding,
   EvidenceExcerpt,
@@ -9,14 +10,6 @@ import type {
 } from "../src/review/evidence-types.js";
 
 const ATTACK = '<img src=x onerror="alert(1)"><script>alert(1)</script>';
-/**
- * The attack string in a closed-set answer position. The adapter validates every
- * field and fails closed, so this value is unreachable through the real pipeline:
- * the fixtures below exist to prove the renderer names an out-of-set answer
- * instead of echoing it.
- */
-// SAFETY: deliberately invalid fixture, used only to exercise closed-set renderer rejection.
-const NOT_AN_ANSWER = ATTACK as never;
 
 function report(
   items: ReviewItem[],
@@ -25,14 +18,12 @@ function report(
   return {
     title: "Checkout review",
     source: "main to feature",
-    mode: "live",
     createdAt: "2026-09-18T10:00:00Z",
     items,
     callFlow: [],
     callFlows: [],
     callFlowAvailability: "needs-git-range",
     warnings: [],
-    modelCalls: 0,
     ...overrides,
   };
 }
@@ -59,17 +50,20 @@ function item(overrides: Partial<ReviewItem> = {}): ReviewItem {
  * question is answered, and a hunk with no property shown is `no` with an
  * unchanged outcome.
  */
-function judgment(overrides: Partial<Judgment> = {}): Judgment {
+function facts(overrides: Partial<ChangeFacts["answers"]> = {}, evidence: ChangeFacts["evidence"] = {}): ChangeFacts {
   return {
-    outcome: "unchanged",
-    comparisonChanged: "no",
-    limitChanged: "no",
-    validationChanged: "no",
-    failurePropagated: "no",
-    failureDeferred: "no",
-    failureDiscarded: "no",
-    confidence: 0.5,
-    ...overrides,
+    language: "c-like",
+    inert: false,
+    answers: {
+      comparisonChanged: "no",
+      limitChanged: "no",
+      validationChanged: "no",
+      failurePropagated: "no",
+      failureDeferred: "no",
+      failureDiscarded: "no",
+      ...overrides,
+    },
+    evidence,
   };
 }
 
@@ -191,16 +185,7 @@ describe("review HTML", () => {
             special: ATTACK,
             callFlow: [ATTACK],
             reasons: [ATTACK],
-            judgment: {
-              outcome: NOT_AN_ANSWER,
-              comparisonChanged: NOT_AN_ANSWER,
-              limitChanged: NOT_AN_ANSWER,
-              validationChanged: NOT_AN_ANSWER,
-              failurePropagated: NOT_AN_ANSWER,
-              failureDeferred: NOT_AN_ANSWER,
-              failureDiscarded: NOT_AN_ANSWER,
-              confidence: 0.8,
-            },
+            facts: facts({ limitChanged: "yes" }, { limitChanged: { side: "added", text: ATTACK } }),
           }),
         ],
         {
@@ -237,23 +222,6 @@ describe("review HTML", () => {
       expect(found[index].html).toContain("-const total = price;");
     }
     expect(visible(renderReview(report([item()])))).toContain('id="item-1">');
-  });
-
-  test("distinguishes a context-limit skip from a judged uncertain hunk without extra counts", () => {
-    const skipped = item({
-      id: "caller", file: "caller.ts", diff: "@@ -1 +1 @@\n-callee(arg);\n+callee(arg + 1);",
-      status: "uncertain", priority: 70, reasons: [],
-      routing: { evaluation: "not_evaluated", reasonCode: "context_limit_exceeded", requiredChars: 25000, limitChars: 24000 },
-    });
-    const judged = item({ ...skipped, id: "callee", routing: undefined,
-      judgment: judgment({ outcome: "changed", limitChanged: "yes" }) });
-    const rendered = visible(renderReview(report([skipped, judged])));
-    const found = cards(rendered);
-    expect(found).toHaveLength(2);
-    expect(found[0].html).toContain("Not evaluated:");
-    expect(found[0].html).toContain("25000");
-    expect(found[0].html).toContain("24000");
-    expect(found[1].html).not.toContain("Not evaluated:");
   });
 
   test("both gutters advance from the numbers in the hunk header", () => {
@@ -396,10 +364,10 @@ describe("review HTML", () => {
         "model confidence 0.4 (self-reported by one response; informational, not a ranking gate)",
         "routed to uncertain: an answer did not separate its own options or an answer was unknown, so a human has to decide",
       ],
-      judgment: judgment({ outcome: "changed", limitChanged: "yes", failureDiscarded: "yes", confidence: 0.4 }),
+      facts: facts({ limitChanged: "yes", failureDiscarded: "yes" }),
     });
     const html = visible(renderReview(report([unit], {
-      modelCalls: 3, warnings: ["Private assessment metadata"], callFlow: [],
+      warnings: ["Private assessment metadata"], callFlow: [],
     })));
     expect(html).not.toMatch(/weight\s*\d/i);
     expect(html).not.toMatch(/model confidence/i);
@@ -416,99 +384,74 @@ describe("review HTML", () => {
     expect(html).not.toContain("routed to uncertain");
   });
 
-  test("every typed answer renders from its closed set, and an unrecognized value is never echoed", () => {
+  test("each fact renders in order, and a yes cites the changed line it rests on", () => {
     const unit = item({
       file: "src/lease.ts",
-      status: "uncertain",
-      reasons: ["model confidence 0.6 (self-reported by one response; informational, not a ranking gate)"],
-      judgment: judgment({
-        outcome: "changed",
-        comparisonChanged: "yes",
-        validationChanged: "yes",
-        failurePropagated: "yes",
-        failureDiscarded: "unknown",
-        confidence: 0.6,
-      }),
+      facts: facts(
+        { comparisonChanged: "yes", limitChanged: "yes", failurePropagated: "yes" },
+        {
+          comparisonChanged: { side: "added", text: "if (amount < 0) throw new Error('invalid');" },
+          limitChanged: { side: "added", text: "if (amount < 0) throw new Error('invalid');" },
+          failurePropagated: { side: "removed", text: "if (amount <= 0) throw new Error('invalid');" },
+        },
+      ),
     });
-    const html = visible(renderReview(report([unit])));
-    const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
-    // Every question reaches the reviewer, in the adapter's order, with its own
-    // answer: the six atomic answers are independent, so three `yes` answers
-    // coexist and an unanswered property stays `no` rather than inheriting one.
-    const rows = [...obs.matchAll(/<dt>([^<]*)<\/dt><dd class="mono">([^<]*)/g)]
-      .map((match) => [match[1], match[2].trim()] as const);
+    const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(visible(renderReview(report([unit]))))?.[1] ?? "";
+    const rows = [...obs.matchAll(/<dt>([^<]*)<\/dt><dd class="mono">([^<]*)/g)].map((match) => [match[1], match[2].trim()] as const);
     expect(rows).toEqual([
-      ["Outcome the lines produce", "changed"],
       ["Comparison changed", "yes"],
-      ["Limit, size, or offset changed", "no"],
-      ["Validation or shape check changed", "yes"],
-      ["Failure propagated", "yes"],
-      ["Failure deferred", "no"],
-      ["Failure discarded", "unknown"],
+      ["Limit, size, or offset changed", "yes"],
+      ["Input check changed", "no"],
+      ["Failure handed to the caller", "yes"],
+      ["Failure deferred or retried", "no"],
+      ["Failure discarded", "no"],
     ]);
-    expect(obs).not.toMatch(/confidence/i);
-
-    // A returned value outside its documented set is named, never echoed.
-    const hostile = item({
-      reasons: [],
-      judgment: judgment({ outcome: NOT_AN_ANSWER, comparisonChanged: NOT_AN_ANSWER }),
-    });
-    const other = visible(renderReview(report([hostile])));
-    expect(other).not.toContain(ATTACK);
-    expect(other).toContain('<dt>Outcome the lines produce</dt><dd class="mono">unrecognized value</dd>');
-    expect(other).toContain('<dt>Comparison changed</dt><dd class="mono">unrecognized value</dd>');
-    expect(other).toContain('<dt>Limit, size, or offset changed</dt><dd class="mono">no</dd>');
+    expect(obs).toContain("added line: <code>if (amount &lt; 0) throw new Error(&#39;invalid&#39;);</code>");
+    expect(obs).toContain("removed line: <code>if (amount &lt;= 0)");
+    expect(obs).toContain("no model was asked");
   });
 
   test("explains a test file's placement from its path, and only for test files", () => {
     const obsOf = (file: string) =>
       /<details class="obs">([\s\S]*?)<\/details>/.exec(
-        visible(renderReview(report([item({ file, judgment: judgment({ outcome: "changed" }) })]))),
+        visible(renderReview(report([item({ file, facts: facts() })]))),
       )?.[1] ?? "";
     expect(obsOf("test/checkout.test.ts")).toContain("This path looks like a test file");
     expect(obsOf("src/checkout.ts")).not.toContain("looks like a test file");
   });
 
-  test("an unknown answer reads as missing evidence, never as a defect or as an absence", () => {
+  test("an unread file type says so instead of listing answers", () => {
     const html = visible(renderReview(report([item({
+      file: "docs/guide.md",
       status: "uncertain",
-      judgment: judgment({
-        outcome: "unknown",
-        limitChanged: "unknown",
-        validationChanged: "unknown",
-      }),
+      facts: { language: null, inert: null, answers: facts({
+        comparisonChanged: "unknown", limitChanged: "unknown", validationChanged: "unknown",
+        failurePropagated: "unknown", failureDeferred: "unknown", failureDiscarded: "unknown",
+      }).answers, evidence: {} },
     })])));
     const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
-    // `unknown` is spelled out, so it cannot be read as a "no" (absence) claim, and
-    // the outcome it applies to is the same statement about the evidence.
-    expect(obs).toContain("not determined from the supplied state; a person should decide");
-    expect(obs).toMatch(
-      /Outcome the lines produce and Limit, size, or offset changed and Validation or shape check changed could not be determined/,
-    );
-    // An answer the state settles still reads as its own answer.
-    expect(obs).toContain('<dt>Comparison changed</dt><dd class="mono">no</dd>');
-    // The escalation is a hint under the observations, not a warning banner.
-    expect(obs).not.toMatch(/bug|defect found|error|issue|problem with the code/i);
+    expect(obs).toContain("diffninja does not read this file type");
+    expect(obs).not.toContain("<dt>");
+    expect(obs).not.toMatch(/bug|defect found|problem with the code/i);
   });
 
-  test("a hunk with no sample renders no observation block", () => {
-    const html = visible(renderReview(report([item({ judgment: undefined })])));
+  test("a formatting-only change says so", () => {
+    const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(
+      visible(renderReview(report([item({ status: "passed", facts: { ...facts(), inert: true } })]))),
+    )?.[1] ?? "";
+    expect(obs).toContain("Formatting or comments only");
+  });
+
+  test("a hunk with no facts renders no facts block", () => {
+    const html = visible(renderReview(report([item({ facts: undefined })])));
     expect(html).not.toContain('<details class="obs">');
     expect(html).toContain("+const total = price + tax;");
   });
 
-  test("mock and live differ by one mode note, with no mock banner", () => {
-    const mock = renderReview(
-      report([item()], { mode: "mock", warnings: ["Mock mode: no API call was made."] }),
-    );
-    const live = renderReview(report([item()]));
-    const notices = (html: string) =>
-      [...visible(html).matchAll(/<p class="mode-note">([^<]*)<\/p>/g)].map((match) => match[1]);
-    expect(notices(mock)).toHaveLength(1);
-    expect(notices(mock)[0]).toMatch(/\bmock\b/i);
-    expect(notices(live)).toHaveLength(1);
-    expect(notices(live)[0]).toMatch(/\blive\b/i);
-    expect(visible(mock)).not.toContain("no API call was made");
+  test("one mode note says the analysis stayed local", () => {
+    const notices = [...visible(renderReview(report([item()]))).matchAll(/<p class="mode-note">([^<]*)<\/p>/g)].map((match) => match[1]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(/nothing left your machine/i);
   });
 
   test("an empty report says so and renders no toolbar", () => {

@@ -1,5 +1,5 @@
 import type { PullRequestIntent, ReviewEvidence } from "./evidence-types.js";
-import type { AtomicObservation, OutcomeChoice } from "./jev.js";
+import type { ChangeFacts } from "./change-facts.js";
 
 export type ReviewStatus = "attention" | "uncertain" | "low" | "passed";
 /**
@@ -67,8 +67,8 @@ export type CallFlowAvailability = "available" | "needs-git-range" | "no-changes
 /**
  * One keyed piece of structured review context for a hunk: a changed, caller, or
  * callee definition with its snapshot-bound source and the call/binding evidence
- * extracted for it. Nodes are selected deterministically before the single
- * judgment and remain available to the human even when the model budget omits them.
+ * extracted for it. Nodes are selected deterministically and feed the evidence
+ * agenda and the reviewer's context.
  */
 export interface ReviewContextNode {
   /** Addressable identity inside one hunk, unique across snapshots, e.g. `after:checkout`. */
@@ -81,32 +81,9 @@ export interface ReviewContextNode {
   /**
    * Whole node text: the definition source as the snapshot has it, plus the
    * selected call sites and bindings already extracted for it. Never a preview
- * and never truncated; a state that cannot carry it omits the whole node
- * and explicitly records that the available context is incomplete.
+   * and never truncated.
    */
   detail: string;
-  /** Extractor-owned facts, never parsed from source text or inferred by the model. */
-  provenance?: {
-    snapshot: "before" | "after";
-    role: "changed-definition" | "caller" | "callee";
-    sourcePresent: boolean;
-    contract: boolean;
-  };
-}
-
-/** Readable admitted definitions, by snapshot; categories can coexist. */
-export interface ContextPresenceCounts {
-  changedDefinitions: number;
-  callerDefinitions: number;
-  calleeDefinitions: number;
-  contracts: number;
-}
-
-/** Presence in the actual payload, not sufficiency or exhaustive caller coverage. */
-export interface ContextPresence {
-  before: ContextPresenceCounts;
-  after: ContextPresenceCounts;
-  unclassifiedNodes: number;
 }
 
 /** One parsed piece of the input: a text hunk, or a file's metadata-only change. */
@@ -121,65 +98,32 @@ export interface ReviewUnit {
   newStart: number;
   /**
    * Why this unit cannot be judged from the diff alone (binary, rename, mode,
-   * symbolic link, submodule). A unit that carries one never reaches the model.
+   * symbolic link, submodule). A unit that carries one goes to manual review.
    */
   special?: string;
   /**
    * Report blocks for this hunk, in the order the report shows them: both
    * snapshots, the call on a changed line first. They stay the readable report
-   * text; the model receives {@link ReviewUnit.contextNodes} instead.
+   * text; {@link ReviewUnit.contextNodes} carries the structured form.
    */
   callFlow?: string[];
   /**
    * Structured context for this hunk, highest retention priority first.
-   * The model receives whole nodes that fit its fixed state budget.
    * An empty array is never set in place of "no context".
    */
   contextNodes?: ReviewContextNode[];
 }
-export interface Judgment {
-  /**
-   * Whether the shown edit changes what a consumer of this code can observe or
-   * rely on, is equivalent for those consumers, or could not be separated from
-   * the supplied state. Unordered: `changed` is not "more" than `unchanged`.
-   */
-  outcome: OutcomeChoice;
-  comparisonChanged: AtomicObservation;
-  limitChanged: AtomicObservation;
-  validationChanged: AtomicObservation;
-  failurePropagated: AtomicObservation;
-  failureDeferred: AtomicObservation;
-  failureDiscarded: AtomicObservation;
-  /** Lowest returned confidence; informational, never an outcome verdict. */
-  confidence: number;
-}
-/**
- * Why a hunk was never evaluated, with the exact size that forced it. Only an
- * essential state (file, hunk, diff, and context note) that cannot fit the limit
- * sets this: dropping optional call-flow context never does, and an item that
- * carries it has no model judgment behind it.
- */
-export interface ReviewRouting {
-  evaluation: "not_evaluated";
-  reasonCode: "context_limit_exceeded";
-  /** `JSON.stringify` length of the essential state that could not fit the limit. */
-  requiredChars: number;
-  /** The serialized-state limit those characters exceeded. */
-  limitChars: number;
-}
 export interface ReviewItem extends ReviewUnit {
   status: ReviewStatus;
   priority: number; // 0..100
-  /** Fixed templates over returned values and this adapter's own rubric text; no model-authored text is quoted. */
+  /** Fixed templates over the local facts; a cited line is quoted from the diff itself. */
   reasons: string[];
-  judgment?: Judgment;
-  /** Present only when the model was never called because of this hunk's own size. */
-  routing?: ReviewRouting;
+  /** Local change facts; absent for manual units and fact-free passes. */
+  facts?: ChangeFacts;
 }
 export interface ReviewReport {
   title: string;
   source: string;
-  mode: "live" | "mock";
   createdAt: string;
   pr?: PullRequestIntent;
   evidence?: ReviewEvidence;
@@ -193,18 +137,10 @@ export interface ReviewReport {
   callFlows: CallFlowFile[];
   callFlowAvailability: CallFlowAvailability;
   warnings: string[];
-  /** Attempted HTTP requests: at most one per judged hunk, zero in mock mode. */
-  modelCalls: number;
 }
 export interface ReviewOptions {
-  /** Deterministic local fixtures, not an assessment of the code; no request is made. */
-  mock?: boolean;
   /** Exact PR metadata, treated as untrusted evidence rather than instructions. */
   pr?: PullRequestIntent;
   /** Opt in to the locally installed project TypeScript checker; never a PR script. */
   referenceProject?: string;
-  /** Takes precedence over the `TYPESAFE_API_KEY` environment variable. */
-  apiKey?: string;
-  /** Test seam; defaults to `globalThis.fetch`. */
-  fetch?: typeof globalThis.fetch;
 }

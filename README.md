@@ -10,11 +10,13 @@ the complete diff, as structured data for the agent and as a page for you.
 diffninja is an MCP server (`review_diff`) plus a `diffninja setup` command that
 registers it. It has no terminal review mode.
 
-Live static analysis sends each evaluable hunk to TypeSafe's Jev model once,
-with a typed question set: one unordered outcome choice — does the edit change
-what a consumer of the code can observe or rely on — and six independent
-yes/no/unknown properties. Connected GitHub reviews do not call a model. Neither
-mode writes review prose for you. You stay the reviewer.
+Analysis is local and deterministic: no model is called, no source leaves your
+machine, and the same input always gives the same report. Each hunk gets change
+facts — did a comparison, a limit, or an input check change; is a failure handed
+to the caller, deferred, or discarded — each pointing at the changed line it
+rests on. Interpreting what the change means is left to you and, if you ask it,
+to the agent you already use. diffninja writes no review prose. You stay the
+reviewer.
 
 ## What you need
 
@@ -24,11 +26,8 @@ mode writes review prose for you. You stay the reviewer.
 - **GitHub CLI (`gh`) 2.45.0+, authenticated** (`gh auth login`) — only for
   reviewing pull requests. diffninja never asks for a token; it reuses your
   `gh` session.
-- **`TYPESAFE_API_KEY`** (get one at https://console.typesafe.ai) in the MCP
-  server's environment — only for live static analysis. Connected PR reviews
-  don't call a model and don't need it. `mock: true` substitutes fixture
-  judgments; PR inputs still need GitHub access, and git ranges may install
-  missing parsing grammars.
+- No API key. Git ranges may install missing parsing grammars through npm the
+  first time a language is seen.
 
 ## Install
 
@@ -80,58 +79,35 @@ The tool writes no report files. Arguments and examples:
 
 ## How static analysis works
 
-1. **Deterministic evidence first.** No-op hunks and blank-only document changes
-   need no model call. Repository snapshots support bounded checks for duplicate
-   function bodies and unread `errors` response fields, plus caller and contract
-   source cards. Optional TypeScript reference checking compares before/after
-   diagnostics, including unchanged consumers, using an explicitly trusted
-   installed compiler. Unsupported or incomplete checks say so.
-2. **One typed Jev request.** Each evaluable hunk gets one request with an
-   unordered outcome choice — `changed`, `unchanged`, or `unknown` — and six
-   independent yes/no/unknown questions about the added and removed lines:
-   comparison changed, limit changed, validation changed, failure propagated,
-   failure deferred, failure discarded. All seven are the same kind of question:
-   closed options with fixed order, non-exclusive, and no repeated judgments,
-   option shuffles, adaptive context rounds, or HTTP retries.
-   `changed` means an added or removed line changes something a consumer of the
-   code can observe or rely on: a consumable result or returned value, an effect,
-   an accepted input, an interface or schema, or a normative instruction or
-   guarantee callers, operators, or users must follow. Prose is judged by its
-   content, never by its file type. `unchanged` requires evidence of semantic
-   equivalence for those consumers, and `unknown` is the answer when this state
-   cannot separate the two. Each atomic `no` speaks only about the lines the
-   state shows; `unknown` means that answer could not be determined from the
-   supplied context.
-   Context-presence counts come from the admitted definitions' extractor
-   provenance, separately for each snapshot; callers and contracts can both be
-   present.
-3. **A majority answer or nothing.** An answer whose reported option holds at most
-   half of its own accounted probability — an exact tie included — is recorded as
-   `unknown` instead of as the option a plurality happened to name, so a scattered
-   or tied answer can never read as a finding. Missing or malformed answers, or an
-   answer to a question this run did not ask, fail the hunk closed. Priority is
-   still deterministic: a fixed base, plus 10 when the outcome separated as
-   `changed`, plus the heaviest affirmative answer in the boundary group
-   (comparison, limit, validation) and the heaviest in the failure group
-   (propagated, deferred, discarded) — each group contributes its maximum, never a
-   sum, and nothing is summed twice. `unknown` adds nothing anywhere: there is no
-   bonus for an answer the state could not settle and no confidence gate.
-   Any `unknown` answer routes to `uncertain`; otherwise a hunk reads
-   **attention** when the outcome separated as `changed` outside a test file, when a limit, size,
-   offset, or timeout bound changed, or when a failure was discarded, and **low**
-   otherwise. Returned confidence is recorded but never used for ranking,
-   thresholds, or weighting.
-   The report lists unjudged work first — a hunk no model saw, or one whose call
-   failed closed — then the judged hunks by priority descending regardless of
-   status, then the deterministic passes. Judged hunks in test files (by path
-   convention: `test/`, `*.test.ts`, `test_*.py`, `*_test.go`, …) come after the
-   other judged hunks, still ordered by their own priority: a regression test is
-   honestly `changed` too, so the answers alone cannot keep it from outranking
-   the code it exercises. Documentation is not demoted, because prose can be
-   normative. Status is a label for filtering and never reorders the report.
-   The short review agenda comes from deterministic evidence, independently of
-   stochastic hunk judgments. A live rerun can change those judgments and their
-   hunk ordering; neither priority nor confidence is a correctness probability.
+1. **Evidence first.** No-op hunks and blank-only document changes pass.
+   Repository snapshots support bounded checks for duplicate function bodies and
+   unread `errors` response fields, plus caller and contract source cards.
+   Optional TypeScript reference checking compares before/after diagnostics,
+   including unchanged consumers, using an explicitly trusted installed compiler.
+   Unsupported or incomplete checks say so.
+2. **Change facts per hunk.** The added and removed lines are read lexically —
+   strings and comments set aside, moved lines cancelling out — for six facts:
+   comparison changed, limit changed (a numeric bound, or `<` turned into `<=`),
+   input check changed (type/shape checks, or a changed guard in front of a
+   raise), failure handed to the caller, failure deferred or retried, failure
+   discarded (an empty or defaulting `catch`, `except: pass`, …). Each `yes`
+   cites its changed line. `no` speaks only about the lines the hunk shows. A
+   change that only touches formatting or comments is recognized as such. JS/TS,
+   Java, C#, Go, Rust, C/C++, Kotlin, Swift, PHP, Python and Ruby are read; any
+   other file type says that no facts were established instead of claiming none.
+3. **Status and order.** A code change outside a test file reads **attention**;
+   a test-file change reads **attention** only when it changes a limit or
+   discards a failure, **low** otherwise; a formatting-only change **passed**;
+   an unread file type **uncertain**, for a person to read. Priority orders hunks:
+   a fixed base, plus 10 for a real change, plus the heaviest fact of the boundary
+   group (comparison, limit, validation) and of the failure group (propagated,
+   deferred, discarded) — each group counts once, never summed. The report lists
+   manual work first (binary and other metadata-only units), then the read hunks
+   by priority, then passes. Hunks in test files (by path convention: `test/`,
+   `*.test.ts`, `test_*.py`, `*_test.go`, …) come after the other hunks, still
+   ordered by their own priority: a regression test changes as much as its fix.
+   Documentation is not demoted, because prose can be normative. Status is a
+   label for filtering and never reorders the report.
 
 Intent cross-checks keep author claims and generated summaries separate.
 Source matches are navigation evidence, not proof of fulfillment. Broad goals,
@@ -177,28 +153,14 @@ declarations and dispatch endpoints precede ordinary caller chains, nearest
 first, with resulting-snapshot evidence ahead of prior-snapshot duplicates.
 Unresolved own-call expressions remain verbatim in a whole source body rather
 than repeating unknown-binding boilerplate. At most eight distinct definition
-nodes are considered per hunk. Context is gathered once before the request;
-definitions that do not fit are omitted whole, never shortened or fetched later.
-
-The serialized model state is capped at 24,000 characters. Optional context is
-pruned before sacrificing evaluation; the hunk is never truncated. If the
-essential file/hunk/diff/disclaimer state itself cannot fit, the hunk enters the
-human-review queue once, with `item.routing.evaluation: "not_evaluated"`,
-`reasonCode: "context_limit_exceeded"`, `requiredChars`, and `limitChars`.
-There is no model call or fabricated judgment for that hunk. The HTML identifies
-the skip and its sizes; the JSON and MCP results carry the routing metadata.
-
-The adapter pins `jev-1.13.0`, sends no temperature override, and allows at most
-four concurrent requests, each with a 10-second timeout including its response
-body. JSON/MCP results retain typed judgments, routing, priorities, and the
-actual HTTP request count; obsolete round/ensemble traces are no longer emitted.
+nodes are kept per hunk, each carried whole, never shortened.
 
 Automatic response/caller evidence is narrower than the candidate call graph:
 it requires a supported lexical or typed-constructor binding. Relative modules
 and simple single-target `paths` aliases from snapshot-local, standalone JSON
 `tsconfig.json` files are supported. JSONC, inherited configurations, package or
 barrel resolution, and complex receivers remain unproven rather than borrowing
-an unrelated same-named function. `--reference-project path/to/tsconfig.json`
+an unrelated same-named function. `referenceProject: "path/to/tsconfig.json"`
 opts into the separate TypeScript diagnostic comparison; absent dependencies,
 unsupported project layouts, and exceeded bounds are reported as not checked.
 
@@ -206,8 +168,8 @@ unsupported project layouts, and exceeded bounds are reported as not checked.
 
 - Tool results embed source code, including unchanged code, and stay in your
   agent's session. Keep transcripts that contain them private.
-- Connected PR reviews need authenticated `gh`. Live static analysis needs
-  `TYPESAFE_API_KEY`; `mock: true` skips only that model dependency.
+- Connected PR reviews need authenticated `gh`. Nothing else leaves your
+  machine: no model is called and no API key is needed.
 
 ## Dev
 

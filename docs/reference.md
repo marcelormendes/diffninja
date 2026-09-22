@@ -24,8 +24,8 @@ disabled. Light/dark colors follow your system preference.
 - **Expand all / Collapse all** affect the currently visible hunks.
 - **Status chips** show or hide attention, uncertain, low and passed hunks
   without changing their expanded state. Colors appear on hunk headers, left
-  borders and navigation dots. Hunk model scores and assessment commentary stay
-  in JSON; the Outcome view shows deterministic evidence and its limits.
+  borders and navigation dots. Priorities and reasons stay in the
+  tool result; the Outcome view shows deterministic evidence and its limits.
 - **Focus** or a numbered badge isolates a hunk full-width. Use the **Report**
   breadcrumb or **Escape** to return to your previous folds and scroll
   position.
@@ -77,18 +77,10 @@ Git-range inputs have repository call flows. Patch-only inputs show a short git-
 invented diagrams. `callFlowAvailability` distinguishes `available`,
 `needs-git-range`, `no-changes`, and `failed`.
 
-A single note distinguishes mock and live output. Hunk reasons, judgments,
-warnings, priorities and HTTP request counts are fields of the report; mock
-judgments are navigation fixtures, not a code assessment. The live adapter pins
-`jev-1.13.0`: one HTTP attempt per evaluable hunk, a 10-second timeout, no retries,
-no ensemble, and no adaptive context loop. Every question is a closed choice with
-fixed options — one unordered outcome (changed, unchanged, unknown) and six
-non-exclusive atomic properties — and no temperature override is sent. An answer
-whose reported option did not hold a majority of its own distribution is recorded
-as `unknown`, so a scattered answer is never reported as a finding; a missing,
-malformed, or unasked answer fails that hunk closed. Confidence is informational
-only; the deterministic
-agenda is independent of stochastic model hunk ordering. See the
+Hunk reasons, local change facts (each `yes` with the changed line it rests
+on), warnings, and priorities are fields of the report. The analysis is local
+and deterministic: no model is called and the same input gives the same report.
+Facts point at what to read; they are not a verdict. See the
 [analysis policy](../README.md#how-static-analysis-works).
 
 ### Automatic-check boundaries

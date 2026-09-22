@@ -1,7 +1,7 @@
 {
   "name": "diffninja",
   "version": "0.1.0",
-  "description": "Focused local PR reviews with calldiff and Jev",
+  "description": "Local, deterministic PR review for coding agents over MCP: call flows, change facts, and a human review workspace",
   "type": "module",
   "exports": {
     ".": {

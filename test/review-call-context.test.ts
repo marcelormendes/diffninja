@@ -7,8 +7,6 @@ import { buildIndex, extractFunctions } from "../src/extract.js";
 import { buildCallContext } from "../src/review/call-context.js";
 import type { ContextSources } from "../src/review/call-context.js";
 import { reviewDiff } from "../src/review/service.js";
-import { buildContextState, MAX_CONTEXT_NODES } from "../src/review/context-plan.js";
-import { buildJevState } from "../src/review/jev.js";
 import { parseDiff } from "../src/review/input.js";
 import type { SourceLoc } from "../src/types.js";
 import type { ReviewContextNode, ReviewUnit } from "../src/review/types.js";
@@ -155,15 +153,14 @@ describe("hunk call context", () => {
       commit("before");
       writeFileSync(join(dir, "caller.ts"), "export function caller(arg) { return callee(arg + 1); }\nfunction callee(param) { return param; }\n");
       commit("after");
-      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" }, { mock: true });
+      const report = await reviewDiff({ repo: dir, from: "HEAD~1", to: "HEAD" }, {});
       const blocks = report.items[0].callFlow!;
       const before = blocks.find(block => block.includes("snapshot=before"))!;
       const after = blocks.find(block => block.includes("snapshot=after"))!;
       expect(before).toContain('arg[1] -> param: "arg"');
       expect(before).not.toContain('arg[1] -> param: "arg + 1"');
       expect(after).toContain('arg[1] -> param: "arg + 1"');
-      expect(report.items[0].judgment).toBeDefined();
-      expect(report.items[0].routing).toBeUndefined();
+      expect(report.items[0].facts).toBeDefined();
 
       // The same extraction supplies the keyed nodes: the parent definition's
       // body, read from each snapshot, with that snapshot's own binding.
@@ -336,7 +333,7 @@ describe("structured context nodes", () => {
   });
 
   test("retains an unseen dependency before new-file bodies already visible in the diff", () => {
-    const lines = Array.from({ length: MAX_CONTEXT_NODES + 1 }, (_, i) =>
+    const lines = Array.from({ length: 9 }, (_, i) =>
       `export function caller${i}(value) { return dependency(value); }`);
     const dependency = "export function dependency(value) { if (value < 0) throw new Error('negative'); return value; }";
     const [reviewUnit] = parseDiff([
@@ -350,16 +347,11 @@ describe("structured context nodes", () => {
     const planned = buildCallContext([reviewUnit], buildIndex([]), index, {
       after: loc => loc.file === "dependency.ts" ? dependency : lines[loc.line - 1],
     }).get(reviewUnit.id)!.nodes;
-    const state = buildContextState(buildJevState(reviewUnit), planned);
-    const supplied = state.contextNodes ?? [];
-    expect(supplied.length).toBeLessThanOrEqual(MAX_CONTEXT_NODES);
-    expect(supplied.find(node => node.key === "after:dependency")?.detail).toContain(dependency);
+    // The unseen dependency ranks among the first eight nodes, ahead of bodies the
+    // diff already shows, and it is carried whole.
+    expect(planned.slice(0, 8).find(node => node.key === "after:dependency")?.detail).toContain(dependency);
     // Reordering never discards the original source or its call evidence.
     expect(planned.find(node => node.key === "after:caller0")?.detail).toContain(lines[0]);
-    // A node the state carries is carried whole, never as a shortened definition.
-    for (const carried of supplied) {
-      expect(carried.detail).toBe(planned.find(given => given.key === carried.key)?.detail);
-    }
   });
 
   test("reports no evidence rather than an empty node body", () => {

@@ -4,12 +4,12 @@
 `diffninja-mcp`, a stdio MCP server exposing the single `review_diff` tool. The
 `diffninja` bin only registers that server (`diffninja setup`); there is no
 terminal review mode. PR links select a connected, human-authored GitHub review
-via `gh`, and the tool returns its loopback URL. Static diff/range analysis sends hunks to TypeSafe's Jev
-(one unordered outcome Choice and six independent yes/no/unknown atomic
-questions; one HTTP attempt per evaluable hunk) and
-ranks observations in code. Confidence never controls ranking or acquisition.
-No review writes report files: a static result adds `reportUrl`, a read-only
-loopback page (`report-pages.ts`) serving the `html.ts` report from memory. The call-flow
+via `gh`, and the tool returns its loopback URL. Static diff/range analysis is
+local and deterministic: no model is called and no source leaves the machine.
+Each hunk gets six lexical change facts (`change-facts.ts`) with the changed line
+each rests on, and is ranked in code. No review writes report files: a static
+result adds `reportUrl`, a read-only loopback page (`report-pages.ts`) serving
+the `html.ts` report from memory. The call-flow
 engine underneath is forked from `calldiff` (Tanishq Kancharla, MIT, see
 LICENSE and the attribution section in README.md). See `README.md` for usage.
 
@@ -34,9 +34,9 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - `service.ts` — `reviewDiff(input, options)`: the shared orchestration
     (diff/range input, call-flow enrichment, report assembly). The MCP server
     owns input validation and never duplicates pipeline logic.
-  - `input.ts` (diff parsing + git range), `jev.ts` (TypeSafe client + mock),
-    `pipeline.ts` (deterministic checks, routing, fixed-table ranking),
-    `context-plan.ts` (bounded whole-node admission before the single request),
+  - `input.ts` (diff parsing + git range), `change-facts.ts` (local lexical
+    facts per hunk), `file-role.ts` (test-file path classification),
+    `pipeline.ts` (deterministic checks, status, fixed-table ranking, order),
     `evidence.ts` / `evidence-syntax.ts` (bounded syntactic findings and agenda),
     `module-resolution.ts` (conservative immutable import bindings),
     `reference-check.ts` (opt-in before/after TypeScript diagnostics),
@@ -49,12 +49,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `pr-input.ts` — shared PR-link detection and canonicalization.
     `github.ts` / `connected.ts` — snapshot-bound review and loopback transport.
   - `mcp.ts` — `createReviewServer()`: builds an `McpServer` and registers
-    `review_diff`. `report-pages.ts` — per-connection read-only report pages. `mcp-cli.ts` — executable entry that connects the server to
+    `review_diff`. `report-pages.ts` — per-connection read-only report pages.
+    `mcp-cli.ts` — executable entry that connects the server to
     `StdioServerTransport`; it accepts no arguments and must keep stdout
     reserved for the protocol (diagnostics go to stderr).
 - `review_diff` invariants (see `src/review/mcp.ts`; README documents the
   user-facing contract):
-  - Strict input object: `diff?`, `repo?`, `from?`, `to?`, `mock?`, `pr?`, `input?`,
+  - Strict input object: `diff?`, `repo?`, `from?`, `to?`, `pr?`, `input?`,
     `mode?` (`auto`/`connected`/`static`; default auto),
     `expectedOutcome?: { title: string, description: string }`,
     `referenceProject?: string` (repository-relative tsconfig).
@@ -72,16 +73,12 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     with the message as text and no partial report.
   - Connected pages belong to the MCP connection and close on disconnect.
     Repeated calls for one PR reuse its page; no review is submitted by the tool.
-  - No output files, no CLI flags, no key arguments: live static analysis reads
-    `TYPESAFE_API_KEY` from the server process environment; connected uses `gh`.
+  - No output files, no CLI flags, no key arguments, no environment: static
+    analysis is local; connected uses `gh`.
   - Keep `readOnlyHint: false` and `destructiveHint: false`: git-range analysis
-    can install missing grammars into calldiff's cache through npm, including
-    in mock mode. It does not edit repository source.
-- Live static analysis needs `TYPESAFE_API_KEY`. `mock: true` uses
-  placeholder judgments, never a real assessment. Inline mock diffs are offline;
-  ranges may need npm for missing grammars. PR inputs still read authenticated
-  `gh` even with mock. Never commit a real API key.
-- Invocation resolution is deterministic; never use Jev to guess a PR or intent.
+    can install missing grammars into calldiff's cache through npm. It does not
+    edit repository source. Inline diffs are fully offline.
+- Invocation resolution is deterministic; never guess a PR or intent.
   Missing/ambiguous references ask for one full link without echoing pasted text.
 - Keep connected safeguards: immutable snapshot binding, canonical line anchors,
   stale-snapshot and duplicate-submit blocking, loopback-only Host/Origin/CSRF
@@ -90,24 +87,23 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   review agenda. Description/source matches are navigation hints, never proof
   of fulfillment; generated claims remain separately attributed. All hunks stay
   accessible through native folding, including without JavaScript.
-- Jev has no ensemble, adaptive loop, shuffle, or retry. State is capped at
-  24,000 serialized characters; at most eight complete context nodes are
-  considered. Oversized essentials route uncalled to a human; optional context
-  is omitted whole. Preserve explicit uncertainty and snapshot provenance.
-- The report renders model answers only from their closed sets: the outcome
-  choice and the six independent atomic properties. A value outside its set is
-  named as unrecognized, never echoed. Any answer whose reported option did not
-  hold a majority of its own distribution is recorded as `unknown` before it
-  reaches the report, so a scattered or tied answer is never rendered as a
-  supported `yes` or `changed`. `unknown` means the supplied state could not
-  determine the answer and is never rendered as `no`, as absence, or as a
-  defect. Missing or malformed answers, and an answer to a question this run did
-  not ask, fail the whole hunk closed.
+- Change facts are lexical and bounded to the changed lines each side shows:
+  `no` never claims absence elsewhere; a file type the analysis cannot read
+  answers `unknown` everywhere and reads `uncertain`, never `no` or `passed`.
+  Every `yes` carries the changed line it rests on. The same input always yields
+  the same report. Preserve explicit uncertainty and snapshot provenance.
+- Status: code outside a test file is `attention`; a test file is `attention`
+  only for a limit change or a discarded failure, else `low`; a formatting- or
+  comment-only code change `passed`. Order: manual units, read hunks by
+  priority (test files after the rest), passes. Docs are never demoted by path.
+- Semantic interpretation belongs to the host agent's model or the human, never
+  to a model diffninja calls itself.
 - Reference checks are opt-in and use only the trusted installed compiler and
   dependencies. Never execute PR scripts, install its dependencies, check out
   snapshots, or turn incomplete diagnostics into a clean bill of health.
 - Tests live in `test/` and run with `vitest`. `review-pipeline.test.ts` covers
-  the deterministic checks, routing, ranking, and Jev request shape;
+  the deterministic checks, status, ranking, and order; `review-change-facts.test.ts`
+  the lexical facts; `review-report-pages.test.ts` the report pages;
   `review-input.test.ts` and `review-html.test.ts` cover parsing and rendering;
   `review-cli.test.ts` covers the setup-only command. `review-mcp.test.ts` covers the MCP tool through
   `createReviewServer()`: input validation, the structured report, its JSON

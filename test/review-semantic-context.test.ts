@@ -2,8 +2,6 @@ import { describe, expect, test } from "vitest";
 import { allFunctions, buildIndex, extractFunctions } from "../src/extract.js";
 import { buildCallSitesFromInfo, exportsInFile } from "../src/calltree.js";
 import { buildCallContext } from "../src/review/call-context.js";
-import { buildContextState } from "../src/review/context-plan.js";
-import { buildJevState } from "../src/review/jev.js";
 import { parseDiff } from "../src/review/input.js";
 
 function fixture(files: Record<string, string>, file: string, line: number) {
@@ -33,19 +31,16 @@ describe("addressable non-call context", () => {
   });
 
   test("keeps response contracts addressable despite a crowded caller graph", () => {
-    const { unit, context } = fixture({
+    const { context } = fixture({
       "types.ts": "export interface BatchResponse { errors: string[]; }",
       "api.ts": "import { BatchResponse } from './types';\nexport function create(): BatchResponse { return send(); }",
       "sync.ts": "export function sync() { return create(); }",
       "callers.ts": Array.from({ length: 12 }, (_, n) => `export function caller${n}() { return sync(); }`).join("\n"),
     }, "sync.ts", 1);
-    const state = buildContextState(buildJevState(unit), context.nodes);
-    expect(state.contextNodes?.some(node => node.file === "types.ts")).toBe(true);
-    expect(state.contextNodes?.some(node => node.file === "api.ts")).toBe(true);
-    expect(state.contextPresence.after.contracts).toBe(1);
-    expect(state.contextPresence.after.callerDefinitions).toBeGreaterThan(0);
-    expect(state.contextPresence.before.contracts).toBe(0);
-    expect(state.contextPresence.unclassifiedNodes).toBe(0);
+    // The contract and its producer rank among the first nodes despite twelve callers.
+    const leading = context.nodes.slice(0, 8);
+    expect(leading.some(node => node.file === "types.ts")).toBe(true);
+    expect(leading.some(node => node.file === "api.ts")).toBe(true);
   });
 
   test("a changed interface selects its declaration and syntactic consumers", () => {
@@ -58,7 +53,7 @@ describe("addressable non-call context", () => {
   });
 
   test("carries the event publisher definition whole from a changed listener", () => {
-    const { unit, context } = fixture({
+    const { context } = fixture({
       "publisher.ts": "export class Publisher {\n  update(value) { this.events.emit('lease.updated', value); }\n}",
       "listener.ts": "export class Listener {\n  @OnEvent('lease.updated')\n  update(value) { enqueue(value); }\n}",
     }, "listener.ts", 3);
@@ -66,11 +61,7 @@ describe("addressable non-call context", () => {
     expect(publisher.detail).toContain("this.events.emit('lease.updated', value)");
     expect(publisher.detail).toContain("event relation");
     expect(publisher.detail).toContain("snapshot=after target=candidate mapping=unknown");
-    // The listener's hunk is small, so the state carries every supplied node, and
-    // the publisher's definition is carried whole rather than shortened.
-    const state = buildContextState(buildJevState(unit), context.nodes);
-    const carried = state.contextNodes?.find(node => node.key === publisher.key);
-    expect(carried?.detail).toBe(publisher.detail);
-    expect(JSON.stringify(state).length).toBeLessThanOrEqual(24_000);
+    // The publisher's definition is carried whole rather than shortened.
+    expect(publisher.detail).toContain("update(value) { this.events.emit('lease.updated', value); }");
   });
 });

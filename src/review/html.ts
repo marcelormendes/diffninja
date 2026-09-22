@@ -1,10 +1,5 @@
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
-import {
-  ATOMIC_OBSERVATIONS,
-  ATOMIC_QUESTIONS,
-  OUTCOME_CHOICES,
-  type AtomicQuestion,
-} from "./jev.js";
+import { CHANGE_FACT_QUESTIONS, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
 import { escapeHtml } from "./escape-html.js";
@@ -127,10 +122,7 @@ function renderHeader(report: ReviewReport): string {
     report.items.length === 0
       ? ""
       : `${report.items.length} hunks in ${files} files, +${formatInteger(added)} / -${formatInteger(removed)} lines, generated ${report.createdAt}`;
-  const mode =
-    report.mode === "mock"
-      ? "Mock data — navigation preview only, not a code assessment."
-      : "Live data — review changes before merging.";
+  const mode = "Local analysis — nothing left your machine. Review changes before merging.";
 
   return [
     '<header class="masthead">',
@@ -246,10 +238,7 @@ function renderItemBody(item: ReviewItem): string {
   return [
     '<div class="body">',
     special,
-    renderObservations(item),
-    item.routing?.evaluation === "not_evaluated"
-      ? `<p class="note">Not evaluated: essential context requires ${formatInteger(item.routing.requiredChars)} characters; the limit is ${formatInteger(item.routing.limitChars)}. No model judgment was recorded; manual review is required.</p>`
-      : "",
+    renderFacts(item),
     renderDiff(item.diff),
     "</div>",
   ]
@@ -257,97 +246,57 @@ function renderItemBody(item: ReviewItem): string {
     .join("\n");
 }
 
-/** Human label per atomic question, in the order the adapter asks them. */
-const ATOMIC_QUESTION_LABEL = {
+/** Human label per fact, in the order the report shows them. */
+const FACT_LABEL = {
   comparisonChanged: "Comparison changed",
   limitChanged: "Limit, size, or offset changed",
-  validationChanged: "Validation or shape check changed",
-  failurePropagated: "Failure propagated",
-  failureDeferred: "Failure deferred",
+  validationChanged: "Input check changed",
+  failurePropagated: "Failure handed to the caller",
+  failureDeferred: "Failure deferred or retried",
   failureDiscarded: "Failure discarded",
-} satisfies Record<AtomicQuestion, string>;
-
-/** Spelled out beside an answer the supplied state could not determine. */
-const UNDETERMINED_NOTE = "not determined from the supplied state; a person should decide";
-
-/** One rendered answer: its question, the closed set it answers, and the answer. */
-interface ObservationRow {
-  readonly label: string;
-  readonly values: readonly string[];
-  readonly value: string;
-}
+} satisfies Record<ChangeFactQuestion, string>;
 
 /**
- * What one model sample observed about this hunk, when a sample was taken.
- *
- * Every answer comes from a closed set and is printed only when it is one of the
- * documented values: a value outside its set is named as unrecognized rather
- * than echoed, so no model-authored text reaches the page. The outcome is one
- * unordered choice — changed, unchanged, or unknown — and the six atomic answers
- * are independent existence questions about the added or removed lines, several
- * of which may be `yes` at once.
- *
- * `yes` is a property those lines themselves show; `no` speaks only about the
- * lines the state shows, never about the rest of the codebase; `unknown` means
- * the supplied state cannot determine the answer, and the adapter records it for
- * an answer whose own distribution did not separate one option as well. An answer
- * of `unknown` is printed with its meaning spelled out and is never shown as a
- * finding: it is a fact about the evidence, not about the code. Nothing here reads
- * `reasons` or any other prose. No probability or vendor confidence is shown.
+ * The local facts about this hunk's changed lines. Each `yes` shows the changed
+ * line it rests on, quoted from the diff; `no` speaks only about the lines the
+ * hunk shows, never about the rest of the code; a file type diffninja cannot read
+ * says so instead of listing answers. Nothing here reads `reasons`.
  */
-function renderObservations(item: ReviewItem): string {
-  const judgment = item.judgment;
-  if (judgment === undefined) {
-    return "";
+function renderFacts(item: ReviewItem): string {
+  const facts = item.facts;
+  if (facts === undefined) return "";
+  const notes: string[] = [];
+  let list = "";
+  if (facts.language === null) {
+    notes.push("diffninja does not read this file type, so no facts were established. Read this hunk yourself.");
+  } else {
+    list = CHANGE_FACT_QUESTIONS.map((question) => {
+      const evidence = facts.evidence[question];
+      const answer = facts.answers[question];
+      const shown =
+        answer === "yes" && evidence !== undefined
+          ? `yes <span class="obs-line">${escapeHtml(evidence.side)} line: <code>${escapeHtml(evidence.text)}</code></span>`
+          : escapeHtml(answer === "yes" ? "yes" : "no");
+      return `<dt>${escapeHtml(FACT_LABEL[question])}</dt><dd class="mono">${shown}</dd>`;
+    }).join("");
+    if (facts.inert) notes.push("Formatting or comments only: the code is identical once comments and layout are ignored.");
   }
-  const rows: readonly ObservationRow[] = [
-    { label: "Outcome the lines produce", values: OUTCOME_CHOICES, value: judgment.outcome },
-    ...ATOMIC_QUESTIONS.map((question) => ({
-      label: ATOMIC_QUESTION_LABEL[question],
-      values: ATOMIC_OBSERVATIONS,
-      value: judgment[question],
-    })),
-  ];
-  const undetermined = new Set<string>();
-  const list = rows
-    .map((row) => {
-      let shown: string;
-      if (row.values.includes(row.value)) {
-        shown = escapeHtml(row.value);
-        if (row.value === "unknown") {
-          undetermined.add(row.label);
-          shown += ` <span class="obs-unknown">${UNDETERMINED_NOTE}</span>`;
-        }
-      } else {
-        shown = escapeHtml("unrecognized value");
-      }
-      return `<dt>${escapeHtml(row.label)}</dt><dd class="mono">${shown}</dd>`;
-    })
-    .join("");
-  // The escalation line is the typed-field reading of `status`, not a verdict.
-  const hints: string[] = [];
-  if (undetermined.size > 0) {
-    hints.push(
-      `${[...undetermined].join(" and ")} could not be determined from the supplied state, so this hunk is marked for a human read. That is not a claim about the code.`,
-    );
-  }
-  // A path fact, not model output: explains why this hunk sits after the others.
-  if (testLikeFile(item.file)) {
-    hints.push(
-      "This path looks like a test file, so it is listed after the judged hunks outside test files, and a changed outcome alone does not mark it for attention. A path convention, not coverage.",
+  // A path fact: explains why this hunk sits after the others.
+  if (facts.language !== null && testLikeFile(item.file)) {
+    notes.push(
+      "This path looks like a test file, so it is listed after the hunks outside test files, and it is marked for attention only when it changes a limit or discards a failure. A path convention, not coverage.",
     );
   }
   return [
     '<details class="obs">',
-    '<summary>Single-sample typed observations</summary>',
+    "<summary>Change facts</summary>",
     '<div class="obs-body">',
-    '<p class="note">One sample for this hunk. Every question is answered on its own, about the added and removed lines and the context listed below: yes when those lines show that property, which several can at once; no when these lines show no such property, which is not a statement about the rest of the code; unknown when the supplied state cannot determine it, never because another question applied. Descriptive answers, not a verdict, and not a merge approval.</p>',
-    `<dl class="obs-list">${list}</dl>`,
-    // Informational, in the dimmest style the report has.
-    ...hints.map((hint) => `<p class="note obs-note">${escapeHtml(hint)}</p>`),
+    '<p class="note">Found locally in the added and removed lines; no model was asked. A fact is a pointer to what to read, not a verdict, and not a merge approval.</p>',
+    list === "" ? "" : `<dl class="obs-list">${list}</dl>`,
+    ...notes.map((note) => `<p class="note obs-note">${escapeHtml(note)}</p>`),
     "</div>",
     "</details>",
-  ].join("\n");
+  ].filter((part) => part !== "").join("\n");
 }
 
 /** How one rendered diff line is shaped, once it has been classified. */
@@ -980,7 +929,8 @@ button:disabled { cursor: default; opacity: .65; }
 .obs-body { border: 1px dashed var(--line-strong); border-radius: 6px; padding: 8px 10px; margin-top: 6px; }
 .obs-body .note { margin: 0 0 6px; font-size: 12.5px; }
 .obs-note { font-style: italic; }
-.obs-unknown { font-family: var(--sans); color: var(--ink-soft); }
+.obs-line { font-family: var(--sans); color: var(--ink-soft); margin-left: 6px; }
+.obs-line code { font-family: var(--mono); color: var(--ink); }
 .obs-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
 .obs-list dt { font-size: 12.5px; color: var(--ink-soft); }
 .obs-list dd { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
