@@ -1,13 +1,15 @@
 # diffninja
 
-`diffninja` ships two front ends: the `diffninja` CLI and `diffninja-mcp`,
-a stdio MCP server exposing the single `review_diff` tool. PR links select a
-connected, human-authored GitHub review via `gh`; CLI opens the loopback page,
-MCP returns its URL. Static diff/range analysis sends hunks to TypeSafe's Jev
+`diffninja` runs inside agent CLIs (Claude Code, Codex, OMP, pi, …) through
+`diffninja-mcp`, a stdio MCP server exposing the single `review_diff` tool. The
+`diffninja` bin only registers that server (`diffninja setup`); there is no
+terminal review mode. PR links select a connected, human-authored GitHub review
+via `gh`, and the tool returns its loopback URL. Static diff/range analysis sends hunks to TypeSafe's Jev
 (one unordered outcome Choice and six independent yes/no/unknown atomic
 questions; one HTTP attempt per evaluable hunk) and
 ranks observations in code. Confidence never controls ranking or acquisition.
-CLI static mode writes HTML + JSON; MCP writes no report files. The call-flow
+No review writes report files. `html.ts` (the static HTML report) currently
+has no transport: it is kept, tested, pending a decision to serve it via MCP. The call-flow
 engine underneath is forked from `calldiff` (Tanishq Kancharla, MIT, see
 LICENSE and the attribution section in README.md). See `README.md` for usage.
 
@@ -25,14 +27,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - Package: `npm pack --dry-run` (`prepack` rebuilds from clean output).
   - Lint: `npm run lint` (`oxlint`).
   - Tests: `npm test` (`vitest run`).
-  - Run in dev: `npm run dev -- --diff <patch> --mock` (runs
-    `src/review/cli.ts` via `tsx`); run built binaries: `node dist/review/cli.js`
-    and `node dist/review/mcp-cli.js`.
+  - Run in dev: `npm run dev` (runs the MCP server `src/review/mcp-cli.ts` via
+    `tsx` on stdio); built binaries: `node dist/review/mcp-cli.js` (server) and
+    `node dist/review/cli.js setup` (registration).
 - Review code lives in `src/review/`:
   - `service.ts` — `reviewDiff(input, options)`: the shared orchestration
-    (diff/range input, call-flow enrichment, report assembly). Transports own
-    input reading and output persistence; the CLI and MCP server both call it
-    and neither duplicates pipeline logic.
+    (diff/range input, call-flow enrichment, report assembly). The MCP server
+    owns input validation and never duplicates pipeline logic.
   - `input.ts` (diff parsing + git range), `jev.ts` (TypeSafe client + mock),
     `pipeline.ts` (deterministic checks, routing, fixed-table ranking),
     `context-plan.ts` (bounded whole-node admission before the single request),
@@ -43,7 +44,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - `setup.ts` — `runSetup()` for `diffninja setup`: CLI detection, config
     writes (atomic, conflict-aware), and `updateFile()`. `toml.ts` — parses
     and edits one TOML table in place by key path, for Codex's config.
-  - `cli.ts` — argument parsing, connected auto-open, static HTML/JSON output.
+  - `cli.ts` — the setup-only `diffninja` command; any other invocation
+    explains how to review through an agent, without echoing its arguments.
     `pr-input.ts` — shared PR-link detection and canonicalization.
     `github.ts` / `connected.ts` — snapshot-bound review and loopback transport.
   - `mcp.ts` — `createReviewServer()`: builds an `McpServer` and registers
@@ -73,13 +75,11 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - Keep `readOnlyHint: false` and `destructiveHint: false`: git-range analysis
     can install missing grammars into calldiff's cache through npm, including
     in mock mode. It does not edit repository source.
-- Live static analysis needs `TYPESAFE_API_KEY`. `--mock` / `mock: true` uses
+- Live static analysis needs `TYPESAFE_API_KEY`. `mock: true` uses
   placeholder judgments, never a real assessment. Inline mock diffs are offline;
   ranges may need npm for missing grammars. PR inputs still read authenticated
-  `gh` even with mock. CLI `--static` / `--export` explicitly exports a PR report
-  rather than serving it. Never commit a real API key.
-- CLI `--connected` requires one PR link and conflicts with --static/--export.
-  Invocation resolution is deterministic; never use Jev to guess a PR or intent.
+  `gh` even with mock. Never commit a real API key.
+- Invocation resolution is deterministic; never use Jev to guess a PR or intent.
   Missing/ambiguous references ask for one full link without echoing pasted text.
 - Keep connected safeguards: immutable snapshot binding, canonical line anchors,
   stale-snapshot and duplicate-submit blocking, loopback-only Host/Origin/CSRF
@@ -106,15 +106,14 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   snapshots, or turn incomplete diagnostics into a clean bill of health.
 - Tests live in `test/` and run with `vitest`. `review-pipeline.test.ts` covers
   the deterministic checks, routing, ranking, and Jev request shape;
-  `review-input.test.ts`, `review-html.test.ts`, and `review-cli.test.ts` cover
-  parsing, rendering, and the CLI end to end (including the shared
-  `reviewDiff` path). `review-mcp.test.ts` covers the MCP tool through
+  `review-input.test.ts` and `review-html.test.ts` cover parsing and rendering;
+  `review-cli.test.ts` covers the setup-only command. `review-mcp.test.ts` covers the MCP tool through
   `createReviewServer()`: input validation, the structured report, its JSON
   text twin, and error cases — assert the outward result, not internal wiring.
   `review-setup.test.ts` covers `runSetup()` (detection, dry-run, entry
   resolution, atomic writes) and `review-toml.test.ts` the TOML table editor.
-- Verify changes by running the built artifacts (`node dist/review/cli.js …`,
-  `node dist/review/mcp-cli.js` driven over stdio) or the targeted vitest file,
+- Verify changes by running the built artifacts (`node dist/review/mcp-cli.js`
+  driven over stdio, `node dist/review/cli.js setup --dry-run`) or the targeted vitest file,
   not by re-reading the diff.
 - The `calldiff` engine sources (`src/calltree.ts`, `diff.ts`, `git.ts`, …)
   are forked code: keep the MIT LICENSE attribution intact, do not strip

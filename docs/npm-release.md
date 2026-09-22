@@ -236,15 +236,12 @@ signs stay literal argv values instead of being interpreted by `cmd.exe`.
 Windows, and the consumer matrix runs it on real Windows Server. The `npm.cmd`
 preinstall recipe in README.md remains as the offline option.
 
-### 2. Windows: `--open` (fixed)
+### 2. Windows: `--open` (removed)
 
-`src/review/cli.ts` opens the report with `open` on macOS, `rundll32.exe
-url.dll,FileProtocolHandler` on Windows, and `xdg-open` elsewhere, with a
-10-second timeout and `windowsHide`. `--open` stays best-effort: when no
-browser exists it logs `diffninja: could not open the browser` and still exits
-0 with the report written; the run always prints the `file:///…` URL and the
-JSON path. The consumer matrix runs a `--open` smoke on Windows to prove the
-opener path executes without crashing.
+The terminal review mode, and with it `--open` and its per-platform browser
+openers, was removed: reviews run only through the MCP server, and the
+`diffninja` bin only registers it. The consumer matrix now checks that the bin
+refuses a terminal review and writes no report.
 
 ### 3. Linux ARM64: mislabeled grammar prebuilds (repaired at install time)
 
@@ -433,7 +430,7 @@ own `postinstall` heal, so the ARM64 repair path is part of what it exercises.
 It checks the compiled file list against current sources (catching stale
 output), the installed package layout, both bin shims (plus `.cmd`, `.ps1` and
 shell shims on Windows) and the absence
-of a `calldiff` bin, a mock CLI HTML/JSON report, a `--open` smoke, native
+of a `calldiff` bin, the setup-only `diffninja` refusing a terminal review, native
 TypeScript extraction, on-demand grammar extraction into a cache path
 containing spaces (on every platform, proving the Windows npm invocation),
 and an MCP stdio review whose `structuredContent` matches its JSON text.

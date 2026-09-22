@@ -1,9 +1,14 @@
 # diffninja
 
-PR reviews for humans, not prose from a chatbot. Give diffninja a GitHub PR
-link and it opens a review workspace where you read the diff, write inline
-comments, and submit the review yourself. Feed it a diff or a git range and it
-returns an evidence-backed reading agenda alongside the complete diff.
+PR reviews for humans, not prose from a chatbot, run from inside your coding
+agent. Ask Claude Code, Codex, pi, or another MCP-capable agent CLI to review a
+GitHub PR link and diffninja returns a review workspace where you read the diff,
+write inline comments, and submit the review yourself. Give the agent a diff or
+a git range and diffninja returns an evidence-backed reading agenda alongside
+the complete diff, as structured data the agent can walk you through.
+
+diffninja is an MCP server (`review_diff`) plus a `diffninja setup` command that
+registers it. It has no terminal review mode.
 
 Live static analysis sends each evaluable hunk to TypeSafe's Jev model once,
 with a typed question set: one unordered outcome choice — does the edit change
@@ -14,27 +19,18 @@ mode writes review prose for you. You stay the reviewer.
 ## What you need
 
 - **Node.js 22.18 or newer.**
+- **An MCP-capable agent CLI:** Claude Code, Codex, OMP, pi, or any client that
+  can launch a stdio MCP server.
 - **GitHub CLI (`gh`) 2.45.0+, authenticated** (`gh auth login`) — only for
   reviewing pull requests. diffninja never asks for a token; it reuses your
   `gh` session.
-- **`TYPESAFE_API_KEY`** (get one at https://console.typesafe.ai) — only for
-  live static analysis. Connected PR reviews don't call a model and don't need
-  it. `--mock` substitutes fixture judgments; PR inputs still need GitHub access,
-  and git ranges may install missing parsing grammars.
+- **`TYPESAFE_API_KEY`** (get one at https://console.typesafe.ai) in the MCP
+  server's environment — only for live static analysis. Connected PR reviews
+  don't call a model and don't need it. `mock: true` substitutes fixture
+  judgments; PR inputs still need GitHub access, and git ranges may install
+  missing parsing grammars.
 
 ## Install
-
-Try it without installing anything:
-
-```bash
-npx -y diffninja https://github.com/OWNER/REPO/pull/123
-```
-
-Or install it globally:
-
-```bash
-npm install -g diffninja
-```
 
 Register the MCP server on every agent CLI you use (Claude Code, Codex, OMP,
 pi) with one command:
@@ -44,65 +40,40 @@ npx -y diffninja setup
 ```
 
 It installs the package globally first, then registers the server in each
-detected CLI. See `docs/mcp-setup.md` for the manual entries.
+detected CLI. `diffninja setup --help` lists the options (`--cli`,
+`--uninstall`, `--dry-run`, `--no-install`); `docs/mcp-setup.md` has the manual
+entries.
 
-Both `diffninja` (CLI) and `diffninja-mcp` (MCP server) ship in the package.
-`npx` fetches the latest published version on first run; if a cached copy
-feels stale, pin it explicitly (`npx -y diffninja@latest ...`).
+The package ships `diffninja` (setup only) and `diffninja-mcp` (the MCP server).
+`npx` fetches the latest published version on first run; if a cached copy feels
+stale, pin it explicitly (`npx -y diffninja@latest setup`).
 
-`0.1.0` is packaged and heading to the registry; until it lands, build from
-the checkout (`npm install && npm run build`) and use
-`node /absolute/path/to/diffninja/dist/review/cli.js` wherever the examples
-below say `diffninja`.
+`0.1.0` is packaged and heading to the registry; until it lands, build from the
+checkout (`npm install && npm run build`) and point your agent at
+`node /absolute/path/to/diffninja/dist/review/mcp-cli.js`.
 
 ## Review a pull request
 
-```bash
-diffninja https://github.com/OWNER/REPO/pull/123
-```
+Ask your agent to review `https://github.com/OWNER/REPO/pull/123`. It calls
+`review_diff` with the link and gives you a loopback review page, loaded from
+the canonical GitHub patch through your `gh` authentication. Select diff lines,
+write single-line inline comments and a review body, pick Comment, Approve, or
+Request changes, preview the exact payload, and submit. Every word is yours;
+diffninja only carries it to GitHub. It never approves, blocks, or merges
+anything on its own. The page belongs to the agent's MCP connection and closes
+when the agent exits.
 
-This opens a review page in your browser, loaded from the canonical GitHub
-patch through your `gh` authentication. Select diff lines, write single-line
-inline comments and a review body, pick Comment, Approve, or Request changes,
-preview the exact payload, and submit. Every word is yours; diffninja only
-carries it to GitHub. It never approves, blocks, or merges anything on its
-own.
+## Review a diff or a git range
 
-## Review a diff
-
-```bash
-diffninja --diff change.patch                         # a diff file
-git diff main...HEAD | diffninja --stdin               # piped diff
-diffninja --repo /path/to/repo --from main --to HEAD  # a git range
-
-diffninja --diff change.patch --out review.html  # choose the output file
-diffninja --diff change.patch --mock             # offline demo, no API calls
-diffninja --diff change.patch --open             # open the report when done
-```
-
-You get `review.html` plus a JSON twin beside it. **Outcome** starts with the
-exact PR title and description when supplied, then a short reading agenda,
-bounded automatic findings, and explicit check coverage. Claims in a description
-are not proof that the code fulfills them. **Diff** retains every hunk, ranked
-as **attention**, **uncertain**, **low**, or **passed**; git-range reviews add
-call-flow diagrams and snapshot-bound source cards.
-
-For local inputs, pass `--pr-title` and `--pr-description` to include expected
-outcomes. A static GitHub PR export reads its own metadata. Full flag reference:
-[docs/cli-reference.md](docs/cli-reference.md).
-
-## Use it from a coding agent
-
-`diffninja-mcp` is a stdio MCP server exposing one tool, `review_diff`. Point
-your agent's MCP config at it:
-
-```json
-{ "command": "node", "args": ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"] }
-```
-
-Pass a PR link to get back a connected review URL, or diff/range text to get
-the full report as the tool result. Per-client setup (Claude Code, Codex, OMP,
-pi) and the tool's arguments: [docs/mcp-setup.md](docs/mcp-setup.md).
+Ask your agent to review a patch, the working tree, or a range such as
+`main..HEAD` in a repository. It calls `review_diff` with `diff` text or with
+`repo`, `from`, and `to`, and receives the report as the tool result: the exact
+expected outcome when supplied (`expectedOutcome`), a short reading agenda,
+bounded automatic findings, explicit check coverage, and every hunk, ranked as
+**attention**, **uncertain**, **low**, or **passed**; git ranges add call flows
+and snapshot-bound source. Claims in a description are not proof that the code
+fulfills them. The tool writes no report files. Arguments and examples:
+[docs/mcp-setup.md](docs/mcp-setup.md).
 
 ## How static analysis works
 
@@ -230,12 +201,10 @@ unsupported project layouts, and exceeded bounds are reported as not checked.
 
 ## Good to know
 
-- Reports embed source code, including unchanged code. Keep them out of shared
-  directories.
+- Tool results embed source code, including unchanged code, and stay in your
+  agent's session. Keep transcripts that contain them private.
 - Connected PR reviews need authenticated `gh`. Live static analysis needs
-  `TYPESAFE_API_KEY`; `--mock` skips only that model dependency.
-- On Windows, `--open` can't launch a browser — open the printed `file:///…`
-  URL yourself.
+  `TYPESAFE_API_KEY`; `mock: true` skips only that model dependency.
 
 ## Dev
 
@@ -244,6 +213,9 @@ npm run build   # tsc -> dist/
 npm run lint    # oxlint
 npm test        # vitest run
 ```
+
+Run the built server directly with `node dist/review/mcp-cli.js` (it speaks MCP
+over stdio and prints nothing else to stdout).
 
 Releases and the npm publishing setup: [docs/npm-release.md](docs/npm-release.md).
 

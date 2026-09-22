@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Exercise the actual global-install layout without touching the user's prefix.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -76,7 +76,7 @@ try {
   const help = windows
     ? run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `& '${join(binDir, "diffninja.cmd").replaceAll("'", "''")}' --help; exit $LASTEXITCODE`])
     : run(join(binDir, "diffninja"), ["--help"]);
-  assert.match(help, /Focused local PR review/);
+  assert.match(help, /diffninja setup/);
 
   // Native DLLs stay locked while loaded on Windows. Use a child that exits
   // before removing the sandbox, just like the CLI and MCP checks below.
@@ -92,21 +92,12 @@ try {
   });
 
   const patch = "diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n@@ -1 +1 @@\n-export const value = 1;\n+export const value = 2;\n";
-  const patchPath = join(sandbox, "input.patch");
-  writeFileSync(patchPath, patch);
-  const out = join(sandbox, "review.html");
-  run(process.execPath, [join(packageDir, manifest.bin.diffninja), "--diff", patchPath, "--mock", "--out", out]);
-  const report = JSON.parse(readFileSync(out + ".json", "utf8"));
-  assert.equal(report.mode, "mock");
-  assert.equal(report.items.length, 1);
-  assert.match(readFileSync(out, "utf8"), /<!doctype html>/i);
-
-  // --open is best-effort (no browser on CI): it must still exit 0 with the
-  // report written. On Windows this executes the rundll32 opener path.
-  const openOut = join(sandbox, "review-open.html");
-  run(process.execPath, [join(packageDir, manifest.bin.diffninja), "--diff", patchPath, "--mock", "--out", openOut, "--open"]);
-  assert(existsSync(openOut));
-  assert(existsSync(openOut + ".json"));
+  // Reviews run only through MCP: the diffninja bin registers the server and
+  // refuses a terminal review, writing nothing.
+  const refused = spawnSync(process.execPath, [join(packageDir, manifest.bin.diffninja), "--diff", "input.patch"], { cwd: sandbox, encoding: "utf8" });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /run inside an agent CLI/);
+  assert.deepEqual(readdirSync(sandbox).filter(name => /\.html(?:\.json)?$/.test(name)), []);
 
   const appRequire = createRequire(join(packageDir, "package.json"));
   const { Client } = await import(pathToFileURL(appRequire.resolve("@modelcontextprotocol/sdk/client/index.js")).href);
@@ -128,7 +119,7 @@ try {
   } finally {
     await client.close();
   }
-  console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, both command shims, CLI, --open, native TypeScript/Python, MCP stdio`);
+  console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, both command shims, setup-only CLI, native TypeScript/Python, MCP stdio`);
 } finally {
   removeDir(sandbox);
 }

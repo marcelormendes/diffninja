@@ -2,7 +2,7 @@ name: consumer-matrix
 
 # Pre-release consumer verification: pack once, then install the tarball the
 # way a real user would on every supported platform and exercise the installed
-# surface (CLI report, --open, native + on-demand grammar extraction, MCP
+# surface (setup-only CLI, native + on-demand grammar extraction, MCP
 # stdio). This is the hosted proof that `npm install -g diffninja` works on
 # Windows and macOS, not just Linux.
 #

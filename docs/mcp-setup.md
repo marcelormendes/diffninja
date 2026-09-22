@@ -4,7 +4,8 @@
 `review_diff`. The process takes no arguments and reads/writes only JSON-RPC
 on stdin/stdout, so the client must launch it directly — anything else
 writing to its stdout corrupts the stream. It never writes report files; the
-report comes back as the tool result. Use the CLI when you want HTML on disk.
+report comes back as the tool result. This server is the only way to run a
+review: the `diffninja` command only registers it (`diffninja setup`).
 
 Point the client at the built entry point, absolute path required — from a
 global install that is `"$(npm root -g)/diffninja/dist/review/mcp-cli.js"`,
@@ -82,7 +83,7 @@ Rules enforced by the schema and the tool:
 - `referenceProject` compares selected unresolved-reference diagnostics between
   immutable snapshots, including unchanged consumers. It never installs or runs
   PR code; unsupported/incomplete checks are explicit. See
-  [check boundaries](cli-reference.md#automatic-check-boundaries).
+  [check boundaries](reference.md#automatic-check-boundaries).
 
 For static inputs, `structuredContent` **is** the `ReviewReport`, with
 `content` carrying the same report as JSON text. For PR inputs, both carry
@@ -126,7 +127,7 @@ installation into `CALLDIFF_GRAMMAR_CACHE` (default
 with `mock: true`; the tool therefore advertises `readOnlyHint: false`,
 although it does not edit repository source. For strictly offline reviews,
 supply inline diff text or preinstall the required grammars (see
-[cli-reference.md](cli-reference.md)).
+[reference.md](reference.md#install-time-notes)).
 
 ## Per-client setup
 

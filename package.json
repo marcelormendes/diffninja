@@ -24,7 +24,7 @@
     "prepack": "npm run build",
     "postinstall": "node scripts/ensure-native-grammar.mjs",
     "rebuild:native": "node scripts/ensure-native-grammar.mjs",
-    "dev": "tsx src/review/cli.ts",
+    "dev": "tsx src/review/mcp-cli.ts",
     "start": "node dist/review/cli.js",
     "lint": "oxlint",
     "test": "vitest run"
