@@ -1,3 +1,5 @@
+import type { JevEvaluation } from "./jev.js";
+
 export type ReviewStatus = "attention" | "uncertain" | "low" | "passed";
 /**
  * Structural status for a call-flow node. The engine only knows `same`,
@@ -61,6 +63,29 @@ export interface CallFlowFile {
  * the analysis threw.
  */
 export type CallFlowAvailability = "available" | "needs-git-range" | "no-changes" | "failed";
+/**
+ * One keyed piece of structured review context for a hunk: a caller or parent
+ * definition with its snapshot-bound source and the call/binding evidence
+ * extracted for it. `key` is what makes the node addressable, so a later round
+ * can ask for exactly this node's `detail` instead of the whole report text.
+ */
+export interface ReviewContextNode {
+  /** Addressable identity inside one hunk, unique across snapshots, e.g. `after:checkout`. */
+  key: string;
+  /** Extractor label of the definition, e.g. `checkout(order, user)`. */
+  label: string;
+  file: string;
+  /** 1-based definition line, the location half of the node's identity. */
+  line: number;
+  /**
+   * Whole node text: the definition source as the snapshot has it, plus the
+   * selected call sites and bindings already extracted for it. Never a preview
+   * and never truncated; a state that cannot carry it drops the node's detail
+   * and keeps the descriptor, so nothing is silently shortened.
+   */
+  detail: string;
+}
+
 /** One parsed piece of the input: a text hunk, or a file's metadata-only change. */
 export interface ReviewUnit {
   id: string;
@@ -76,7 +101,19 @@ export interface ReviewUnit {
    * symbolic link, submodule). A unit that carries one never reaches the model.
    */
   special?: string;
+  /**
+   * Report blocks for this hunk, in the order the report shows them: both
+   * snapshots, the call on a changed line first. They stay the readable report
+   * text; the model receives {@link ReviewUnit.contextNodes} instead.
+   */
   callFlow?: string[];
+  /**
+   * Structured context for this hunk, highest retention priority first. The
+   * state may carry a node collapsed (identity only) or expanded (identity and
+   * `detail`), which is what `ContextPlan` decides from the state budget; an
+   * empty array is never set in place of "no context".
+   */
+  contextNodes?: ReviewContextNode[];
 }
 export interface Judgment {
   risk: number; // 0..3, probability-weighted rubric index
@@ -84,7 +121,7 @@ export interface Judgment {
   needsHuman: number; // 0..1, validated end to end
   /** One of `REVIEW_CATEGORIES`; the closed set is checked before the answer is believed. */
   category: string;
-  /** Mean of each run's lower risk/category confidence, 0..1; informational only. */
+  /** Mean lower risk/category confidence, 0..1; context acquisition only, never a ranking gate. */
   confidence: number;
 }
 /**
@@ -109,6 +146,8 @@ export interface ReviewItem extends ReviewUnit {
   judgment?: Judgment;
   /** Present only when the model was never called because of this hunk's own size. */
   routing?: ReviewRouting;
+  /** Live context rounds and validated responses, including partial evidence on failure. */
+  evaluation?: JevEvaluation;
 }
 export interface ReviewReport {
   title: string;

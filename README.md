@@ -99,16 +99,24 @@ pi) and the tool's arguments: [docs/mcp-setup.md](docs/mcp-setup.md).
 
 1. **Deterministic checks first.** No-op hunks and blank-only changes are
    settled in code, with no model call.
-2. **Three Jev runs per hunk.** Each asks four typed questions (impact scope, bug
-   likelihood, change category, missing context). Category options are shuffled
-   independently on every request; ordinal impact levels keep their order.
-   Probability vectors are averaged by option name. Answers are numbers and
-   categories only — no generated prose.
+2. **Adaptive, typed Jev rounds.** Each round makes three independent runs with
+   four assessment questions (impact scope, bug likelihood, change category,
+   missing context) and a fifth `needs_more_context` question. It selects a
+   closed list of zero, one, or two collapsed node keys via Choice, never free
+   text. With no collapsed nodes, a Noul answer normalizes to an empty list.
+   Category options are shuffled independently on every request; ordinal impact
+   levels keep their order. If the round requests context and its mean lower
+   risk/category confidence is below 0.8, only requested definitions that fit
+   are expanded. The loop stops on an empty request, confidence at or above 0.8,
+   no expansion progress, or three total rounds. Only the final round's three
+   probability vectors are averaged by option name; earlier answers remain
+   recorded but do not dilute the expanded-context assessment.
 3. **Ranked in code.** The averaged answers combine into a 0–100 priority.
    A category or impact-level top probability below 0.6, or run-to-average
    total-variation distance at or above 0.35, routes to `uncertain`, alongside
-   the bug-probability and missing-context gates. Vendor confidence is
-   informational only. Failed or malformed runs fail closed for the whole hunk.
+   the bug-probability and missing-context gates. Vendor confidence controls
+   context acquisition only, not ranking. Failed or malformed runs fail closed
+   for the whole hunk.
 
 Git-range analysis supplies selected call-site blocks from both snapshots,
 including written arguments, declared parameters, locations, and explicit target
@@ -119,8 +127,13 @@ These are static source expressions, not runtime values or data-flow analysis.
 
 Context prioritizes calls adjacent to the hunk, with depth limited to four,
 at most eight arguments per call, and 120 characters per argument excerpt.
-Truncation and omitted arguments, repeated expansions, and pruned paths are
-marked. Distinct call sites are retained. Full caller bodies are not supplied.
+Snapshot-bound caller/parent definitions carry their complete source plus the
+selected call-site bindings. Up to eight definition nodes are addressable per
+hunk; other nodes are explicitly omitted. The initial state targets 12,000
+serialized characters, reserving key, label, file, and line descriptors before
+admitting whole definition details. Definitions that do not fit remain visible
+as collapsed nodes. Expansion never silently truncates a function or includes
+unrequested nodes.
 
 The serialized model state is capped at 24,000 characters. Optional context is
 pruned before sacrificing evaluation; the hunk is never truncated. If the
@@ -129,6 +142,15 @@ human-review queue once, with `item.routing.evaluation: "not_evaluated"`,
 `reasonCode: "context_limit_exceeded"`, `requiredChars`, and `limitChars`.
 There is no model call or fabricated judgment for that hunk. The HTML identifies
 the skip and its sizes; the JSON and MCP results carry the routing metadata.
+
+Each hunk has one shared 30-second deadline and at most 27 HTTP attempts
+(three rounds × three runs × three attempts, including retries). Expansion adds
+at most 24,000 UTF-8 bytes, counting JSON escaping and field overhead, while
+every state remains under the 24,000-character cap. JSON/MCP `item.evaluation`
+records each round's state, validated answers, requested/expanded keys, call and
+iteration counts, added bytes, and stop reason. The existing deterministic
+aggregation can be replayed from the final recorded round. Report warnings log
+these per-hunk counts, including failures, without writing to MCP protocol stdout.
 
 ## Good to know
 

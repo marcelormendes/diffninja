@@ -36,6 +36,7 @@ import {
   resolveJevApiKey,
   type JevAssessment,
   type JevState,
+  type JevEvaluation,
   type ReviewCategory,
 } from "./jev.js";
 import type {
@@ -252,6 +253,9 @@ function priorityFor(judgment: Judgment): number {
 
 /** Count retained source entries, excluding the adapter's trailing omission marker. */
 function carriedFlowCount(unit: ReviewUnit, state: JevState): number {
+  if (unit.contextNodes?.length) {
+    return (state.contextNodes ?? []).filter(node => !node.collapsed).length;
+  }
   const supplied = unit.callFlow ?? [];
   const carried = state.callFlow ?? [];
   let count = 0;
@@ -278,7 +282,7 @@ function reasonsFor(
     `impact risk ${Math.round(judgment.risk * 10) / 10}/3 (nearest rubric level: ${RISK_LEVELS[level]})`,
     `likely bug ${percent(judgment.bug)} against the ${percent(BUG_ATTENTION_GATE)} attention gate`,
     `category: ${judgment.category}`,
-    `model confidence ${percent(judgment.confidence)} (informational only)`,
+    `model confidence ${percent(judgment.confidence)} (context acquisition only; not a ranking gate)`,
     `needs human ${percent(judgment.needsHuman)} against the ${percent(NEEDS_HUMAN_GATE)} gate`,
   ];
   if (assessment.riskTopProbability < TOP_LEVEL_PROBABILITY_FLOOR) {
@@ -297,7 +301,11 @@ function reasonsFor(
     );
   }
   const suppliedFlow = unit.callFlow ?? [];
-  if (suppliedFlow.length === 0) {
+  if (unit.contextNodes?.length) {
+    reasons.push(
+      `call-flow definitions expanded: ${carriedFlow} of ${unit.contextNodes.length}; other definitions remain collapsed or omitted, so an absent call path is not a safety claim`,
+    );
+  } else if (suppliedFlow.length === 0) {
     reasons.push("no call flow was supplied, so this judgment used the hunk alone");
   } else if (carriedFlow < suppliedFlow.length) {
     reasons.push(
@@ -325,6 +333,7 @@ function judgedItem(
     priority: priorityFor(assessment.judgment),
     reasons,
     judgment: assessment.judgment,
+    evaluation: assessment.evaluation,
   };
 }
 
@@ -389,6 +398,7 @@ export async function reviewUnits(
   const routes = units.map(routeUnit);
   const routed: RoutedItem[] = [];
   const failureNotes = new Map<number, string>();
+  const evaluationNotes = new Map<number, string>();
   const pending: PendingUnit[] = [];
   let modelCalls = 0;
 
@@ -424,18 +434,29 @@ export async function reviewUnits(
     const apiKey = resolveJevApiKey(options);
     if (apiKey === null) throw missingApiKeyError(pending.length);
     const client = new JevClient(apiKey, options.fetch ?? globalThis.fetch);
+    const logEvaluation = (index: number, evaluation: JevEvaluation | undefined): void => {
+      if (!evaluation) return;
+      const unit = units[index];
+      evaluationNotes.set(index,
+        `${unit.file} ${unit.header}: Jev iterations=${evaluation.iterations}, calls=${evaluation.modelCalls}, ` +
+        `added-context-bytes=${evaluation.addedContextBytes}, stop=${evaluation.stopReason}`);
+    };
     await forEachConcurrent(pending, MAX_CONCURRENT_REQUESTS, async (entry) => {
       const unit = units[entry.index];
       try {
-        const item = judgedItem(unit, entry.state, await client.judge(entry.state), false);
+        const assessment = await client.judge(entry.state, unit.contextNodes);
+        const finalState = assessment.evaluation?.rounds.at(-1)?.state ?? entry.state;
+        const item = judgedItem(unit, finalState, assessment, false);
+        logEvaluation(entry.index, assessment.evaluation);
         routed.push({ index: entry.index, item });
       } catch (error) {
         if (!(error instanceof JevRequestError) && !(error instanceof JevResponseError)) throw error;
         routed.push({
           index: entry.index,
-          item: unjudgedItem(unit, failureReason(error), FAILED_CALL_PRIORITY),
+          item: { ...unjudgedItem(unit, failureReason(error), FAILED_CALL_PRIORITY), evaluation: error.evaluation },
         });
         failureNotes.set(entry.index, `${unit.file} ${unit.header}: ${error.message}`);
+        logEvaluation(entry.index, error.evaluation);
       }
     });
     modelCalls = client.requestCount;
@@ -444,6 +465,8 @@ export async function reviewUnits(
   units.forEach((_unit, index) => {
     const note = failureNotes.get(index);
     if (note !== undefined) warnings.push(note);
+    const evaluationNote = evaluationNotes.get(index);
+    if (evaluationNote !== undefined) warnings.push(evaluationNote);
   });
 
   routed.sort(

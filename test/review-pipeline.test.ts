@@ -108,6 +108,9 @@ function answersOf(spec: AnswerSpec): JevObject {
       confidence,
     },
     needs_human: { type: "noul", noul: spec.needsHuman ?? 0.2 },
+    // No unit in this file supplies structured context nodes, so the adapter
+    // asks its fifth question as a noul and expects a plain probability.
+    needs_more_context: { type: "noul", noul: 0 },
   };
 }
 
@@ -171,6 +174,17 @@ function itemById(items: readonly ReviewItem[], id: string): ReviewItem {
   return item;
 }
 
+/**
+ * The fixed per-hunk context-loop log. It is observational evidence about how
+ * many rounds and requests a hunk took, not a failure, so assertions about
+ * failing closed filter it out rather than weakening what they check.
+ */
+const ITERATION_LOG = /: Jev iterations=\d+, calls=\d+, added-context-bytes=\d+, stop=/u;
+
+function failureWarnings(warnings: readonly string[]): string[] {
+  return warnings.filter((warning) => !ITERATION_LOG.test(warning));
+}
+
 function withMissingApiKeyEnv(): () => void {
   const saved = process.env[JEV_API_KEY_ENV];
   delete process.env[JEV_API_KEY_ENV];
@@ -220,12 +234,16 @@ describe("reviewUnits ranking and requests", () => {
       "impact_risk",
       "likely_bug",
       "needs_human",
+      "needs_more_context",
     ]);
     expect(request.questions.impact_risk.type).toBe("score");
     expect(request.questions.impact_risk.criteria).toHaveLength(RISK_LEVEL_KEYS.length);
     expect(request.questions.likely_bug.type).toBe("noul");
     expect(request.questions.needs_human.type).toBe("noul");
     expect(request.questions.category.type).toBe("choice");
+    // With no collapsed context nodes the fifth question is a plain noul, so it
+    // is answerable rather than an empty choice.
+    expect(request.questions.needs_more_context.type).toBe("noul");
     expect(Object.keys(request.questions.category.criteria).sort()).toEqual(
       [...REVIEW_CATEGORIES].sort(),
     );
@@ -428,7 +446,7 @@ describe("multi-run judgments", () => {
     expect(result.modelCalls).toBe(2);
     expect(result.items[0].status).toBe("uncertain");
     expect(result.items[0].judgment).toBeUndefined();
-    expect(result.warnings).toHaveLength(1);
+    expect(failureWarnings(result.warnings)).toHaveLength(1);
   });
 
   test("shares the existing total deadline across successful runs", async () => {
@@ -892,7 +910,7 @@ describe("failing closed", () => {
     ].join(" | ");
 
     expect(result.modelCalls).toBe(7);
-    expect(result.warnings).toHaveLength(3);
+    expect(failureWarnings(result.warnings)).toHaveLength(3);
     expect(output).not.toContain(SECRET_BODY);
     for (const item of result.items) {
       expect(item.status).toBe("uncertain");
@@ -990,7 +1008,7 @@ describe("failing closed", () => {
 
     expect(result.modelCalls).toBe(units.length);
     expect(host.log).toHaveLength(units.length);
-    expect(result.warnings).toHaveLength(units.length);
+    expect(failureWarnings(result.warnings)).toHaveLength(units.length);
     expect(output).not.toContain(SECRET_ANSWER_TEXT);
     for (const item of result.items) {
       expect(item.status).toBe("uncertain");
@@ -1150,7 +1168,9 @@ describe("transient failures", () => {
 
     expect(host.log).toHaveLength(JUDGMENT_RUNS + 1);
     expect(result.modelCalls).toBe(JUDGMENT_RUNS + 1);
-    expect(result.warnings).toEqual([]);
+    // The only warning class here would be a failure note; the per-hunk loop log
+    // is expected and is not one.
+    expect(failureWarnings(result.warnings)).toEqual([]);
     expect(itemById(result.items, "limited").status).toBe("attention");
     // Every attempt keeps the key in the header, never in the body.
     for (const entry of host.log) {
@@ -1168,7 +1188,7 @@ describe("transient failures", () => {
 
     expect(host.log).toHaveLength(JEV_RETRY.maxAttempts);
     expect(result.modelCalls).toBe(3);
-    expect(result.warnings).toHaveLength(1);
+    expect(failureWarnings(result.warnings)).toHaveLength(1);
     expect(result.items[0].status).toBe("uncertain");
     expect(result.items[0].judgment).toBeUndefined();
     expect(output).not.toContain(SECRET_BODY);
