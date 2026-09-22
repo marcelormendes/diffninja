@@ -143,7 +143,7 @@ pi) and the tool's arguments: [docs/mcp-setup.md](docs/mcp-setup.md).
    sum, and nothing is summed twice. `unknown` adds nothing anywhere: there is no
    bonus for an answer the state could not settle and no confidence gate.
    Any `unknown` answer routes to `uncertain`; otherwise a hunk reads
-   **attention** when the outcome separated as `changed`, when a limit, size,
+   **attention** when the outcome separated as `changed` outside a test file, when a limit, size,
    offset, or timeout bound changed, or when a failure was discarded, and **low**
    otherwise. Returned confidence is recorded but never used for ranking,
    thresholds, or weighting.

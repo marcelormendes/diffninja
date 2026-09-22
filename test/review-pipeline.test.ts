@@ -731,6 +731,9 @@ describe("report order", () => {
     // answers beside the fix. The test hunks follow, ordered among themselves.
     expect(result.items.map((item) => item.id)).toEqual(["fix", "readme", "type-test", "suite"]);
     expect(result.items.map((item) => item.priority)).toEqual([15, 15, 21, 11]);
+    // A test file's `changed` outcome alone does not raise the label; the fix and
+    // the normative docs keep it.
+    expect(result.items.map((item) => item.status)).toEqual(["attention", "attention", "low", "low"]);
     for (const id of ["type-test", "suite"]) {
       expect(itemById(result.items, id).reasons).toContain(TEST_FILE_ORDER_REASON);
     }
@@ -752,6 +755,8 @@ describe("report order", () => {
     const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
 
     expect(result.items.map((item) => item.id)).toEqual(["failed", "test"]);
+    // A limit change in a test file still routes to attention on its own.
+    expect(itemById(result.items, "test").status).toBe("attention");
   });
 });
 

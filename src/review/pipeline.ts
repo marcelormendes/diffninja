@@ -198,7 +198,7 @@ export const SINGLE_SAMPLE_WARNING =
 
 const ROUTING_REASON = {
   attention:
-    "routed to attention: the outcome is changed, a limit changed, or a failure was discarded",
+    "routed to attention: the outcome is changed outside a test file, a limit changed, or a failure was discarded",
   uncertain:
     "routed to uncertain: an answer did not separate its own options or an answer was unknown, so a human has to decide",
   low: "routed to low: the returned observations read as minor",
@@ -352,13 +352,17 @@ function observationsOf(
  *
  * Otherwise, only three observations route to attention on their own: an outcome
  * the model separated as `changed` — a change a consumer can observe or rely on —
- * a limit change, and a discarded failure. Everything else is `low`.
+ * outside a test file, a limit change, and a discarded failure. Everything else is
+ * `low`. A test file's `changed` outcome is honest — the suite now enforces
+ * something else — but it is the evidence for a change rather than the change, so
+ * on its own it does not raise the label; a limit or a discarded failure in a test
+ * still does.
  */
-function statusFor(assessment: JevAssessment): ReviewStatus {
+function statusFor(unit: ReviewUnit, assessment: JevAssessment): ReviewStatus {
   for (const [, observation] of observationsOf(assessment)) {
     if (observation.choice === "unknown") return "uncertain";
   }
-  if (assessment.outcome.choice === "changed") return "attention";
+  if (assessment.outcome.choice === "changed" && !testLikeFile(unit.file)) return "attention";
   if (assessment.limitChanged.choice === "yes") return "attention";
   if (assessment.failureDiscarded.choice === "yes") return "attention";
   return "low";
@@ -442,7 +446,7 @@ function judgedItem(
   assessment: JevAssessment,
   mock: boolean,
 ): ReviewItem {
-  const status = statusFor(assessment);
+  const status = statusFor(unit, assessment);
   const reasons = reasonsFor(unit, assessment, status, state.contextNodes?.length ?? 0);
   if (mock) {
     reasons.unshift("mock mode: these values are a deterministic local fixture, not a live Jev judgment");
