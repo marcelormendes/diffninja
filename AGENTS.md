@@ -104,7 +104,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   answers `unknown` everywhere and reads `uncertain`, never `no` or `passed`.
   Every `yes` carries the changed line it rests on. The same input always yields
   the same report. Preserve explicit uncertainty and snapshot provenance.
-- Status: code or configuration outside a test file is `attention`; prose is
+- Status: code or configuration outside a test file is `attention` (code that
+  only changes imports is `low`, trivial priority, never asked about); prose is
   `attention` only for an instruction, link, or limit change, else `low`; a test
   file is `attention` only for a limit change, a discarded failure, or a weakened
   gate, else `low`; a formatting-, comment-, or reflow-only change `passed`. Order: manual units, read hunks by
