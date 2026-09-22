@@ -119,7 +119,7 @@ const STATUS_REASON = {
   attention:
     "attention: code or configuration outside a test file changed, documentation changed an instruction, link, or limit, or a test changed a limit, discarded a failure, or weakened a gate",
   uncertain: "uncertain: diffninja does not read this file type, so no facts were established and a person reads it",
-  low: "low: a test-file change, or a documentation change with no instruction, link, or limit change",
+  low: "low: a test-file change, an import-only change (read where the names are used), or a documentation change with no instruction, link, or limit change",
   passed: "passed: the text is identical once comments and layout are ignored",
 } satisfies Record<ReviewStatus, string>;
 
@@ -182,11 +182,13 @@ function statusOf(unit: ReviewUnit, facts: ChangeFacts): ReviewStatus {
   if (testLikeFile(unit.file)) return TEST_FILE_ATTENTION_FACTS.some(yes) ? "attention" : "low";
   // Prose matters when it tells a reader something new to do, follow, or rely on.
   if (facts.language === "prose") return factQuestionsFor("prose").some(yes) ? "attention" : "low";
+  // Import wiring is read where the imported names are used.
+  if (facts.importsOnly === true) return "low";
   return "attention";
 }
 
 function priorityOf(facts: ChangeFacts): number {
-  if (facts.inert) return TRIVIAL_PRIORITY;
+  if (facts.inert || facts.importsOnly === true) return TRIVIAL_PRIORITY;
   const heaviest = (group: readonly ChangeFactQuestion[]) =>
     Math.max(0, ...group.filter((question) => facts.answers[question] === "yes").map((question) => FACT_PRIORITY[question]));
   return clampPriority(BASE_PRIORITY + CHANGED_PRIORITY + heaviest(BOUNDARY_FACTS) + heaviest(FAILURE_FACTS) + heaviest(SURFACE_FACTS));

@@ -107,7 +107,7 @@ result: does a hunk change what callers or users observe, does a test in (or
 outside) the diff exercise it, does a test change weaken what it checks, does
 changed documentation match the code, does a hunk serve the stated goal. Each
 question is bound to hunks and has a closed set of options that always includes
-`cannot-tell`; at most 24 are asked, earliest hunks first.
+`cannot-tell`; at most 36 are asked, earliest hunks first, none about import-only hunks.
 
 | Argument | Type | Meaning |
 | --- | --- | --- |

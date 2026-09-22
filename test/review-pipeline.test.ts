@@ -79,6 +79,13 @@ describe("status", () => {
     expect(byId(items, "assert").reasons).toContain(TEST_FILE_ORDER_REASON);
   });
 
+  test("an import-only change is low, at the trivial priority, and asks no question", () => {
+    const { items } = reviewUnits([
+      makeUnit({ id: "imports", diff: hunk("-import { a } from './a';", "+import { a, b } from './a';") }),
+    ]);
+    expect(items[0]).toMatchObject({ status: "low", priority: TRIVIAL_PRIORITY });
+  });
+
   test("a formatting- or comment-only code change passes at the trivial priority", () => {
     const { items } = reviewUnits([
       makeUnit({ id: "fmt", diff: hunk("-const total=a+b; // sum", "+const total = a + b;") }),

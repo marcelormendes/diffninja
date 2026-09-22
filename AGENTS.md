@@ -67,7 +67,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     be absolute for a range. In auto, `pr`/`input` require a PR link.
   - Static success returns `structuredContent` equal to the `ReviewReport` plus
     `reportUrl` and `reviewId`; the report carries `questions` (`questions.ts`,
-    deterministic templates, closed options incl. `cannot-tell`, at most 24).
+    deterministic templates, closed options incl. `cannot-tell`, at most 36; import-only hunks are not asked about).
   - `record_answers`: strict `{ reviewId, answers: [{ questionId, choice }] }`,
     no free text; any invalid answer refuses the whole call and keeps nothing;
     answers are attributed to the MCP client's own name/version, re-render the

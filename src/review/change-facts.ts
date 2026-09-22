@@ -82,6 +82,12 @@ export interface ChangeFacts {
    * (for prose, line breaks and spacing) are ignored. Null for an unread type.
    */
   readonly inert: boolean | null;
+  /**
+   * True when every changed code line is an import (a module import, `require`,
+   * `using`, or a name inside a multi-line import list): wiring that other hunks
+   * put to use. False for other kinds of text, and null for an unread type.
+   */
+  readonly importsOnly?: boolean;
   /** Exactly the questions {@link factQuestionsFor} lists for the language. */
   readonly answers: Readonly<Partial<Record<ChangeFactQuestion, ChangeFactAnswer>>>;
   readonly evidence: Readonly<Partial<Record<ChangeFactQuestion, ChangeFactEvidence>>>;
@@ -796,5 +802,53 @@ export function changeFactsOf(unit: Pick<ReviewUnit, "file" | "diff">): ChangeFa
     return { language, inert: isInert(sides, "config"), answers, evidence };
   }
   codeFacts(sides, language, record, unit.file);
-  return { language, inert: isInert(sides, language), answers, evidence };
+  return { language, inert: isInert(sides, language), importsOnly: importsOnly(sides), answers, evidence };
+}
+
+const IMPORT_START = /^(?:import\b|export\s+(?:\*|\{[^}]*\})\s+from\b|from\s+[\w.]+\s+import\b|using\s+[\w.]+\s*;|(?:const|let|var)\s+[\w{}\s,:]+=\s*require\()/;
+const IMPORT_LIST_OPEN = /^(?:import\b[^;]*\{[^}]*$|import\s*\($|from\s+[\w.]+\s+import\s*\($|export\s*\{[^}]*$)/;
+const IMPORT_LIST_CLOSE = /[})]/;
+
+const IMPORT_LIST_ITEM = /^(?:type\s+)?[\w$]+(?:\s+as\s+[\w$]+)?,?$/;
+const IMPORT_LIST_END = /^\}\s*from\b/;
+
+/** Whether each changed line of a side sits in an import statement or list. */
+function importLines(lines: readonly SideLine[]): boolean[] {
+  // A hunk can start inside an import list whose `import {` it never shows: names
+  // that run down to a `} from '…'` line belong to that list.
+  const tail: boolean[] = Array.from({ length: lines.length }, () => false);
+  let inTail = false;
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const code = lines[index].code.trim();
+    if (IMPORT_LIST_END.test(code)) inTail = true;
+    else if (inTail && !(IMPORT_LIST_ITEM.test(code) || code === "")) inTail = false;
+    tail[index] = inTail;
+  }
+  let inList = false;
+  return lines.map((line, index) => {
+    if (tail[index]) return true;
+    const code = line.code.trim();
+    if (inList) {
+      if (IMPORT_LIST_CLOSE.test(code)) inList = false;
+      return true;
+    }
+    if (IMPORT_LIST_OPEN.test(code)) {
+      inList = true;
+      return true;
+    }
+    return IMPORT_START.test(code);
+  });
+}
+
+function importsOnly(sides: Sides): boolean {
+  let changed = 0;
+  for (const lines of [sides.before, sides.after]) {
+    const imports = importLines(lines);
+    for (const [index, line] of lines.entries()) {
+      if (!line.changed || line.code === "") continue;
+      changed += 1;
+      if (!imports[index]) return false;
+    }
+  }
+  return changed > 0;
 }

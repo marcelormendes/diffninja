@@ -182,6 +182,18 @@ describe("change facts", () => {
     );
   });
 
+  test("imports only: statements, requires, and names inside a multi-line import list", () => {
+    const only = (diff: string) => changeFactsOf({ file: "src/a.ts", diff }).importsOnly;
+    expect(only(hunk("-import { a } from './a';", "+import { a, b } from './a';"))).toBe(true);
+    expect(only(hunk("import {", "  toReviewAddress,", "+  toReviewEvidence,", "} from '../utils';"))).toBe(true);
+    expect(only(hunk("+const { x } = require('./x');"))).toBe(true);
+    // A hunk that starts inside the list, its `import {` above the hunk.
+    expect(only(hunk("  formatFilterSize,", "+  hasNonPositiveDimension,", "} from './helpers';", "import { PageDto } from '~/pagination';"))).toBe(true);
+    expect(only(hunk("+import { b } from './b';", "+const value = b(1);"))).toBe(false);
+    expect(only(hunk("+  evidence: toReviewEvidence(review),"))).toBe(false);
+    expect(changeFactsOf({ file: "app/a.py", diff: hunk("+from app.utils import load") }).importsOnly).toBe(true);
+  });
+
   test("a database query written in the code's strings", () => {
     expect(yesOf("src/search.service.ts", hunk(
       "   const rows = await this.db.query(`",

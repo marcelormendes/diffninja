@@ -115,6 +115,7 @@ function noteOf(item: ReviewItem): string | undefined {
   }
   if (item.facts?.language === null) return "diffninja does not read this file type. Read this hunk yourself.";
   if (item.facts?.inert === true) return "Formatting or comments only.";
+  if (item.facts?.importsOnly === true) return "Imports only: read where the imported names are used.";
   return undefined;
 }
 

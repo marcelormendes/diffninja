@@ -20,14 +20,14 @@ import { testLikeFile } from "./file-role.js";
 import type { ReviewItem } from "./types.js";
 
 /** Most questions one report asks; hunks earlier in the report are asked first. */
-export const MAX_REVIEW_QUESTIONS = 24;
+export const MAX_REVIEW_QUESTIONS = 36;
 
 export const QUESTION_OPTIONS = {
   behaviorChange: ["changes-behavior", "no-behavior-change", "cannot-tell"],
   testCoverage: ["exercised", "not-exercised", "cannot-tell"],
   testWeakened: ["weakens", "does-not-weaken", "cannot-tell"],
   docMatchesCode: ["matches", "contradicts", "cannot-tell"],
-  intentFit: ["serves", "unrelated", "contradicts", "cannot-tell"],
+  intentFit: ["serves", "supports", "unrelated", "contradicts", "cannot-tell"],
 } as const;
 
 export type QuestionKind = keyof typeof QUESTION_OPTIONS;
@@ -68,7 +68,8 @@ function mayWeakenTest(item: ReviewItem): boolean {
 }
 
 function isRead(item: ReviewItem): boolean {
-  return item.facts !== undefined && item.facts.language !== null && item.status !== "passed";
+  // Import-only hunks are wiring: whatever they enable is asked where it is used.
+  return item.facts !== undefined && item.facts.language !== null && item.status !== "passed" && item.facts.importsOnly !== true;
 }
 
 /** The questions for one report, in report order, at most {@link MAX_REVIEW_QUESTIONS}. */
@@ -94,7 +95,13 @@ export function reviewQuestions(items: readonly ReviewItem[], intent?: PullReque
         ask("docMatchesCode", [item.id], `Does what ${hunkName(item)} now tells readers match how the code actually behaves?`);
       }
     } else if (item.status === "attention") {
-      ask("behaviorChange", [item.id], `Does ${hunkName(item)} change what callers, users, or operators of this code observe or must provide?`);
+      ask(
+        "behaviorChange",
+        [item.id],
+        `Taken on its own, does ${hunkName(item)} change what callers, users, or operators of this code observe or must provide? ` +
+          "Answer no-behavior-change when the hunk only adds or renames a declaration (a new function, type, field, " +
+          "import, or injected dependency) that other hunks put to use: the use is asked about where it happens.",
+      );
       if (language !== "config") {
         ask(
           "testCoverage",
@@ -106,7 +113,14 @@ export function reviewQuestions(items: readonly ReviewItem[], intent?: PullReque
       }
     }
     if (goal !== "" && item.status === "attention") {
-      ask("intentFit", [item.id], `Does ${hunkName(item)} serve the stated goal: "${goal}"?`);
+      ask(
+        "intentFit",
+        [item.id],
+        `How does ${hunkName(item)} relate to the stated goal: "${goal}"? ` +
+          "serves: it makes the change the goal describes. supports: it does not make that change itself, but a " +
+          "change that does relies on it (a helper, type, query, wiring, or refactor) or it is a related fix for the " +
+          "same problem. unrelated: neither. contradicts: it works against the goal.",
+      );
     }
   }
   return drafts.slice(0, MAX_REVIEW_QUESTIONS).map((draft, index) => ({ id: `q${index + 1}`, ...draft }));
