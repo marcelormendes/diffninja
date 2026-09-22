@@ -9,7 +9,7 @@ import { CallToolResultSchema, type CallToolRequest, type CallToolResult } from 
 import { afterEach, describe, expect, test } from "vitest";
 import { createReviewServer } from "../src/review/mcp.js";
 import type { ConnectedSnapshot } from "../src/review/github.js";
-import { REPORT_PLACEMENT } from "../src/review/pipeline.js";
+import { placementOf } from "../src/review/pipeline.js";
 import type { ReviewReport } from "../src/review/types.js";
 
 const patch = readFileSync(resolve("examples/review/checkout.patch"), "utf8");
@@ -141,11 +141,9 @@ describe("review_diff over the MCP protocol", () => {
 
     // Ordered by the report contract: the work no model settled first (highest
     // priority first), then the judged hunks by numeric priority descending
-    // whatever their status, then the deterministic pass. Status never reorders.
-    const placement = report.items.map(item =>
-      item.judgment !== undefined
-        ? REPORT_PLACEMENT.judged
-        : item.status === "passed" ? REPORT_PLACEMENT.passed : REPORT_PLACEMENT.unjudged);
+    // whatever their status (test files after the rest), then the deterministic
+    // pass. Status never reorders.
+    const placement = report.items.map(placementOf);
     expect(placement).toEqual([...placement].sort((left, right) => left - right));
     for (const [index, item] of report.items.entries()) {
       expect(item.priority).toBeGreaterThanOrEqual(0);

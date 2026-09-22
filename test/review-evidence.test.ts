@@ -735,6 +735,44 @@ describe("reading agenda", () => {
     expect(roles).toContain("caller");
   });
 
+  test.each(["test.ts", "src/service.test-d.ts", "test/service.ts"])(
+    "attaches a supporting test from %s to the lifecycle entry",
+    (testFile) => {
+      const withTest = snapshotOf({
+        ...files,
+        "src/types.ts": [
+          RESPONSE_TYPES,
+          "export enum ResidentState { Active = 'active', Suspended = 'suspended' }",
+        ].join("\n"),
+        "src/service.ts": [
+          "import { CreateResult, ResidentState } from './types';",
+          "export async function createResidents(names: string[]): Promise<CreateResult> {",
+          "  const users: string[] = [];",
+          "  const errors: string[] = [];",
+          "  await store.insert('residents', { state: ResidentState.Active, names });",
+          "  return { success: errors.length === 0, errors, users, count: users.length };",
+          "}",
+        ].join("\n"),
+        [testFile]: [
+          `import { createResidents } from '${testFile.startsWith("src/") ? "./service" : testFile.startsWith("test/") ? "../src/service" : "./src/service"}';`,
+          "export async function createsActiveResidents() {",
+          "  return createResidents(['a']);",
+          "}",
+        ].join("\n"),
+      });
+      const input = scenario(
+        hunk("src/service.ts", 5, [
+          "-  await store.insert('residents', { names });",
+          "+  await store.insert('residents', { state: ResidentState.Active, names });",
+        ]),
+        withTest,
+      );
+      const entry = entryOf(evidence(input).agenda, "agenda:external-write");
+      const tests = entry.evidence.filter(item => item.role === "test");
+      expect(tests.map(item => item.file)).toEqual([testFile]);
+    },
+  );
+
   test("keeps every hunk addressable, metadata-only ones included", () => {
     const input = scenario(diff, files);
     const result = evidence(input);

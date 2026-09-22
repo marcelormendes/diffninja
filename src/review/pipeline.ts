@@ -26,8 +26,9 @@
  * model self-reported confidence is never a ranking input.
  *
  * The report order puts the work a model did not settle first, then the judged
- * hunks by numeric priority descending regardless of status, and the deterministic
- * passes last; input order breaks ties. Status is a label the reader filters on,
+ * hunks by numeric priority descending regardless of status — those outside test
+ * files before those in test files — and the deterministic passes last; input
+ * order breaks ties. Status is a label the reader filters on,
  * so it never reorders what priority and manual review decided.
  */
 
@@ -48,6 +49,7 @@ import {
   type JevState,
 } from "./jev.js";
 import { buildContextState } from "./context-plan.js";
+import { testLikeFile } from "./file-role.js";
 import type {
   ReviewItem,
   ReviewOptions,
@@ -152,15 +154,29 @@ export const MANUAL_REVIEW_PRIORITY = 70;
 export const TRIVIAL_PRIORITY = 5;
 
 /**
- * Report position of one item: the work no model settled, then the judged hunks,
- * then the deterministic passes. Sorting by this first is what keeps a status
- * label from reordering the report behind the numeric priority.
+ * Report position of one item: the work no model settled, then the judged hunks
+ * outside test files, then the judged hunks in test files, then the deterministic
+ * passes. Sorting by this first is what keeps a status label from reordering the
+ * report behind the numeric priority.
+ *
+ * Test files come after the code they exercise because the model's answers do not
+ * separate them: a regression test for a fix changes what the suite enforces, so
+ * it is honestly `changed` too, and an atomic `yes` in its assertions could outrank
+ * the fix itself. Which file is a test is a deterministic path fact, so the order
+ * uses it instead of asking the model. A test hunk keeps its own priority and is
+ * still ranked by it among the other test hunks; documentation is not demoted.
  */
 export const REPORT_PLACEMENT = {
   unjudged: 0,
   judged: 1,
-  passed: 2,
-} satisfies Record<"unjudged" | "judged" | "passed", number>;
+  judgedTest: 2,
+  passed: 3,
+} satisfies Record<"unjudged" | "judged" | "judgedTest" | "passed", number>;
+
+/** Reason attached to a judged hunk the report reads after the non-test hunks. */
+export const TEST_FILE_ORDER_REASON =
+  "read after the judged hunks outside test files: the path looks like a test file (a path " +
+  "convention, not coverage), and its priority orders it among the other test hunks";
 
 /** At most this many live requests are in flight at once. */
 export const MAX_CONCURRENT_REQUESTS = 4;
@@ -416,6 +432,7 @@ function reasonsFor(
     reasons.push(`context nodes sent whole: ${carriedNodes} definition(s)`);
   }
   reasons.push(ROUTING_REASON[status]);
+  if (testLikeFile(unit.file)) reasons.push(TEST_FILE_ORDER_REASON);
   return reasons;
 }
 
@@ -471,12 +488,15 @@ function failureReason(error: JevRequestError | JevResponseError): string {
  * Where an item belongs in the report. Unjudged work — a hunk no model saw, either
  * because its own size or shape routed it or because its call failed closed — comes
  * first, because nothing ranked it and a person has to; a judged hunk follows, at
- * its numeric priority; a deterministic pass is last. This reads `judgment`, not
+ * its numeric priority, judged test-file hunks after the rest; a deterministic
+ * pass is last. This reads `judgment`, not
  * `status`: the status label is for filtering, and letting it order the report
  * would put a scattered `uncertain` above a ranked `attention`.
  */
-function placementOf(item: ReviewItem): number {
-  if (item.judgment !== undefined) return REPORT_PLACEMENT.judged;
+export function placementOf(item: ReviewItem): number {
+  if (item.judgment !== undefined) {
+    return testLikeFile(item.file) ? REPORT_PLACEMENT.judgedTest : REPORT_PLACEMENT.judged;
+  }
   return item.status === "passed" ? REPORT_PLACEMENT.passed : REPORT_PLACEMENT.unjudged;
 }
 

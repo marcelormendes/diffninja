@@ -55,6 +55,7 @@ import {
   type ContractField,
 } from "./evidence-syntax.js";
 import type { ReviewContextNode, ReviewUnit } from "./types.js";
+import { testLikeFile } from "./file-role.js";
 
 /**
  * Bounds shared by every run. Each one that drops work is stated in the
@@ -354,14 +355,6 @@ function hunkDefinitions(
     for (const info of containing) selected.add(info);
   }
   return [...selected].sort(byLocation);
-}
-
-/** Test-file path shapes, used only to point at a supporting test by name. */
-function testLikeFile(file: string): boolean {
-  return (
-    /(?:^|\/)(?:tests?|__tests__|specs?)\//.test(file) ||
-    /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file)
-  );
 }
 
 /* --------------------------------------------------------------- excerpts */

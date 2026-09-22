@@ -24,6 +24,7 @@ import {
   MAX_CONCURRENT_REQUESTS,
   MOCK_MODE_WARNING,
   SINGLE_SAMPLE_WARNING,
+  TEST_FILE_ORDER_REASON,
   reviewUnits,
 } from "../src/review/pipeline.js";
 import { MAX_CONTEXT_NODES } from "../src/review/context-plan.js";
@@ -705,6 +706,52 @@ describe("report order", () => {
     expect(result.items.findIndex((item) => item.id === "failed")).toBeLessThan(
       result.items.findIndex((item) => item.status === "attention"),
     );
+  });
+
+  test("reads judged test-file hunks after the code they exercise, keeping their priority", async () => {
+    // The shape of a real fix PR: the fix and its docs are `changed`, and so is the
+    // type test, whose assertions also read as a validation change. By priority
+    // alone the type test (21) would outrank the fix (15) it only exercises.
+    const units = [
+      makeUnit({ id: "type-test", file: "index.test-d.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "suite", file: "test.js", diff: CODE_HUNK }),
+      makeUnit({ id: "fix", file: "index.js", diff: CODE_HUNK }),
+      makeUnit({ id: "readme", file: "readme.md", diff: CODE_HUNK }),
+    ];
+    const host = scriptedFetch({
+      "index.test-d.ts": { outcome: "changed", atomic: { validationChanged: "yes" } },
+      "test.js": { outcome: "unchanged", atomic: { failureDeferred: "yes" } },
+      "index.js": { outcome: "changed" },
+      "readme.md": { outcome: "changed" },
+    });
+
+    const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
+
+    // Documentation is not demoted: prose can be normative, so it ranks by its own
+    // answers beside the fix. The test hunks follow, ordered among themselves.
+    expect(result.items.map((item) => item.id)).toEqual(["fix", "readme", "type-test", "suite"]);
+    expect(result.items.map((item) => item.priority)).toEqual([15, 15, 21, 11]);
+    for (const id of ["type-test", "suite"]) {
+      expect(itemById(result.items, id).reasons).toContain(TEST_FILE_ORDER_REASON);
+    }
+    for (const id of ["fix", "readme"]) {
+      expect(itemById(result.items, id).reasons).not.toContain(TEST_FILE_ORDER_REASON);
+    }
+  });
+
+  test("never lets a test-file hunk move ahead of unjudged work", async () => {
+    const units = [
+      makeUnit({ id: "test", file: "test/a.test.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "failed", file: "src/failed.ts", diff: CODE_HUNK }),
+    ];
+    const host = installFetch((request) =>
+      request.state.file === "src/failed.ts"
+        ? new Response(SECRET_BODY, { status: 500 })
+        : new Response(answerBody({ outcome: "changed", atomic: { limitChanged: "yes" } }), { status: 200 }));
+
+    const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
+
+    expect(result.items.map((item) => item.id)).toEqual(["failed", "test"]);
   });
 });
 

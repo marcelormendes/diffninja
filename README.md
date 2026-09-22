@@ -149,8 +149,12 @@ pi) and the tool's arguments: [docs/mcp-setup.md](docs/mcp-setup.md).
    thresholds, or weighting.
    The report lists unjudged work first — a hunk no model saw, or one whose call
    failed closed — then the judged hunks by priority descending regardless of
-   status, then the deterministic passes. Status is a label for filtering and
-   never reorders the report.
+   status, then the deterministic passes. Judged hunks in test files (by path
+   convention: `test/`, `*.test.ts`, `test_*.py`, `*_test.go`, …) come after the
+   other judged hunks, still ordered by their own priority: a regression test is
+   honestly `changed` too, so the answers alone cannot keep it from outranking
+   the code it exercises. Documentation is not demoted, because prose can be
+   normative. Status is a label for filtering and never reorders the report.
    The short review agenda comes from deterministic evidence, independently of
    stochastic hunk judgments. A live rerun can change those judgments and their
    hunk ordering; neither priority nor confidence is a correctness probability.
