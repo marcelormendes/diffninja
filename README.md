@@ -5,9 +5,11 @@ link and it opens a review workspace where you read the diff, write inline
 comments, and submit the review yourself. Feed it a diff or a git range and it
 returns an evidence-backed reading agenda alongside the complete diff.
 
-Live static analysis asks TypeSafe's Jev model four typed questions per
-evaluable hunk. Connected GitHub reviews do not call a model. Neither mode
-writes review prose for you. You stay the reviewer.
+Live static analysis sends each evaluable hunk to TypeSafe's Jev model once,
+with a typed question set: one unordered outcome choice — does the edit change
+what a consumer of the code can observe or rely on — and six independent
+yes/no/unknown properties. Connected GitHub reviews do not call a model. Neither
+mode writes review prose for you. You stay the reviewer.
 
 ## What you need
 
@@ -110,14 +112,45 @@ pi) and the tool's arguments: [docs/mcp-setup.md](docs/mcp-setup.md).
    source cards. Optional TypeScript reference checking compares before/after
    diagnostics, including unchanged consumers, using an explicitly trusted
    installed compiler. Unsupported or incomplete checks say so.
-2. **One typed Jev request.** Each evaluable hunk gets one Score question about
-   observable outcome and three Choice questions about boundary handling, failure
-   handling, and evidence scope. Options have fixed order. There are no repeated
-   judgments, option shuffles, adaptive context rounds, or HTTP retries.
-3. **Reading order, not a verdict.** Fixed tables turn the returned observations
-   into a 0–100 hunk priority. Unknown boundary/failure observations, non-majority
-   answers, and failed or malformed responses route to `uncertain`. Returned
-   confidence is recorded but never used for ranking, thresholds, or weighting.
+2. **One typed Jev request.** Each evaluable hunk gets one request with an
+   unordered outcome choice — `changed`, `unchanged`, or `unknown` — and six
+   independent yes/no/unknown questions about the added and removed lines:
+   comparison changed, limit changed, validation changed, failure propagated,
+   failure deferred, failure discarded. All seven are the same kind of question:
+   closed options with fixed order, non-exclusive, and no repeated judgments,
+   option shuffles, adaptive context rounds, or HTTP retries.
+   `changed` means an added or removed line changes something a consumer of the
+   code can observe or rely on: a consumable result or returned value, an effect,
+   an accepted input, an interface or schema, or a normative instruction or
+   guarantee callers, operators, or users must follow. Prose is judged by its
+   content, never by its file type. `unchanged` requires evidence of semantic
+   equivalence for those consumers, and `unknown` is the answer when this state
+   cannot separate the two. Each atomic `no` speaks only about the lines the
+   state shows; `unknown` means that answer could not be determined from the
+   supplied context.
+   Context-presence counts come from the admitted definitions' extractor
+   provenance, separately for each snapshot; callers and contracts can both be
+   present.
+3. **A majority answer or nothing.** An answer whose reported option holds at most
+   half of its own accounted probability — an exact tie included — is recorded as
+   `unknown` instead of as the option a plurality happened to name, so a scattered
+   or tied answer can never read as a finding. Missing or malformed answers, or an
+   answer to a question this run did not ask, fail the hunk closed. Priority is
+   still deterministic: a fixed base, plus 10 when the outcome separated as
+   `changed`, plus the heaviest affirmative answer in the boundary group
+   (comparison, limit, validation) and the heaviest in the failure group
+   (propagated, deferred, discarded) — each group contributes its maximum, never a
+   sum, and nothing is summed twice. `unknown` adds nothing anywhere: there is no
+   bonus for an answer the state could not settle and no confidence gate.
+   Any `unknown` answer routes to `uncertain`; otherwise a hunk reads
+   **attention** when the outcome separated as `changed`, when a limit, size,
+   offset, or timeout bound changed, or when a failure was discarded, and **low**
+   otherwise. Returned confidence is recorded but never used for ranking,
+   thresholds, or weighting.
+   The report lists unjudged work first — a hunk no model saw, or one whose call
+   failed closed — then the judged hunks by priority descending regardless of
+   status, then the deterministic passes. Status is a label for filtering and
+   never reorders the report.
    The short review agenda comes from deterministic evidence, independently of
    stochastic hunk judgments. A live rerun can change those judgments and their
    hunk ordering; neither priority nor confidence is a correctness probability.

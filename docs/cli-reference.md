@@ -130,8 +130,13 @@ A single note distinguishes mock and live output. Hunk reasons, judgments,
 warnings, priorities and HTTP request counts remain in the JSON twin; mock
 judgments are navigation fixtures, not a code assessment. The live adapter pins
 `jev-1.13.0`: one HTTP attempt per evaluable hunk, a 10-second timeout, no retries,
-no ensemble, and no adaptive context loop. Options have fixed order and no
-temperature override is sent. Confidence is informational only; the deterministic
+no ensemble, and no adaptive context loop. Every question is a closed choice with
+fixed options — one unordered outcome (changed, unchanged, unknown) and six
+non-exclusive atomic properties — and no temperature override is sent. An answer
+whose reported option did not hold a majority of its own distribution is recorded
+as `unknown`, so a scattered answer is never reported as a finding; a missing,
+malformed, or unasked answer fails that hunk closed. Confidence is informational
+only; the deterministic
 agenda is independent of stochastic model hunk ordering. See the
 [analysis policy](../README.md#how-static-analysis-works).
 

@@ -1,5 +1,10 @@
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
-import { BOUNDARY_OBSERVATIONS, EVIDENCE_SCOPES, FAILURE_OBSERVATIONS, OUTCOME_LEVELS } from "./jev.js";
+import {
+  ATOMIC_OBSERVATIONS,
+  ATOMIC_QUESTIONS,
+  OUTCOME_CHOICES,
+  type AtomicQuestion,
+} from "./jev.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
 import { escapeHtml } from "./escape-html.js";
@@ -251,66 +256,85 @@ function renderItemBody(item: ReviewItem): string {
     .join("\n");
 }
 
+/** Human label per atomic question, in the order the adapter asks them. */
+const ATOMIC_QUESTION_LABEL = {
+  comparisonChanged: "Comparison changed",
+  limitChanged: "Limit, size, or offset changed",
+  validationChanged: "Validation or shape check changed",
+  failurePropagated: "Failure propagated",
+  failureDeferred: "Failure deferred",
+  failureDiscarded: "Failure discarded",
+} satisfies Record<AtomicQuestion, string>;
+
+/** Spelled out beside an answer the supplied state could not determine. */
+const UNDETERMINED_NOTE = "not determined from the supplied state; a person should decide";
+
+/** One rendered answer: its question, the closed set it answers, and the answer. */
+interface ObservationRow {
+  readonly label: string;
+  readonly values: readonly string[];
+  readonly value: string;
+}
+
 /**
  * What one model sample observed about this hunk, when a sample was taken.
  *
- * The four answers come from closed sets and each is printed only when it is one
- * of the documented values: a value outside its set is named as unrecognized
- * rather than echoed, so no model-authored text reaches the page. They are
- * single-sample observations — one sample per hunk, about the added and removed
- * lines only — and are labelled that way.
+ * Every answer comes from a closed set and is printed only when it is one of the
+ * documented values: a value outside its set is named as unrecognized rather
+ * than echoed, so no model-authored text reaches the page. The outcome is one
+ * unordered choice — changed, unchanged, or unknown — and the six atomic answers
+ * are independent existence questions about the added or removed lines, several
+ * of which may be `yes` at once.
  *
- * `unknown` is a real answer meaning the supplied state could not classify the
- * lines, so it is printed with that meaning spelled out; it is never shown as
- * `none`/`untouched` (which would read as an absence claim) and never as a
- * finding. Nothing here reads `reasons` or any other prose: the one sentence
- * under the list is derived from these typed fields and from `item.status`.
- * No score, probability or vendor confidence is shown.
+ * `yes` is a property those lines themselves show; `no` speaks only about the
+ * lines the state shows, never about the rest of the codebase; `unknown` means
+ * the supplied state cannot determine the answer, and the adapter records it for
+ * an answer whose own distribution did not separate one option as well. An answer
+ * of `unknown` is printed with its meaning spelled out and is never shown as a
+ * finding: it is a fact about the evidence, not about the code. Nothing here reads
+ * `reasons` or any other prose. No probability or vendor confidence is shown.
  */
 function renderObservations(item: ReviewItem): string {
   const judgment = item.judgment;
   if (judgment === undefined) {
     return "";
   }
-  const rows: readonly (readonly [string, readonly string[], string])[] = [
-    ["Outcome the lines produce", OUTCOME_LEVELS, judgment.outcome],
-    ["Boundary at these lines", BOUNDARY_OBSERVATIONS, judgment.boundary],
-    ["Failure handling at these lines", FAILURE_OBSERVATIONS, judgment.failureHandling],
-    ["Evidence the sample reached", EVIDENCE_SCOPES, judgment.evidenceScope],
+  const rows: readonly ObservationRow[] = [
+    { label: "Outcome the lines produce", values: OUTCOME_CHOICES, value: judgment.outcome },
+    ...ATOMIC_QUESTIONS.map((question) => ({
+      label: ATOMIC_QUESTION_LABEL[question],
+      values: ATOMIC_OBSERVATIONS,
+      value: judgment[question],
+    })),
   ];
-  const unclassified = new Set<string>();
+  const undetermined = new Set<string>();
   const list = rows
-    .map(([label, values, value]) => {
+    .map((row) => {
       let shown: string;
-      if (values.includes(value)) {
-        shown = escapeHtml(value);
-        if (value === "unknown") {
-          unclassified.add(label);
-          shown += ' <span class="obs-unknown">not classified from the supplied state; a person should decide</span>';
+      if (row.values.includes(row.value)) {
+        shown = escapeHtml(row.value);
+        if (row.value === "unknown") {
+          undetermined.add(row.label);
+          shown += ` <span class="obs-unknown">${UNDETERMINED_NOTE}</span>`;
         }
       } else {
         shown = escapeHtml("unrecognized value");
       }
-      return `<dt>${escapeHtml(label)}</dt><dd class="mono">${shown}</dd>`;
+      return `<dt>${escapeHtml(row.label)}</dt><dd class="mono">${shown}</dd>`;
     })
     .join("");
   // The escalation line is the typed-field reading of `status`, not a verdict.
   const hints: string[] = [];
-  if (unclassified.size > 0) {
+  if (undetermined.size > 0) {
     hints.push(
-      `${[...unclassified].join(" and ")} could not be classified from the supplied state, so this hunk is marked for a human read. That is not a claim about the code.`,
-    );
-  }
-  if (judgment.evidenceScope === "not-established") {
-    hints.push(
-      "The sample did not reach how these lines are called or what consumes them: missing evidence, not a defect claim.",
+      `${[...undetermined].join(" and ")} could not be determined from the supplied state, so this hunk is marked for a human read. That is not a claim about the code.`,
     );
   }
   return [
     '<details class="obs">',
     '<summary>Single-sample typed observations</summary>',
     '<div class="obs-body">',
-    '<p class="note">One sample for this hunk, from the added and removed lines and the context listed below. Descriptive answers, not a verdict, and not a merge approval.</p>',
+    '<p class="note">One sample for this hunk. Every question is answered on its own, about the added and removed lines and the context listed below: yes when those lines show that property, which several can at once; no when these lines show no such property, which is not a statement about the rest of the code; unknown when the supplied state cannot determine it, never because another question applied. Descriptive answers, not a verdict, and not a merge approval.</p>',
     `<dl class="obs-list">${list}</dl>`,
     // Informational, in the dimmest style the report has.
     ...hints.map((hint) => `<p class="note obs-note">${escapeHtml(hint)}</p>`),

@@ -434,6 +434,12 @@ function contextNodeOf(plan: ContextNodePlan, unit: ReviewUnit, source: string |
     // descriptor and the detail report.
     line: info.line!,
     detail: nodeDetail(plan, unit, source),
+    provenance: {
+      snapshot: plan.side,
+      role: plan.role,
+      sourcePresent: source !== null,
+      contract: info.review?.kind !== undefined,
+    },
   };
 }
 

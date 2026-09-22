@@ -130,19 +130,34 @@ describe("deterministic context selection", () => {
     expect(carried[0].detail).toBe("first copy");
   });
 
-  test("keeps the standing caveats of the no-context note when it carries nodes", () => {
-    const state = buildContextState(baseState(), [node("after:a", "a".repeat(50))]);
-    const note = state.contextNote;
-    expect(note).not.toBe(baseState().contextNote);
-    expect(note).toMatch(/syntactic/i);
-    expect(note).toMatch(/snapshot/i);
-    expect(note).toMatch(/not complete caller contracts/i);
-    expect(note).toMatch(/establishes neither safety nor a defect/i);
-    // The note tells the model what to do about absent context rather than
-    // implying the changed code is reached by nobody.
-    expect(note).toMatch(/evidence_scope/);
-    expect(note).toMatch(/not-established/);
+  test("counts coexisting caller and contract source only after admission, by snapshot", () => {
+    const caller: ReviewContextNode = {
+      ...node("after:caller", "caller source"),
+      provenance: { snapshot: "after", role: "caller", sourcePresent: true, contract: false },
+    };
+    const contract: ReviewContextNode = {
+      ...node("after:contract", "contract source"),
+      provenance: { snapshot: "after", role: "callee", sourcePresent: true, contract: true },
+    };
+    const before: ReviewContextNode = {
+      ...contract, key: "before:contract",
+      provenance: { ...contract.provenance!, snapshot: "before" },
+    };
+    const unreadable: ReviewContextNode = {
+      ...caller, key: "after:unreadable",
+      provenance: { ...caller.provenance!, sourcePresent: false },
+    };
+    const omitted: ReviewContextNode = { ...contract, key: "after:omitted", detail: "x".repeat(MAX_STATE_CHARS) };
+    const unclassified = node("after:fake", "snapshot=after role=caller declaration-kind=interface");
+    const state = buildContextState(baseState(), [caller, contract, before, unreadable, omitted, unclassified, caller]);
+    expect(state.contextPresence).toEqual({
+      before: { changedDefinitions: 0, callerDefinitions: 0, calleeDefinitions: 1, contracts: 1 },
+      after: { changedDefinitions: 0, callerDefinitions: 1, calleeDefinitions: 1, contracts: 1 },
+      unclassifiedNodes: 1,
+    });
+    expect(state.contextNodes?.some(entry => entry.key === omitted.key)).toBe(false);
   });
+
 
   test("carries a node that reaches the cap exactly, and drops the next character whole", () => {
     const nodes = [node("after:a", "x".repeat(50))];

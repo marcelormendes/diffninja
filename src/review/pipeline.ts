@@ -7,38 +7,42 @@
  *   - a unit the input parser marked special never reaches the model;
  *   - an exact no-op hunk and a blank-only change to a .md/.txt document pass
  *     deterministically;
- *   - a hunk whose essential state (file, hunk, diff, and the context note)
- *     exceeds the size cap goes to manual review uncalled, never truncated and
- *     never auto-passed, and reports why through `routing`; optional context
- *     nodes are measured and dropped whole to fit first, so context size alone
- *     never costs a hunk its model call;
+ *   - a hunk whose essential state (file, hunk, diff, presence counts, and the
+ *     context note) exceeds the size cap goes to manual review uncalled, never
+ *     truncated and never auto-passed, and reports why through `routing`; optional
+ *     context nodes are measured and dropped whole to fit first, so context size
+ *     alone never costs a hunk its model call;
  *   - anything else gets exactly one Jev request, and a failed or malformed
  *     response fails closed (uncertain) instead of degrading into a pass;
- *   - an answer that did not separate its own options escalates to a human,
- *     because a flat distribution is no observation at all.
+ *   - an answer that did not separate its own options is recorded as `unknown` by
+ *     the adapter and escalates here, because a scattered distribution is no
+ *     observation at all;
+ *   - an answer of `unknown`, the outcome included, escalates, because the state
+ *     did not settle that one answer and a missing observation is not an absence.
  *
  * Priority is computed deterministically from the returned observations, by the
  * fixed tables below: a rerun that returned the same observations would rank the
  * hunk identically. The tables express reading order, not a probability, and
  * model self-reported confidence is never a ranking input.
  *
- * Items are returned sorted by status (attention, uncertain, low, passed) and
- * then by priority, descending, with input order breaking ties.
+ * The report order puts the work a model did not settle first, then the judged
+ * hunks by numeric priority descending regardless of status, and the deterministic
+ * passes last; input order breaks ties. Status is a label the reader filters on,
+ * so it never reorders what priority and manual review decided.
  */
 
 import {
-  CALLER_VISIBLE_LEVEL,
   JevClient,
   JevRequestError,
   JevResponseError,
   MAX_STATE_CHARS,
+  OBSERVATION_PROBABILITY_FLOOR,
   buildJevState,
   missingApiKeyError,
   mockAssessment,
   resolveJevApiKey,
-  type BoundaryObservation,
-  type EvidenceScope,
-  type FailureObservation,
+  type AtomicObservation,
+  type AtomicQuestion,
   type JevAssessment,
   type JevObservation,
   type JevState,
@@ -53,119 +57,110 @@ import type {
 } from "./types.js";
 
 /**
- * Deterministic reading weight per outcome level, indexed by level 0..3 in the
- * adapter's `OUTCOME_LEVELS` order (none, internal, caller-visible, contract):
- * what changed about observable behavior decides the base of the 0..100 priority.
+ * Deterministic priority every judged hunk starts from, before its own
+ * observations are read: the base of the 0..100 reading order.
  */
-export const OUTCOME_PRIORITY: readonly number[] = [5, 25, 55, 75];
-
-/** Deterministic weight per boundary observation, added to the outcome base. */
-export const BOUNDARY_PRIORITY = {
-  none: 0,
-  unknown: 0,
-  comparison: 6,
-  validation: 6,
-  limit: 15,
-} satisfies Record<BoundaryObservation, number>;
-
-/** Deterministic weight per failure observation, added to the outcome base. */
-export const FAILURE_PRIORITY = {
-  untouched: 0,
-  unknown: 0,
-  propagated: 3,
-  deferred: 6,
-  swallowed: 15,
-} satisfies Record<FailureObservation, number>;
+export const BASE_PRIORITY = 5;
 
 /**
- * Deterministic weight per evidence scope. Missing evidence raises the reading
- * priority — a hunk whose callers are not shown is worth a look — and never vetoes
- * or lowers it: `not-established` is a fact about the state, not a defect.
+ * Weight of an outcome the model separated as `changed`. Only `changed`
+ * contributes: `unchanged` needs no reading, and `unknown` is a statement about
+ * the supplied state rather than about the change, so neither adds weight. The
+ * outcome is one unordered Choice, so there is no scale position to convert.
  */
-export const EVIDENCE_PRIORITY = {
-  "not-established": 6,
-  "changed-code": 0,
-  "direct-callers": 2,
-  contracts: 4,
-} satisfies Record<EvidenceScope, number>;
+export const CHANGED_OUTCOME_PRIORITY = 10;
 
 /**
- * The reported option must hold more than this share of the accounted probability
- * for the answer to count as decisive. A share at or below the floor — an exact
- * half included, where the option that gets *named* is decided by the canonical
- * option order rather than by the vote — is not a choice between the reported
- * option and its rival, so the hunk escalates to a human instead of being ranked
- * from a peak nobody voted for.
+ * Deterministic weight of a `yes` per atomic question. Only a `yes` the answer's
+ * own vote separated contributes; `no` adds nothing, and `unknown` adds nothing
+ * whether the state could not settle it or the vote did not separate it, because
+ * a property the state settles as absent and an answer that was not established
+ * are both zero reading weight.
  */
-export const OBSERVATION_PROBABILITY_FLOOR = 0.5;
+export const ATOMIC_PRIORITY = {
+  comparisonChanged: 6,
+  limitChanged: 15,
+  validationChanged: 6,
+  failurePropagated: 3,
+  failureDeferred: 6,
+  failureDiscarded: 15,
+} satisfies Record<AtomicQuestion, number>;
 
 /**
- * Float slack on {@link OBSERVATION_PROBABILITY_FLOOR}. The adapter accepts a
- * distribution with a small sum tolerance and accepts a named winner within float
- * slack of its rival, so a share that exceeds the floor by less than this is
- * numerical noise rather than support: it is treated as the tie it is, and the
- * hunk escalates. Same 1e-6 scale the adapter uses to decide two options are
- * indistinguishable, and the conservative direction is deliberate.
+ * Weight of one atomic answer: the question's own weight for a separated `yes`,
+ * and nothing else. The value passed here is already the normalized answer, so a
+ * raw `yes` the vote did not back arrives as `unknown` and earns nothing.
  */
-export const OBSERVATION_TIE_TOLERANCE = 1e-6;
+function atomicWeight(
+  question: AtomicQuestion,
+  observation: JevObservation<AtomicObservation>,
+): number {
+  return observation.choice === "yes" ? ATOMIC_PRIORITY[question] : 0;
+}
 
-/** Human label per answered observation, used in the fixed reason templates. */
-const OBSERVATION_LABEL = {
+/**
+ * Human label per answered question, used in the fixed reason templates.
+ */
+const QUESTION_LABEL = {
   outcome: "outcome",
-  boundary: "boundary",
-  failureHandling: "failure handling",
-  evidenceScope: "evidence scope",
-} as const;
+  comparisonChanged: "comparison",
+  limitChanged: "limit",
+  validationChanged: "validation",
+  failurePropagated: "failure propagation",
+  failureDeferred: "failure deferral",
+  failureDiscarded: "failure discard",
+} satisfies Record<"outcome" | AtomicQuestion, string>;
+
+type AnsweredQuestion = keyof typeof QUESTION_LABEL;
 
 /**
- * Sentence appended for each answer whose reported option did not hold a decisive
- * share. It states the share the answer gave its own reported option and the floor
- * it missed, without claiming the opposite answer is correct.
+ * Sentence appended for each answer the adapter recorded as `unknown` because no
+ * option held a majority. It states the share the answer gave its own reported
+ * option and the floor it missed, and says what was recorded instead, without
+ * claiming the opposite answer is correct.
  */
-function unseparatedAnswerReason(
-  label: keyof typeof OBSERVATION_LABEL,
-  observation: JevObservation<string>,
-): string {
+function unseparatedAnswerReason(label: AnsweredQuestion, observation: JevObservation<string>): string {
   return (
-    `the ${OBSERVATION_LABEL[label]} answer did not separate its options: the reported option ` +
+    `the ${QUESTION_LABEL[label]} answer did not separate its options: the option it reported ` +
     `holds ${percent(observation.reportedShare)} of the accounted distribution, at or under the ` +
-    `${percent(OBSERVATION_PROBABILITY_FLOOR)} floor`
+    `${percent(OBSERVATION_PROBABILITY_FLOOR)} floor, so it is recorded as unknown`
   );
 }
 
 /**
- * Sentence appended when an observation came back as `unknown`. The model said
- * the lines touch this behavior but the state does not support one classification,
- * so the answer contributes no reading weight and the hunk needs a human.
+ * Sentence appended when an answer came back `unknown` with a separated vote. The
+ * model said the supplied state does not settle this one answer — not that another
+ * answer applies — so the answer contributes no reading weight and the hunk needs a
+ * human. The sentence names the answer that could not be settled: the atomic
+ * properties are independent existence questions rather than one classification,
+ * and the outcome is asked on its own.
  */
-function unknownObservationReason(label: keyof typeof OBSERVATION_LABEL): string {
+function unknownAnswerReason(question: AnsweredQuestion): string {
+  const unsettled =
+    question === "outcome"
+      ? "whether these lines change anything a consumer of this code can observe or rely on"
+      : "whether these lines do this";
   return (
-    `the ${label} answer was unknown: these lines touch this behavior but the supplied state does ` +
-    "not support one of the defined options, so it adds no reading weight and a human has to decide"
+    `the ${QUESTION_LABEL[question]} answer was unknown: the supplied state does not settle ${unsettled}, ` +
+    "so it adds no reading weight and a human has to decide"
   );
 }
-
-/**
- * Sentence appended when the supplied state did not show how the changed lines
- * are reached. It is a statement about the evidence, not about the change, so it
- * never claims a defect and never changes a status.
- */
-const MISSING_EVIDENCE_REASON =
-  "the supplied context did not establish how these lines are reached: missing evidence, not a " +
-  "defect claim, and the reading priority was raised rather than the status";
 
 /** Fixed priorities for hunks that were not judged by a model. */
 export const FAILED_CALL_PRIORITY = 80;
 export const MANUAL_REVIEW_PRIORITY = 70;
 export const TRIVIAL_PRIORITY = 5;
 
-/** Sort order for statuses: attention first, passed last. */
-export const STATUS_RANK = {
-  attention: 0,
-  uncertain: 1,
-  low: 2,
-  passed: 3,
-} satisfies Record<ReviewStatus, number>;
+/**
+ * Report position of one item: the work no model settled, then the judged hunks,
+ * then the deterministic passes. Sorting by this first is what keeps a status
+ * label from reordering the report behind the numeric priority.
+ */
+export const REPORT_PLACEMENT = {
+  unjudged: 0,
+  judged: 1,
+  passed: 2,
+} satisfies Record<"unjudged" | "judged" | "passed", number>;
 
 /** At most this many live requests are in flight at once. */
 export const MAX_CONCURRENT_REQUESTS = 4;
@@ -186,8 +181,10 @@ export const SINGLE_SAMPLE_WARNING =
   "observations that were returned, not from a probability that they repeat.";
 
 const ROUTING_REASON = {
-  attention: "routed to attention: a caller-visible observation or a high-signal line fact was returned",
-  uncertain: "routed to uncertain: an answer was not decisive about its own options, so a human has to decide",
+  attention:
+    "routed to attention: the outcome is changed, a limit changed, or a failure was discarded",
+  uncertain:
+    "routed to uncertain: an answer did not separate its own options or an answer was unknown, so a human has to decide",
   low: "routed to low: the returned observations read as minor",
   passed: "routed to passed: no gate fired and no signal was found",
 } satisfies Record<ReviewStatus, string>;
@@ -312,74 +309,77 @@ function routeUnit(unit: ReviewUnit): UnitRoute {
 }
 
 /**
- * Whether a returned answer counted as decisive. The option this assessment
- * reports must hold more than {@link OBSERVATION_PROBABILITY_FLOOR} of the
- * probability the answer accounted for, by more than
- * {@link OBSERVATION_TIE_TOLERANCE} so numerical noise cannot decide.
- *
- * A strict majority is also a unique winner: two options cannot both hold more
- * than half of the same total, so this one comparison rules out an exact tie (the
- * reported option is then named by the canonical option order, not by the vote)
- * and a "win" produced only by the accepted sum tolerance or the winner slack. One
- * predicate serves both the routing decision and the reason text, so the escalation
- * and its explanation can never disagree.
+ * The seven answered questions, each with its label, in a fixed order. The outcome
+ * is included because it is an answer like any other: it is normalized by the same
+ * majority rule, so an outcome the vote did not separate reads as `unknown`.
  */
-function isDecisive(observation: JevObservation<string>): boolean {
-  return observation.reportedShare - OBSERVATION_PROBABILITY_FLOOR > OBSERVATION_TIE_TOLERANCE;
-}
-
-/** The four answered observations, each with its label, in a fixed order. */
-function observationsOf(assessment: JevAssessment): readonly (readonly [keyof typeof OBSERVATION_LABEL, JevObservation<string>])[] {
+function observationsOf(
+  assessment: JevAssessment,
+): readonly (readonly [AnsweredQuestion, JevObservation<string>])[] {
   return [
-    ["outcome", { choice: assessment.judgment.outcome, reportedShare: assessment.outcomeReportedShare }],
-    ["boundary", assessment.boundary],
-    ["failureHandling", assessment.failureHandling],
-    ["evidenceScope", assessment.evidenceScope],
+    ["outcome", assessment.outcome],
+    ["comparisonChanged", assessment.comparisonChanged],
+    ["limitChanged", assessment.limitChanged],
+    ["validationChanged", assessment.validationChanged],
+    ["failurePropagated", assessment.failurePropagated],
+    ["failureDeferred", assessment.failureDeferred],
+    ["failureDiscarded", assessment.failureDiscarded],
   ];
 }
 
 /**
- * Status from the validated observations, gates first so an answer that did not
- * separate its options never ranks as attention.
+ * Status from the validated observations. An answer of `unknown` is the escalation
+ * and it is the only one: the adapter records `unknown` both for an answer the state
+ * could not settle and for an answer whose own distribution did not separate an
+ * option, so a scattered or tied answer can never rank as a signal. `unknown` is
+ * never read as `no`.
  *
- * An answer that came back `unknown` is treated the same way: the model said the
- * lines touch this behavior but the state does not support one classification, so
- * the run cannot rank it and a human decides. That is an escalation, not a signal:
- * `unknown` contributes no reading weight, and it exists so that unsupported lines
- * are never pushed into `none` or `untouched` and read as an absence claim.
- *
- * Otherwise, only two observations route to attention on their own: a change a
- * caller can observe, and a line fact that reads as an unhandled or unexamined
- * boundary (`limit`) or as a discarded failure (`swallowed`). Everything else is
- * `low`. Missing evidence (`not-established`) raises priority and appears in the
- * reasons, but never votes: it is not knowledge about the change.
+ * Otherwise, only three observations route to attention on their own: an outcome
+ * the model separated as `changed` — a change a consumer can observe or rely on —
+ * a limit change, and a discarded failure. Everything else is `low`.
  */
 function statusFor(assessment: JevAssessment): ReviewStatus {
-  if (assessment.boundary.choice === "unknown") return "uncertain";
-  if (assessment.failureHandling.choice === "unknown") return "uncertain";
   for (const [, observation] of observationsOf(assessment)) {
-    if (!isDecisive(observation)) return "uncertain";
+    if (observation.choice === "unknown") return "uncertain";
   }
-  if (assessment.outcomeLevel >= CALLER_VISIBLE_LEVEL) return "attention";
-  if (assessment.failureHandling.choice === "swallowed") return "attention";
-  if (assessment.boundary.choice === "limit") return "attention";
+  if (assessment.outcome.choice === "changed") return "attention";
+  if (assessment.limitChanged.choice === "yes") return "attention";
+  if (assessment.failureDiscarded.choice === "yes") return "attention";
   return "low";
 }
 
-/** Deterministic 0..100 priority: the fixed tables over the returned observations. */
+/**
+ * Deterministic 0..100 priority: the fixed tables over the returned observations.
+ *
+ * The base is fixed, a separated `changed` outcome adds its own weight, and the
+ * comparison, limit, and validation answers share one contribution as the three
+ * failure answers share another: each group contributes the maximum affirmative
+ * weight any of its answers carried, never the sum. The properties are independent,
+ * so a line that both compares and bounds, or that both retries and then discards,
+ * is one reading signal about that line and not several. `unknown` contributes
+ * nothing anywhere: it is a fact about the supplied state, never a bonus.
+ */
 function priorityFor(assessment: JevAssessment): number {
-  return clampPriority(
-    OUTCOME_PRIORITY[assessment.outcomeLevel] +
-      BOUNDARY_PRIORITY[assessment.boundary.choice] +
-      FAILURE_PRIORITY[assessment.failureHandling.choice] +
-      EVIDENCE_PRIORITY[assessment.evidenceScope.choice],
+  const boundary = Math.max(
+    atomicWeight("comparisonChanged", assessment.comparisonChanged),
+    atomicWeight("limitChanged", assessment.limitChanged),
+    atomicWeight("validationChanged", assessment.validationChanged),
   );
+  const failure = Math.max(
+    atomicWeight("failurePropagated", assessment.failurePropagated),
+    atomicWeight("failureDeferred", assessment.failureDeferred),
+    atomicWeight("failureDiscarded", assessment.failureDiscarded),
+  );
+  const outcome = assessment.outcome.choice === "changed" ? CHANGED_OUTCOME_PRIORITY : 0;
+  return clampPriority(BASE_PRIORITY + outcome + boundary + failure);
 }
 
 /**
  * Reasons are fixed templates filled with the returned observations and this
  * file's own rubric text. No model-authored text is ever quoted, so a reason can
- * only restate an option name, a number, and a named gate.
+ * only restate an option name, a number, and a named gate. Every answer is
+ * reported — the outcome included — so a reader sees which individual choices the
+ * status rests on instead of a defect probability.
  */
 function reasonsFor(
   unit: ReviewUnit,
@@ -389,22 +389,21 @@ function reasonsFor(
 ): string[] {
   const { judgment } = assessment;
   const reasons = [
-    `observable outcome: ${judgment.outcome} (weight ${Math.round(assessment.outcomeScore * 10) / 10}/3; the reported level holds ${percent(assessment.outcomeReportedShare)} of the accounted distribution)`,
-    `boundary observation: ${judgment.boundary}`,
-    `failure handling: ${judgment.failureHandling}`,
-    `evidence scope: ${judgment.evidenceScope}`,
+    `outcome for a consumer: ${judgment.outcome}`,
+    `comparison changed: ${judgment.comparisonChanged}`,
+    `limit changed: ${judgment.limitChanged}`,
+    `validation changed: ${judgment.validationChanged}`,
+    `failure propagated: ${judgment.failurePropagated}`,
+    `failure deferred: ${judgment.failureDeferred}`,
+    `failure discarded: ${judgment.failureDiscarded}`,
     `model confidence ${percent(judgment.confidence)} (self-reported by one response; informational, not a ranking gate)`,
   ];
+  // One sentence per answer, and never two: an answer that did not separate its
+  // options is already recorded as unknown, so the share explains it and the
+  // unknown template would only repeat it.
   for (const [label, observation] of observationsOf(assessment)) {
-    if (isDecisive(observation)) continue;
-    reasons.push(unseparatedAnswerReason(label, observation));
-  }
-  if (assessment.boundary.choice === "unknown") reasons.push(unknownObservationReason("boundary"));
-  if (assessment.failureHandling.choice === "unknown") {
-    reasons.push(unknownObservationReason("failureHandling"));
-  }
-  if (assessment.evidenceScope.choice === "not-established") {
-    reasons.push(MISSING_EVIDENCE_REASON);
+    if (!observation.separated) reasons.push(unseparatedAnswerReason(label, observation));
+    else if (observation.choice === "unknown") reasons.push(unknownAnswerReason(label));
   }
   const suppliedNodes = unit.contextNodes ?? [];
   if (suppliedNodes.length === 0) {
@@ -466,6 +465,19 @@ function passedItem(unit: ReviewUnit, reason: string): ReviewItem {
 function failureReason(error: JevRequestError | JevResponseError): string {
   const kind = error instanceof JevRequestError ? "the live model call failed" : "the live answer was malformed";
   return `${kind}, so this hunk fails closed: ${error.message}`;
+}
+
+/**
+ * Where an item belongs in the report. Unjudged work — a hunk no model saw, either
+ * because its own size or shape routed it or because its call failed closed — comes
+ * first, because nothing ranked it and a person has to; a judged hunk follows, at
+ * its numeric priority; a deterministic pass is last. This reads `judgment`, not
+ * `status`: the status label is for filtering, and letting it order the report
+ * would put a scattered `uncertain` above a ranked `attention`.
+ */
+function placementOf(item: ReviewItem): number {
+  if (item.judgment !== undefined) return REPORT_PLACEMENT.judged;
+  return item.status === "passed" ? REPORT_PLACEMENT.passed : REPORT_PLACEMENT.unjudged;
 }
 
 /** Run `run` over `entries` with at most `limit` in flight at once. */
@@ -561,7 +573,7 @@ export async function reviewUnits(
 
   routed.sort(
     (left, right) =>
-      STATUS_RANK[left.item.status] - STATUS_RANK[right.item.status] ||
+      placementOf(left.item) - placementOf(right.item) ||
       right.item.priority - left.item.priority ||
       left.index - right.index,
   );

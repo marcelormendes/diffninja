@@ -4,7 +4,8 @@
 a stdio MCP server exposing the single `review_diff` tool. PR links select a
 connected, human-authored GitHub review via `gh`; CLI opens the loopback page,
 MCP returns its URL. Static diff/range analysis sends hunks to TypeSafe's Jev
-(one Score and three Choice questions, one HTTP attempt per evaluable hunk) and
+(one unordered outcome Choice and six independent yes/no/unknown atomic
+questions; one HTTP attempt per evaluable hunk) and
 ranks observations in code. Confidence never controls ranking or acquisition.
 CLI static mode writes HTML + JSON; MCP writes no report files. The call-flow
 engine underneath is forked from `calldiff` (Tanishq Kancharla, MIT, see
@@ -91,6 +92,15 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   24,000 serialized characters; at most eight complete context nodes are
   considered. Oversized essentials route uncalled to a human; optional context
   is omitted whole. Preserve explicit uncertainty and snapshot provenance.
+- The report renders model answers only from their closed sets: the outcome
+  choice and the six independent atomic properties. A value outside its set is
+  named as unrecognized, never echoed. Any answer whose reported option did not
+  hold a majority of its own distribution is recorded as `unknown` before it
+  reaches the report, so a scattered or tied answer is never rendered as a
+  supported `yes` or `changed`. `unknown` means the supplied state could not
+  determine the answer and is never rendered as `no`, as absence, or as a
+  defect. Missing or malformed answers, and an answer to a question this run did
+  not ask, fail the whole hunk closed.
 - Reference checks are opt-in and use only the trusted installed compiler and
   dependencies. Never execute PR scripts, install its dependencies, check out
   snapshots, or turn incomplete diagnostics into a clean bill of health.

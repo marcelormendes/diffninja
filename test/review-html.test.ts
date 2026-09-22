@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { renderReview } from "../src/review/html.js";
-import type { ReviewItem, ReviewReport } from "../src/review/types.js";
+import type { Judgment, ReviewItem, ReviewReport } from "../src/review/types.js";
 import type {
   AutomaticFinding,
   EvidenceExcerpt,
@@ -9,6 +9,14 @@ import type {
 } from "../src/review/evidence-types.js";
 
 const ATTACK = '<img src=x onerror="alert(1)"><script>alert(1)</script>';
+/**
+ * The attack string in a closed-set answer position. The adapter validates every
+ * field and fails closed, so this value is unreachable through the real pipeline:
+ * the fixtures below exist to prove the renderer names an out-of-set answer
+ * instead of echoing it.
+ */
+// SAFETY: deliberately invalid fixture, used only to exercise closed-set renderer rejection.
+const NOT_AN_ANSWER = ATTACK as never;
 
 function report(
   items: ReviewItem[],
@@ -41,7 +49,26 @@ function item(overrides: Partial<ReviewItem> = {}): ReviewItem {
     newStart: 1,
     status: "attention",
     priority: 87,
-    reasons: ["Review boundary handling"],
+    reasons: ["Unrendered fixture reason text"],
+    ...overrides,
+  };
+}
+
+/**
+ * A complete answer set, so each test names only the answers it asserts: every
+ * question is answered, and a hunk with no property shown is `no` with an
+ * unchanged outcome.
+ */
+function judgment(overrides: Partial<Judgment> = {}): Judgment {
+  return {
+    outcome: "unchanged",
+    comparisonChanged: "no",
+    limitChanged: "no",
+    validationChanged: "no",
+    failurePropagated: "no",
+    failureDeferred: "no",
+    failureDiscarded: "no",
+    confidence: 0.5,
     ...overrides,
   };
 }
@@ -165,10 +192,13 @@ describe("review HTML", () => {
             callFlow: [ATTACK],
             reasons: [ATTACK],
             judgment: {
-              outcome: ATTACK,
-              boundary: ATTACK,
-              failureHandling: ATTACK,
-              evidenceScope: ATTACK,
+              outcome: NOT_AN_ANSWER,
+              comparisonChanged: NOT_AN_ANSWER,
+              limitChanged: NOT_AN_ANSWER,
+              validationChanged: NOT_AN_ANSWER,
+              failurePropagated: NOT_AN_ANSWER,
+              failureDeferred: NOT_AN_ANSWER,
+              failureDiscarded: NOT_AN_ANSWER,
               confidence: 0.8,
             },
           }),
@@ -216,7 +246,7 @@ describe("review HTML", () => {
       routing: { evaluation: "not_evaluated", reasonCode: "context_limit_exceeded", requiredChars: 25000, limitChars: 24000 },
     });
     const judged = item({ ...skipped, id: "callee", routing: undefined,
-      judgment: { outcome: "caller-visible", boundary: "limit", failureHandling: "untouched", evidenceScope: "changed-code", confidence: 0.9 } });
+      judgment: judgment({ outcome: "changed", limitChanged: "yes" }) });
     const rendered = visible(renderReview(report([skipped, judged])));
     const found = cards(rendered);
     expect(found).toHaveLength(2);
@@ -361,11 +391,12 @@ describe("review HTML", () => {
     const unit = item({
       priority: 87,
       reasons: [
-        "outcome observation: caller-visible (weight 2.4/3; the strongest level holds 85% of the returned distribution)",
+        "outcome for a consumer: changed",
+        "failure discarded: yes",
         "model confidence 0.4 (self-reported by one response; informational, not a ranking gate)",
-        "routed to uncertain: an answer did not separate its options, so a human has to decide",
+        "routed to uncertain: an answer did not separate its own options or an answer was unknown, so a human has to decide",
       ],
-      judgment: { outcome: "caller-visible", boundary: "limit", failureHandling: "swallowed", evidenceScope: "direct-callers", confidence: 0.4 },
+      judgment: judgment({ outcome: "changed", limitChanged: "yes", failureDiscarded: "yes", confidence: 0.4 }),
     });
     const html = visible(renderReview(report([unit], {
       modelCalls: 3, warnings: ["Private assessment metadata"], callFlow: [],
@@ -380,59 +411,81 @@ describe("review HTML", () => {
     expect(html).not.toContain("Private assessment metadata");
     expect(html).not.toMatch(/\b87\b|0\.4/);
     // No reason prose is parsed or printed, not even the routing line.
-    expect(html).not.toMatch(/did not separate its options, so a human has to decide/);
+    expect(html).not.toContain("accounted distribution");
+    expect(html).not.toContain("did not separate its options");
     expect(html).not.toContain("routed to uncertain");
   });
 
-  test("typed observations are printed from closed sets and unrecognized values are never echoed", () => {
+  test("every typed answer renders from its closed set, and an unrecognized value is never echoed", () => {
     const unit = item({
       file: "src/lease.ts",
       status: "uncertain",
       reasons: ["model confidence 0.6 (self-reported by one response; informational, not a ranking gate)"],
-      judgment: { outcome: "contract", boundary: "unknown", failureHandling: "propagated", evidenceScope: "contracts", confidence: 0.6 },
+      judgment: judgment({
+        outcome: "changed",
+        comparisonChanged: "yes",
+        validationChanged: "yes",
+        failurePropagated: "yes",
+        failureDiscarded: "unknown",
+        confidence: 0.6,
+      }),
     });
     const html = visible(renderReview(report([unit])));
     const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
-    expect(obs).toContain("Single-sample typed observations");
-    for (const [label, value] of [
-      ["Outcome the lines produce", "contract"],
-      ["Failure handling at these lines", "propagated"],
-      ["Evidence the sample reached", "contracts"],
-    ]) {
-      expect(obs).toContain(`<dt>${label}</dt><dd class="mono">${value}</dd>`);
-    }
+    // Every question reaches the reviewer, in the adapter's order, with its own
+    // answer: the six atomic answers are independent, so three `yes` answers
+    // coexist and an unanswered property stays `no` rather than inheriting one.
+    const rows = [...obs.matchAll(/<dt>([^<]*)<\/dt><dd class="mono">([^<]*)/g)]
+      .map((match) => [match[1], match[2].trim()] as const);
+    expect(rows).toEqual([
+      ["Outcome the lines produce", "changed"],
+      ["Comparison changed", "yes"],
+      ["Limit, size, or offset changed", "no"],
+      ["Validation or shape check changed", "yes"],
+      ["Failure propagated", "yes"],
+      ["Failure deferred", "no"],
+      ["Failure discarded", "unknown"],
+    ]);
     expect(obs).not.toMatch(/confidence/i);
 
     // A returned value outside its documented set is named, never echoed.
     const hostile = item({
       reasons: [],
-      judgment: { outcome: ATTACK, boundary: "limit", failureHandling: "swallowed", evidenceScope: "contracts", confidence: 0.5 },
+      judgment: judgment({ outcome: NOT_AN_ANSWER, comparisonChanged: NOT_AN_ANSWER }),
     });
     const other = visible(renderReview(report([hostile])));
     expect(other).not.toContain(ATTACK);
     expect(other).toContain('<dt>Outcome the lines produce</dt><dd class="mono">unrecognized value</dd>');
-    expect(other).toContain('<dt>Boundary at these lines</dt><dd class="mono">limit</dd>');
+    expect(other).toContain('<dt>Comparison changed</dt><dd class="mono">unrecognized value</dd>');
+    expect(other).toContain('<dt>Limit, size, or offset changed</dt><dd class="mono">no</dd>');
   });
 
-  test("an unclassified answer reads as a human decision, never as absence or a finding", () => {
+  test("an unknown answer reads as missing evidence, never as a defect or as an absence", () => {
     const html = visible(renderReview(report([item({
       status: "uncertain",
-      judgment: { outcome: "internal", boundary: "unknown", failureHandling: "unknown", evidenceScope: "not-established", confidence: 0.5 },
+      judgment: judgment({
+        outcome: "unknown",
+        limitChanged: "unknown",
+        validationChanged: "unknown",
+      }),
     })])));
     const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
-    // `unknown` is spelled out, so it cannot be read as "none" or "untouched".
-    expect(obs).toContain("not classified from the supplied state; a person should decide");
-    expect(obs).toMatch(/Boundary at these lines and Failure handling at these lines could not be classified/);
-    expect(obs).toContain("missing evidence, not a defect claim");
-    expect(obs).not.toContain(">none<");
-    expect(obs).not.toContain(">untouched<");
+    // `unknown` is spelled out, so it cannot be read as a "no" (absence) claim, and
+    // the outcome it applies to is the same statement about the evidence.
+    expect(obs).toContain("not determined from the supplied state; a person should decide");
+    expect(obs).toMatch(
+      /Outcome the lines produce and Limit, size, or offset changed and Validation or shape check changed could not be determined/,
+    );
+    // An answer the state settles still reads as its own answer.
+    expect(obs).toContain('<dt>Comparison changed</dt><dd class="mono">no</dd>');
     // The escalation is a hint under the observations, not a warning banner.
     expect(obs).not.toMatch(/bug|defect found|error|issue|problem with the code/i);
   });
 
   test("a hunk with no sample renders no observation block", () => {
     const html = visible(renderReview(report([item({ judgment: undefined })])));
-    expect(html).not.toContain("Single-sample typed observations");
+    expect(html).not.toContain('<details class="obs">');
+    expect(html).toContain("+const total = price + tax;");
   });
 
   test("mock and live differ by one mode note, with no mock banner", () => {

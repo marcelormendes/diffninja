@@ -1,5 +1,5 @@
 import type { PullRequestIntent, ReviewEvidence } from "./evidence-types.js";
-import type { OutcomeLevel, BoundaryObservation, FailureObservation, EvidenceScope } from "./jev.js";
+import type { AtomicObservation, OutcomeChoice } from "./jev.js";
 
 export type ReviewStatus = "attention" | "uncertain" | "low" | "passed";
 /**
@@ -85,6 +85,28 @@ export interface ReviewContextNode {
  * and explicitly records that the available context is incomplete.
    */
   detail: string;
+  /** Extractor-owned facts, never parsed from source text or inferred by the model. */
+  provenance?: {
+    snapshot: "before" | "after";
+    role: "changed-definition" | "caller" | "callee";
+    sourcePresent: boolean;
+    contract: boolean;
+  };
+}
+
+/** Readable admitted definitions, by snapshot; categories can coexist. */
+export interface ContextPresenceCounts {
+  changedDefinitions: number;
+  callerDefinitions: number;
+  calleeDefinitions: number;
+  contracts: number;
+}
+
+/** Presence in the actual payload, not sufficiency or exhaustive caller coverage. */
+export interface ContextPresence {
+  before: ContextPresenceCounts;
+  after: ContextPresenceCounts;
+  unclassifiedNodes: number;
 }
 
 /** One parsed piece of the input: a text hunk, or a file's metadata-only change. */
@@ -116,10 +138,18 @@ export interface ReviewUnit {
   contextNodes?: ReviewContextNode[];
 }
 export interface Judgment {
-  outcome: OutcomeLevel;
-  boundary: BoundaryObservation;
-  failureHandling: FailureObservation;
-  evidenceScope: EvidenceScope;
+  /**
+   * Whether the shown edit changes what a consumer of this code can observe or
+   * rely on, is equivalent for those consumers, or could not be separated from
+   * the supplied state. Unordered: `changed` is not "more" than `unchanged`.
+   */
+  outcome: OutcomeChoice;
+  comparisonChanged: AtomicObservation;
+  limitChanged: AtomicObservation;
+  validationChanged: AtomicObservation;
+  failurePropagated: AtomicObservation;
+  failureDeferred: AtomicObservation;
+  failureDiscarded: AtomicObservation;
   /** Lowest returned confidence; informational, never an outcome verdict. */
   confidence: number;
 }

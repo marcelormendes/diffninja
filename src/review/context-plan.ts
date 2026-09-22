@@ -25,7 +25,7 @@
 
 import { MAX_STATE_CHARS } from "./context-limits.js";
 import type { JevState } from "./jev.js";
-import type { ReviewContextNode } from "./types.js";
+import type { ContextPresence, ContextPresenceCounts, ReviewContextNode } from "./types.js";
 
 /** Most nodes one state considers; the extractor already ordered them by retention priority. */
 export const MAX_CONTEXT_NODES = 8;
@@ -50,10 +50,11 @@ const STRUCTURED_CONTEXT_CAVEAT =
   "state is omitted. A node is carried whole or not at all: this state never carries a shortened " +
   "definition. Dynamic calls, higher-order invocation, overload resolution, implicit arguments, " +
   "unsupported syntax or languages, and parse failures may leave relevant context absent. Nodes are " +
-  "not complete caller contracts. Missing context establishes neither safety nor a defect: when the " +
-  "supplied context does not show how the changed lines are reached, answer evidence_scope with " +
-  "not-established instead of inferring a caller, and answer unknown for a boundary or failure " +
-  "question the shown lines do not classify rather than reporting that none exists.";
+  "not complete caller contracts. contextPresence counts only readable admitted definitions by " +
+  "extractor provenance, not runtime reachability or sufficiency. Missing context establishes " +
+  "neither safety nor a defect. Answer each property independently; another property also applying " +
+  "is not a reason for unknown. When these nodes leave the consumer-visible effect of the change " +
+  "unclear, answer the outcome question unknown rather than unchanged or changed.";
 
 /** Note for the admitted nodes, plus the counts of every node the state omits. */
 function contextNote(omittedByCount: number, omittedBySize: number): string {
@@ -83,13 +84,38 @@ function distinctNodes(nodes: readonly ReviewContextNode[]): ReviewContextNode[]
   return distinct;
 }
 
+/** Count only admitted source whose role and snapshot the extractor established. */
+export function contextPresenceOf(nodes: readonly ReviewContextNode[]): ContextPresence {
+  const empty = (): ContextPresenceCounts => ({
+    changedDefinitions: 0, callerDefinitions: 0, calleeDefinitions: 0, contracts: 0,
+  });
+  const presence: ContextPresence = { before: empty(), after: empty(), unclassifiedNodes: 0 };
+  for (const node of nodes) {
+    const provenance = node.provenance;
+    if (!provenance) {
+      presence.unclassifiedNodes++;
+      continue;
+    }
+    if (!provenance.sourcePresent) continue;
+    const counts = presence[provenance.snapshot];
+    if (provenance.role === "changed-definition") counts.changedDefinitions++;
+    else if (provenance.role === "caller") counts.callerDefinitions++;
+    else counts.calleeDefinitions++;
+    if (provenance.contract) counts.contracts++;
+  }
+  return presence;
+}
+
 /** The base state's essentials plus this selection's note and whole nodes. */
 function renderedState(
   base: JevState,
   nodes: readonly ReviewContextNode[],
   note: string,
 ): JevState {
-  return { file: base.file, hunk: base.hunk, diff: base.diff, contextNodes: nodes, contextNote: note };
+  return {
+    file: base.file, hunk: base.hunk, diff: base.diff, contextNodes: nodes,
+    contextNote: note, contextPresence: contextPresenceOf(nodes),
+  };
 }
 
 /**

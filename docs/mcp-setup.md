@@ -116,7 +116,7 @@ TypeSafe and needs `TYPESAFE_API_KEY`. In static mode the report carries
 fixtures — they do not mean a hunk is safe.
 The result also includes deterministic evidence, a short reading agenda, and
 check coverage. Live Jev evaluation makes one HTTP attempt per evaluable hunk,
-with four fixed-order typed questions and no retries or adaptive rounds.
+with a fixed-order typed question set and no retries or adaptive rounds.
 Confidence does not rank hunks; stochastic judgments may differ between runs
 without changing the deterministic evidence agenda.
 

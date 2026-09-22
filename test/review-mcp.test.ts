@@ -9,11 +9,11 @@ import { CallToolResultSchema, type CallToolRequest, type CallToolResult } from 
 import { afterEach, describe, expect, test } from "vitest";
 import { createReviewServer } from "../src/review/mcp.js";
 import type { ConnectedSnapshot } from "../src/review/github.js";
-import type { ReviewReport, ReviewStatus } from "../src/review/types.js";
+import { REPORT_PLACEMENT } from "../src/review/pipeline.js";
+import type { ReviewReport } from "../src/review/types.js";
 
 const patch = readFileSync(resolve("examples/review/checkout.patch"), "utf8");
 const GIT_ENV = ["-c", "user.name=MCP Test", "-c", "user.email=mcp@example.invalid"];
-const STATUS_RANK = { attention: 0, uncertain: 1, low: 2, passed: 3 } satisfies Record<ReviewStatus, number>;
 
 /** Every opened pair is torn down after each test so no transport or client leaks. */
 const closers: Array<() => Promise<void>> = [];
@@ -139,15 +139,20 @@ describe("review_diff over the MCP protocol", () => {
     // The text payload and the structured payload are the same report.
     expect(result.structuredContent).toEqual(report);
 
-    // Ranked: attention first, higher priority before lower inside a status.
-    const rank = report.items.map(item => STATUS_RANK[item.status]);
-    expect(rank).toEqual([...rank].sort((left, right) => left - right));
+    // Ordered by the report contract: the work no model settled first (highest
+    // priority first), then the judged hunks by numeric priority descending
+    // whatever their status, then the deterministic pass. Status never reorders.
+    const placement = report.items.map(item =>
+      item.judgment !== undefined
+        ? REPORT_PLACEMENT.judged
+        : item.status === "passed" ? REPORT_PLACEMENT.passed : REPORT_PLACEMENT.unjudged);
+    expect(placement).toEqual([...placement].sort((left, right) => left - right));
     for (const [index, item] of report.items.entries()) {
       expect(item.priority).toBeGreaterThanOrEqual(0);
       expect(item.priority).toBeLessThanOrEqual(100);
       if (index > 0) {
         const previous = report.items[index - 1];
-        if (STATUS_RANK[previous.status] === STATUS_RANK[item.status]) {
+        if (placement[index - 1] === placement[index]) {
           expect(previous.priority).toBeGreaterThanOrEqual(item.priority);
         }
       }

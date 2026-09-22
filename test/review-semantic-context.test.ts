@@ -42,6 +42,10 @@ describe("addressable non-call context", () => {
     const state = buildContextState(buildJevState(unit), context.nodes);
     expect(state.contextNodes?.some(node => node.file === "types.ts")).toBe(true);
     expect(state.contextNodes?.some(node => node.file === "api.ts")).toBe(true);
+    expect(state.contextPresence.after.contracts).toBe(1);
+    expect(state.contextPresence.after.callerDefinitions).toBeGreaterThan(0);
+    expect(state.contextPresence.before.contracts).toBe(0);
+    expect(state.contextPresence.unclassifiedNodes).toBe(0);
   });
 
   test("a changed interface selects its declaration and syntactic consumers", () => {
