@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { renderReview } from "../src/review/html.js";
 import type { ReviewItem, ReviewReport } from "../src/review/types.js";
+import type {
+  AutomaticFinding,
+  EvidenceExcerpt,
+  ReviewAgendaEntry,
+  ReviewEvidence,
+} from "../src/review/evidence-types.js";
 
 const ATTACK = '<img src=x onerror="alert(1)"><script>alert(1)</script>';
 
@@ -51,6 +57,67 @@ function scriptOf(html: string): string {
   return /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? "";
 }
 
+/** The escaping the renderer applies, for asserting text appears verbatim-safe. */
+function escapeForAssert(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/** A minimal cross-check over the fixture hunk, for the opening view tests. */
+function evidence(overrides: Partial<ReviewEvidence> = {}): ReviewEvidence {
+  return {
+    findings: [],
+    checks: [],
+    agenda: [],
+    intent: { verdict: "not-established", summary: "", claims: [], obligations: [] },
+    ...overrides,
+  };
+}
+
+function agenda(overrides: Partial<ReviewAgendaEntry> = {}): ReviewAgendaEntry {
+  return {
+    id: "agenda-1",
+    title: "Read the changed return value",
+    reason: "The changed lines feed a caller in the same range.",
+    priority: 1,
+    unitIds: ["hunk-1"],
+    findingIds: [],
+    evidence: [],
+    context: [],
+    ...overrides,
+  };
+}
+
+function excerpt(overrides: Partial<EvidenceExcerpt> = {}): EvidenceExcerpt {
+  return {
+    id: "excerpt-1",
+    label: "Changed lines",
+    file: "src/checkout.ts",
+    line: 1,
+    ref: "23e53ae",
+    text: "+const total = price + tax;",
+    role: "change",
+    ...overrides,
+  };
+}
+
+function finding(overrides: Partial<AutomaticFinding> = {}): AutomaticFinding {
+  return {
+    id: "unused-error-result:1",
+    kind: "unused-error-result",
+    title: "The error field of the response is not read here",
+    scope: "one resolved response object read across the changed files",
+    limitation: "An unused field is not a lost failure elsewhere.",
+    unitIds: ["hunk-1"],
+    evidence: [],
+    ...overrides,
+  };
+}
+
 interface Row {
   kind: string;
   old: string;
@@ -97,7 +164,13 @@ describe("review HTML", () => {
             special: ATTACK,
             callFlow: [ATTACK],
             reasons: [ATTACK],
-            judgment: { risk: 1, bug: 0.1, needsHuman: 0.2, confidence: 0.8, category: ATTACK },
+            judgment: {
+              outcome: ATTACK,
+              boundary: ATTACK,
+              failureHandling: ATTACK,
+              evidenceScope: ATTACK,
+              confidence: 0.8,
+            },
           }),
         ],
         {
@@ -121,7 +194,7 @@ describe("review HTML", () => {
     expect(visible(html)).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
   });
 
-  test("every hunk renders open with its full diff text", () => {
+  test("every hunk renders folded with its full diff text one click away", () => {
     const statuses = ["attention", "uncertain", "low", "passed"] as const;
     const found = cards(
       renderReview(report(statuses.map((status) => item({ status })))),
@@ -129,10 +202,11 @@ describe("review HTML", () => {
     expect(found).toHaveLength(statuses.length);
     for (const [index, status] of statuses.entries()) {
       expect(found[index].attrs).toContain(`data-status="${status}"`);
-      expect(/\bopen\b/.test(found[index].attrs)).toBe(true);
+      expect(/\bopen\b/.test(found[index].attrs)).toBe(false);
       expect(found[index].html).toContain("+const total = price + tax;");
       expect(found[index].html).toContain("-const total = price;");
     }
+    expect(visible(renderReview(report([item()])))).toContain('id="item-1">');
   });
 
   test("distinguishes a context-limit skip from a judged uncertain hunk without extra counts", () => {
@@ -142,7 +216,7 @@ describe("review HTML", () => {
       routing: { evaluation: "not_evaluated", reasonCode: "context_limit_exceeded", requiredChars: 25000, limitChars: 24000 },
     });
     const judged = item({ ...skipped, id: "callee", routing: undefined,
-      judgment: { risk: 1, bug: 0.5, needsHuman: 0.8, confidence: 0.9, category: "logic" } });
+      judgment: { outcome: "caller-visible", boundary: "limit", failureHandling: "untouched", evidenceScope: "changed-code", confidence: 0.9 } });
     const rendered = visible(renderReview(report([skipped, judged])));
     const found = cards(rendered);
     expect(found).toHaveLength(2);
@@ -283,24 +357,82 @@ describe("review HTML", () => {
     expect(nav[2][2]).toContain("c.ts");
   });
 
-  test("the visible report drops reasons, judgment numbers, priority and model metadata", () => {
+  test("the visible report drops ranking numbers, weights and vendor confidence", () => {
     const unit = item({
       priority: 87,
-      reasons: ["Review boundary handling"],
-      judgment: { risk: 2.5, bug: 0.72, needsHuman: 0.81, confidence: 0.4, category: "logic" },
+      reasons: [
+        "outcome observation: caller-visible (weight 2.4/3; the strongest level holds 85% of the returned distribution)",
+        "model confidence 0.4 (self-reported by one response; informational, not a ranking gate)",
+        "routed to uncertain: an answer did not separate its options, so a human has to decide",
+      ],
+      judgment: { outcome: "caller-visible", boundary: "limit", failureHandling: "swallowed", evidenceScope: "direct-callers", confidence: 0.4 },
     });
     const html = visible(renderReview(report([unit], {
       modelCalls: 3, warnings: ["Private assessment metadata"], callFlow: [],
     })));
-    expect(html).not.toMatch(/review boundary handling/i);
-    expect(html).not.toMatch(/reasons/i);
+    expect(html).not.toMatch(/weight\s*\d/i);
+    expect(html).not.toMatch(/model confidence/i);
+    expect(html).not.toMatch(/\brisk\b|bug likelihood|needs context/i);
     expect(html).not.toMatch(/\/\s*100/);
     expect(html).not.toMatch(/model estimates/i);
     expect(html).not.toMatch(/api calls/i);
-    expect(html).not.toMatch(/\b(model|judgments?|priority|ranked|rankings?)\b/i);
+    expect(html).not.toMatch(/\bpriority\b|\branked\b|\brankings?\b/i);
     expect(html).not.toContain("Private assessment metadata");
-    expect(html).not.toMatch(/\bRisk\b|Bug likelihood|Needs context|logic|2\.5|87/);
-    expect(html).not.toMatch(/\b\d{1,3}%/);
+    expect(html).not.toMatch(/\b87\b|0\.4/);
+    // No reason prose is parsed or printed, not even the routing line.
+    expect(html).not.toMatch(/did not separate its options, so a human has to decide/);
+    expect(html).not.toContain("routed to uncertain");
+  });
+
+  test("typed observations are printed from closed sets and unrecognized values are never echoed", () => {
+    const unit = item({
+      file: "src/lease.ts",
+      status: "uncertain",
+      reasons: ["model confidence 0.6 (self-reported by one response; informational, not a ranking gate)"],
+      judgment: { outcome: "contract", boundary: "unknown", failureHandling: "propagated", evidenceScope: "contracts", confidence: 0.6 },
+    });
+    const html = visible(renderReview(report([unit])));
+    const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
+    expect(obs).toContain("Single-sample typed observations");
+    for (const [label, value] of [
+      ["Outcome the lines produce", "contract"],
+      ["Failure handling at these lines", "propagated"],
+      ["Evidence the sample reached", "contracts"],
+    ]) {
+      expect(obs).toContain(`<dt>${label}</dt><dd class="mono">${value}</dd>`);
+    }
+    expect(obs).not.toMatch(/confidence/i);
+
+    // A returned value outside its documented set is named, never echoed.
+    const hostile = item({
+      reasons: [],
+      judgment: { outcome: ATTACK, boundary: "limit", failureHandling: "swallowed", evidenceScope: "contracts", confidence: 0.5 },
+    });
+    const other = visible(renderReview(report([hostile])));
+    expect(other).not.toContain(ATTACK);
+    expect(other).toContain('<dt>Outcome the lines produce</dt><dd class="mono">unrecognized value</dd>');
+    expect(other).toContain('<dt>Boundary at these lines</dt><dd class="mono">limit</dd>');
+  });
+
+  test("an unclassified answer reads as a human decision, never as absence or a finding", () => {
+    const html = visible(renderReview(report([item({
+      status: "uncertain",
+      judgment: { outcome: "internal", boundary: "unknown", failureHandling: "unknown", evidenceScope: "not-established", confidence: 0.5 },
+    })])));
+    const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
+    // `unknown` is spelled out, so it cannot be read as "none" or "untouched".
+    expect(obs).toContain("not classified from the supplied state; a person should decide");
+    expect(obs).toMatch(/Boundary at these lines and Failure handling at these lines could not be classified/);
+    expect(obs).toContain("missing evidence, not a defect claim");
+    expect(obs).not.toContain(">none<");
+    expect(obs).not.toContain(">untouched<");
+    // The escalation is a hint under the observations, not a warning banner.
+    expect(obs).not.toMatch(/bug|defect found|error|issue|problem with the code/i);
+  });
+
+  test("a hunk with no sample renders no observation block", () => {
+    const html = visible(renderReview(report([item({ judgment: undefined })])));
+    expect(html).not.toContain("Single-sample typed observations");
   });
 
   test("mock and live differ by one mode note, with no mock banner", () => {
@@ -389,7 +521,257 @@ describe("review HTML", () => {
     expect(rendered).toContain("-const total = price;");
     expect(html.match(/<script\b/g)).toHaveLength(1);
     expect(html).not.toMatch(/<script[^>]+src=|<link\b|@import|url\(["']?https?:/i);
+    // No external resource is fetched; the only absolute href the report can
+    // emit is a github pull request link, which this fixture does not have.
     expect([...html.matchAll(/href="([^"]*)"/g)].every((match) => match[1].startsWith("#"))).toBe(true);
+  });
+
+  test("the report opens on the expected outcome, before the agenda and the diagrams", () => {
+    const html = visible(renderReview(report([item()], {
+      pr: { title: "Sync residents", body: "Body text" },
+      evidence: evidence({
+        agenda: [agenda()],
+        checks: [{ kind: "broken-reference", status: "not-checked", detail: "No trusted checker result for this revision." }],
+        findings: [finding()],
+      }),
+    })));
+    const order = ['id="view-brief"', 'id="brief-outcome"', 'id="brief-pr"', 'id="brief-intent-h"', 'id="brief-checks-h"', 'id="brief-agenda-h"', 'id="brief-findings-h"', 'id="view-call-flow"', 'id="view-diff"'];
+    let at = -1;
+    for (const marker of order) {
+      const found = html.indexOf(marker);
+      expect(found, `${marker} is missing`).toBeGreaterThan(-1);
+      expect(found, `${marker} is out of order`).toBeGreaterThan(at);
+      at = found;
+    }
+    expect(html).toMatch(/Outcome<\/a>/);
+  });
+
+  test("the pull request text is escaped, its description is folded, and it never reaches the script", () => {
+    const html = renderReview(report([item()], {
+      evidence: evidence(),
+      pr: { title: ATTACK, body: `${ATTACK}\nrefactor only`, url: "https://example.invalid/pr/1", baseRef: "main", headRef: "topic" },
+    }));
+    const rendered = visible(html);
+    expect(html).not.toContain(ATTACK);
+    expect(html).not.toMatch(/<(img|iframe)\b/i);
+    expect(scriptOf(html)).not.toContain("alert(1)");
+    expect(rendered).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+    expect(rendered).toContain("refactor only");
+    expect(rendered).toContain('<dt>Title</dt>');
+  });
+
+  test("only a validated github pull request URL becomes a link", () => {
+    const cases: readonly (readonly [string, boolean])[] = [
+      ["https://github.com/o/r/pull/4334", true],
+      ["https://github.com/marcelormendes/diffninja/pull/1", true],
+      ["javascript:alert(1)", false],
+      ["data:text/html,<script>alert(1)</script>", false],
+      ["https://evil.example/github.com/o/r/pull/1", false],
+      ["https://github.com.evil.example/o/r/pull/1", false],
+      ["https://user@github.com/o/r/pull/1", false],
+      ["http://github.com/o/r/pull/1", false],
+      ["https://github.com/o/r/issues/1", false],
+      ["https://github.com/o/r/pull/1/../../evil", false],
+      ["https://github.com/o/r/pull/1?x=<script>", false],
+    ];
+    for (const [url, linked] of cases) {
+      const html = visible(renderReview(report([item()], {
+        evidence: evidence(),
+        pr: { title: "Sync", body: "", url },
+      })));
+      const anchor = /<a href="([^"]*)" rel="noreferrer noopener">/.exec(html);
+      if (linked) {
+        expect(anchor?.[1], `${url} should link`).toBe(url);
+      } else {
+        expect(anchor, `${url} must not become a link`).toBeNull();
+        expect(html).toContain(escapeForAssert(url));
+      }
+      expect(html).not.toContain('href="javascript:');
+    }
+  });
+
+  test("an absent description is stated rather than left blank", () => {
+    const html = visible(renderReview(report([item()], {
+      evidence: evidence(),
+      pr: { title: "Sync residents", body: "" },
+    })));
+    expect(html).toContain("The pull request has no description.");
+    expect(html).not.toContain('class="pr-body"');
+  });
+
+  test("agenda cards link the hunks and evidence they point at", () => {
+    const html = visible(renderReview(report([item(), item({ id: "hunk-2", file: "src/lease.ts" })], {
+      evidence: evidence({
+        agenda: [
+          agenda({ unitIds: ["hunk-2"], evidence: [excerpt({ id: "e-2", file: "src/lease.ts", line: 9, role: "caller", label: "Direct caller" })], context: [] }),
+          agenda({ id: "agenda-2", title: "Second", unitIds: ["hunk-1"], evidence: [excerpt({ id: "e-1" })], context: [] }),
+        ],
+      }),
+    })));
+    const links = [...html.matchAll(/<a class="ev-hunk" data-open-hunk href="#item-(\d+)">Open hunk #(\d+)<\/a>/g)];
+    expect(links.map((m) => m[1])).toEqual(["2", "1"]);
+    expect(html).toContain('<span class="ev-role">Direct caller</span>');
+    expect(html).toContain("src/lease.ts:9");
+    expect(html).toContain("from 23e53ae");
+    expect(html).toContain("+const total = price + tax;");
+  });
+
+  test("evidence a finding carries is linked from the agenda instead of repeated", () => {
+    const shared = excerpt({ id: "shared", text: "+const total = price + tax;" });
+    const html = visible(renderReview(report([item({ diff: "@@ -1 +1 @@\n+const total = price + tax;\n" })], {
+      evidence: evidence({
+        findings: [finding({ id: "f-1", evidence: [shared] })],
+        agenda: [agenda({ findingIds: ["f-1"], evidence: [shared] })],
+      }),
+    })));
+    expect(html.match(/\+const total = price \+ tax;/g)).toHaveLength(2);
+    expect(html).toContain('href="#finding-1"');
+    expect(html).toContain('<li class="finding" id="finding-1">');
+  });
+
+  test("a definition two agenda entries cite is rendered once and linked after that", () => {
+    const node = {
+      key: "after:create",
+      label: "create(input)",
+      file: "src/order.ts",
+      line: 40,
+      detail: "function create(input) {\n  return input;\n}",
+    };
+    const html = visible(renderReview(report([item()], {
+      evidence: evidence({
+        agenda: [
+          agenda({ id: "a1", context: [node] }),
+          agenda({ id: "a2", title: "Second", context: [node] }),
+        ],
+      }),
+    })));
+    expect(html.match(/id="ctx-1"/g)).toHaveLength(1);
+    expect(html).toContain('<a class="ag-ctx-again" href="#ctx-1">src/order.ts:40 shown above</a>');
+    expect(html.match(/return input;/g)).toHaveLength(1);
+  });
+
+  test("checks state their scope and never claim a pass", () => {
+    const html = visible(renderReview(report([item()], {
+      evidence: evidence({
+        checks: [
+          { kind: "duplicate-body", status: "checked", detail: "Compared the parsed bodies of 12 changed functions." },
+          { kind: "broken-reference", status: "not-checked", detail: "No trusted project-checker result is available for this revision." },
+        ],
+      }),
+    })));
+    expect(html).toContain("Compared the parsed bodies of 12 changed functions.");
+    expect(html).toContain("No trusted project-checker result is available for this revision.");
+    expect(html).toMatch(/ev-badge-warn[^>]*>Not checked</);
+    // Absence of a check is never reported as absence of a problem.
+    expect(html).not.toMatch(/safe to skip|no issues|all checks passed|clean/i);
+    expect(html).toContain("A check that is not listed here produced no result for this pull request.");
+  });
+
+  test("a finding carries its own scope and limit, and no finding claims safety", () => {
+    const html = visible(renderReview(report([item()], {
+      evidence: evidence({ findings: [finding({ evidence: [excerpt()] })] }),
+    })));
+    expect(html).toContain('<span class="finding-label">Checked</span> one resolved response object read across the changed files');
+    expect(html).toContain('<span class="finding-label">Limit</span> An unused field is not a lost failure elsewhere.');
+    expect(html).toContain("Unused failure result");
+    const empty = visible(renderReview(report([item()], { evidence: evidence() })));
+    expect(empty).toContain("No automatic finding was reported.");
+    expect(empty).toMatch(/an empty list is not a statement about the code/);
+  });
+
+  test("the verdict describes the evidence it rests on, never overall correctness", () => {
+    const supported = visible(renderReview(report([item()], {
+      evidence: evidence({
+        intent: {
+          verdict: "supported-within-checked-scope",
+          summary: "Consumers are updated in the changed files.",
+          claims: [{ text: "Consumers are updated", origin: "title", status: "evidence-linked", unitIds: ["hunk-1"], explanation: "The changed caller reads the changed shape." }],
+          obligations: [],
+        },
+      }),
+    })));
+    expect(supported).toContain("Supported within the checked scope");
+    expect(supported).toContain("PR title");
+    expect(supported).toContain("Evidence linked");
+    expect(supported).toContain('href="#item-1">Open hunk #1</a>');
+    // The scope qualifier is part of the label, so it cannot be read as a pass.
+    expect(supported).not.toMatch(/correct|verified|approved|safe/i);
+
+    const unknown = visible(renderReview(report([item()], {
+      evidence: evidence({
+        intent: {
+          verdict: "not-established",
+          summary: "End-to-end fulfillment is not established.",
+          claims: [{ text: "Covered end to end", origin: "generated-summary", status: "not-established", unitIds: [], explanation: "No changed test exercises the flow." }],
+          obligations: ["Retry the partial failure."],
+        },
+      }),
+    })));
+    expect(unknown).toContain("Not established");
+    expect(unknown).toContain("Generated summary");
+    expect(unknown).toContain("Retry the partial failure.");
+  });
+
+  test("every hunk stays reachable, folded, with or without a cross-check", () => {
+    for (const withEvidence of [true, false]) {
+      const html = renderReview(report(
+        [item(), item({ id: "hunk-2", file: "src/other.ts" })],
+        withEvidence ? { evidence: evidence({ agenda: [agenda()] }) } : {},
+      ));
+      const found = cards(html);
+      expect(found).toHaveLength(2);
+      for (const card of found) {
+        expect(/\bopen\b/.test(card.attrs)).toBe(false);
+        expect(card.html).toContain("+const total = price + tax;");
+      }
+      expect(html).toContain('id="item-1"');
+      expect(html).toContain('id="item-2"');
+    }
+  });
+
+  test("a report with a cross-check opens on the outcome and a legacy report on the call flow", () => {
+    const fresh = renderReview(report([item()], { evidence: evidence({ agenda: [agenda()] }) }));
+    expect(fresh).toContain('<body data-default-view="brief">');
+    expect(fresh).toContain('href="#view-brief" data-view="brief">Outcome</a>');
+    const legacy = renderReview(report([item()]));
+    expect(legacy).toContain('<body data-default-view="call-flow">');
+    expect(legacy).toContain("No pull request metadata was recorded for this report.");
+    expect(legacy).toContain("No intent cross-check was recorded for this report.");
+  });
+
+  test("the alternate call-flow modes ship inert and the tree stays readable without scripts", () => {
+    const html = visible(renderReview(report([item()], {
+      callFlowAvailability: "available",
+      callFlows: [{
+        file: "src/checkout.ts",
+        truncated: false,
+        trees: [{
+          key: "checkout",
+          label: "checkout",
+          file: "src/checkout.ts",
+          line: 1,
+          status: "changed",
+          children: [{ key: "charge", label: "charge", file: "src/checkout.ts", line: 3, status: "same", children: [] }],
+        }],
+      }],
+    })));
+    // Tree is live markup; graph and sequence wait, inert, inside templates.
+    expect(html).toMatch(/<section class="cf-mode cf-mode-tree"/);
+    const graph = /<template data-cf-lazy-mode="graph" data-cf-file="1">([\s\S]*?)<\/template>/.exec(html)?.[1] ?? "";
+    const sequence = /<template data-cf-lazy-mode="sequence" data-cf-file="1">([\s\S]*?)<\/template>/.exec(html)?.[1] ?? "";
+    expect(graph).toMatch(/<section class="cf-mode cf-mode-graph"/);
+    expect(sequence).toMatch(/<section class="cf-mode cf-mode-sequence"/);
+    // The tree section itself is not inside a template, so it renders without scripts.
+    expect(html.indexOf('cf-mode cf-mode-tree')).toBeLessThan(html.indexOf("<template"));
+    // The mode switch is script-only, so its anchors cannot be dead links, and
+    // the page says which renderings a reader without scripts is missing.
+    expect(html).toContain('<a class="cf-mode-link enhanced" data-cf-mode="graph"');
+    expect(html).toMatch(/<noscript class="cf-noscript">.*Graph and Sequence are alternate renderings/s);
+    expect(html).toContain("The diff holds every changed line.");
+    // The markup is still all there for a reader without the script.
+    expect(html).toContain("charge");
+    expect(graph).toMatch(/<svg\b/);
+    expect(html.match(/<template\b/g)).toHaveLength(2);
   });
 
 });

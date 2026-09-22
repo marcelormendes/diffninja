@@ -27,9 +27,12 @@ import type {
  * Call-flow navigation for a review report: Tree, Graph and Sequence views of
  * the syntactic call trees that touch each changed file.
  *
- * Everything is server-rendered, so all three modes are readable with
- * JavaScript disabled: mode sections stack under their own headings, tree
- * nodes fold with native `<details>`, and the resolved definition of a call —
+ * Everything is server-rendered. Tree mode is live markup, so calls, call
+ * sites and each resolved definition are readable with JavaScript disabled; the
+ * Graph and Sequence renderings of the same calls ship inside templates and are
+ * instantiated the first time their mode is opened, which costs no live nodes
+ * until then, and the page states that plainly where it matters. Tree nodes fold
+ * with native `<details>`, and the resolved definition of a call —
  * line-numbered and escaped — sits in its own `<details>` under the call. The
  * appended script switches modes, keeps an explicit trail of the functions the
  * reviewer visited, limits the graph to a depth below the focused call, and
@@ -211,14 +214,21 @@ function renderSummary(files: readonly FileView[], totalFiles: number): string {
   ].join("\n");
 }
 
-/** Mode anchors work without JavaScript (each jumps to its section); the
- *  script marks the active one with aria-current once all modes are switchable.
- *  The depth control exists only with the script and only bounds the graph: it
- *  counts call levels below the focused call, and the focus itself resets it. */
+/**
+ * Mode anchors work without JavaScript (each jumps to its section); the
+ * script marks the active one with aria-current once all modes are switchable.
+ *
+ * The switch is script-only, because only the script can instantiate the graph
+ * and sequence sections: markup for them ships inside templates, so without the
+ * script those anchors would point at nothing. A reader without the script gets
+ * Tree, which is complete, plus the note `renderModesNote` renders.
+ * The depth control exists only with the script and only bounds the graph: it
+ * counts call levels below the focused call, and the focus itself resets it.
+ */
 function renderControls(): string {
   const links = MODES.map(
     (mode) =>
-      `<a class="cf-mode-link" data-cf-mode="${mode}" href="#cf-f1-${mode}">${MODE_LABEL[mode]}</a>`,
+      `<a class="cf-mode-link enhanced" data-cf-mode="${mode}" href="#cf-f1-${mode}">${MODE_LABEL[mode]}</a>`,
   ).join("");
   const depths = CALL_FLOW_DEPTHS.map(
     (depth) =>
@@ -273,7 +283,7 @@ function renderJump(files: readonly FileView[]): string {
 function renderFile(view: FileView, at: number): string {
   const { dot, tone, count } = fileFacts(view);
   const status = view.status;
-  const diff = `<a class="cf-diff-link" data-flow-diff href="#item-${view.rank}">View diff #${view.rank}</a>`;
+  const diff = `<a class="cf-diff-link" data-open-hunk href="#item-${view.rank}">View diff #${view.rank}</a>`;
   return [
     `<details class="cf-file cf-file-${status}" id="cf-f${at}" data-cf-file="${at}"${at === 1 ? " open" : ""}>`,
     '<summary class="cf-file-head">',
@@ -287,6 +297,7 @@ function renderFile(view: FileView, at: number): string {
     view.truncated
       ? `<p class="cf-bounds">Bounds reached for this file: ${escapeHtml(BOUNDS_TEXT)}. Calls cut at a bound are omitted.</p>`
       : "",
+    modesNote(),
     renderModes(view, at),
     "</div>",
     "</details>",
@@ -295,12 +306,37 @@ function renderFile(view: FileView, at: number): string {
     .join("\n");
 }
 
+/**
+ * The three views of the same trees, in the order a reviewer reads them: Tree is
+ * rendered eagerly because it is the default mode and the one a reader without
+ * the script keeps; Graph and Sequence are alternate renderings of the same
+ * calls, so each is shipped inside a `<template>` and instantiated the first
+ * time its mode is opened. A template's content is inert markup: it costs the
+ * same bytes but adds no live nodes to the page, which is what keeps the DOM of a
+ * 50-file pull request small enough to load quickly.
+ */
 function renderModes(view: FileView, at: number): string {
   return [
     renderTreeMode(view, at),
-    renderGraphMode(view, at),
-    renderSequenceMode(view, at),
+    lazyMode("graph", at, renderGraphMode(view, at)),
+    lazyMode("sequence", at, renderSequenceMode(view, at)),
   ].join("\n");
+}
+
+/**
+ * What a reader without the page script gets. Only Tree is live markup, so this
+ * says which renderings are missing instead of letting them look absent, and the
+ * diff — every changed line, including hunks no evaluation covers — is complete
+ * in both cases.
+ */
+function modesNote(): string {
+  return (
+    `<noscript class="cf-noscript"><p class="cf-note">` +
+    `Graph and Sequence are alternate renderings of these same calls, drawn by the page script, ` +
+    `so they are not shown here. Tree lists every call with its source location and each call's ` +
+    `resolved definition opens on its own. The diff holds every changed line.` +
+    `</p></noscript>`
+  );
 }
 
 function modeSection(mode: FlowMode, at: number, body: string): string {
@@ -310,6 +346,11 @@ function modeSection(mode: FlowMode, at: number, body: string): string {
     body,
     "</section>",
   ].join("\n");
+}
+
+/** A mode section held back until the script first shows that mode. */
+function lazyMode(mode: FlowMode, at: number, section: string): string {
+  return `<template data-cf-lazy-mode="${mode}" data-cf-file="${at}">${section}</template>`;
 }
 
 function renderTreeMode(view: FileView, at: number): string {
@@ -861,6 +902,8 @@ export const CALL_FLOW_STYLES = `
 .cf-diff-link { font-size: 12px; white-space: nowrap; }
 .cf-file-body { border-top: 1px solid var(--line); padding: 0 14px 14px; }
 .cf-mode { padding-top: 12px; }
+.cf-noscript { display: block; }
+.cf-noscript .cf-note { margin: 6px 0 0; }
 .cf-mode + .cf-mode { margin-top: 12px; border-top: 1px dashed var(--line); }
 .cf-mode-head {
   margin: 0 0 8px;
@@ -1502,11 +1545,50 @@ export const CALL_FLOW_SCRIPT = `
     if (scrollBack) host.scrollIntoView({ block: 'start' });
   }
 
+  // Graph and Sequence ship inside templates: their markup costs no live nodes
+  // until the mode is first opened. Instantiating is one-way and in place, so
+  // the mode sections keep their document order and their ids.
+  function activateMode(mode) {
+    var pending = host.querySelectorAll('template[data-cf-lazy-mode]');
+    var added = [];
+    for (var i = 0; i < pending.length; i++) {
+      if (pending[i].getAttribute('data-cf-lazy-mode') !== mode) continue;
+      var parent = pending[i].parentNode;
+      var fragment = pending[i].content;
+      var nodes = Array.prototype.slice.call(fragment.children);
+      parent.replaceChild(fragment, pending[i]);
+      for (var n = 0; n < nodes.length; n++) added.push(nodes[n]);
+    }
+    if (!added.length) return;
+    observeWraps(added);
+  }
+
+  function observeWraps(nodes) {
+    var found = [];
+    for (var i = 0; i < nodes.length; i++) {
+      if (!nodes[i].querySelectorAll) continue;
+      var wraps = nodes[i].querySelectorAll('.cf-svg-wrap');
+      for (var j = 0; j < wraps.length; j++) found.push(wraps[j]);
+    }
+    for (var w = 0; w < found.length; w++) {
+      found[w].tabIndex = 0;
+      found[w].setAttribute('role', 'region');
+      found[w].setAttribute('aria-label', 'Pannable call graph. Arrow keys pan, plus and minus zoom, Home restores readable size.');
+      if (graphObserver) graphObserver.observe(found[w]);
+    }
+  }
+
+  var graphObserver = null;
+  if (typeof ResizeObserver === 'undefined') window.addEventListener('resize', frameGraphs);
+  else graphObserver = new ResizeObserver(frameGraphs);
+  observeWraps([host]);
+
   function setMode(next) {
     var change = cfNav.setMode(state, next);
     if (change === state) return;
     var depthChanged = change.depth !== state.depth;
     state = change;
+    activateMode(state.mode);
     applyMode();
     if (depthChanged) applyFocus();
     else frameGraphs();
@@ -1647,12 +1729,6 @@ export const CALL_FLOW_SCRIPT = `
     event.stopPropagation();
   }, true);
 
-  var wraps = view.querySelectorAll('.cf-svg-wrap');
-  for (var w = 0; w < wraps.length; w++) {
-    wraps[w].tabIndex = 0;
-    wraps[w].setAttribute('role', 'region');
-    wraps[w].setAttribute('aria-label', 'Pannable call graph. Arrow keys pan, plus and minus zoom, Home restores readable size.');
-  }
   view.addEventListener('focusin', function (event) {
     var link = event.target.closest('.cf-gnode, .cf-gzoom, .cf-edge-num');
     if (!link || !link.matches(':focus-visible')) return;
@@ -1666,14 +1742,21 @@ export const CALL_FLOW_SCRIPT = `
       paintCamera(graph, cfNav.frame(info.bounds, info.size, target));
     }
   });
-  if (typeof ResizeObserver !== 'undefined') {
-    var observer = new ResizeObserver(frameGraphs);
-    for (var r = 0; r < wraps.length; r++) observer.observe(wraps[r]);
-  } else window.addEventListener('resize', frameGraphs);
   view.addEventListener('toggle', frameGraphs, true);
 
   upgradeLabels();
   host.classList.add('cf-ready');
+  // A deep link to one mode opens on that mode, which is also where its lazy
+  // template is instantiated.
+  var deep = /#cf-f\\d+-([a-z]+)$/.exec(location.hash);
+  if (deep) {
+    for (var dm = 0; dm < modeLinks.length; dm++) {
+      if (modeLinks[dm].getAttribute('data-cf-mode') !== deep[1]) continue;
+      state = cfNav.setMode(state, deep[1]);
+      activateMode(state.mode);
+      break;
+    }
+  }
   refresh(false);
 }());
 `;

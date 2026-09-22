@@ -760,6 +760,13 @@ function script(csrf: string): string {
     show(el.snapshotSection, Boolean(snap));
     el.snapshotBody.textContent = '';
     if (!snap) return;
+    el.snapshotBody.appendChild(make('h3', '', 'Expected outcome'));
+    el.snapshotBody.appendChild(make('p', '', typeof snap.title === 'string' && snap.title ? snap.title : 'No PR title supplied.'));
+    var description = make('details', '');
+    description.appendChild(make('summary', '', 'PR description (claims, not proof)'));
+    description.appendChild(make('pre', '', typeof snap.body === 'string' && snap.body ? snap.body : 'No PR description supplied.'));
+    el.snapshotBody.appendChild(description);
+    el.snapshotBody.appendChild(make('p', 'note', 'Outcome not established by this connected diff viewer. Compare the title and description with the changed behavior. Export a static report with a local repository to inspect the deterministic evidence and reading agenda; no model evaluation runs in this page.'));
     var dl = make('dl', 'facts');
     addFact(dl, 'Repository', (typeof snap.owner === 'string' ? snap.owner : 'unknown') + '/' + (typeof snap.repo === 'string' ? snap.repo : 'unknown'), true);
     addLinkFact(dl, 'Pull request', snap.url, '#' + String(snap.number));
@@ -770,7 +777,7 @@ function script(csrf: string): string {
     addFact(dl, 'Snapshot id', typeof snap.id === 'string' ? snap.id : 'unknown', true);
     addFact(dl, 'Diff lines', String(lines().length));
     el.snapshotBody.appendChild(dl);
-    el.snapshotBody.appendChild(make('p', 'note', 'The snapshot binds host, repository, PR number, base/head commits and the exact diff hash. Detected changes block submission and require refresh plus explicit anchor revalidation. A branch change after the final check remains possible; commit_id binds the review to this reviewed commit, not necessarily the latest head.'));
+    el.snapshotBody.appendChild(make('p', 'note', 'The snapshot binds host, repository, PR number, title/description, base/head commits and the exact diff hash. Detected changes block submission and require refresh plus explicit anchor revalidation. A branch change after the final check remains possible; commit_id binds the review to this reviewed commit, not necessarily the latest head.'));
     if (typeof snap.unavailableReason === 'string' && snap.unavailableReason !== '') {
       el.snapshotBody.appendChild(make('p', 'note', snap.unavailableReason));
     }

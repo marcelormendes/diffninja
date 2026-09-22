@@ -4,7 +4,8 @@
 a stdio MCP server exposing the single `review_diff` tool. PR links select a
 connected, human-authored GitHub review via `gh`; CLI opens the loopback page,
 MCP returns its URL. Static diff/range analysis sends hunks to TypeSafe's Jev
-(typed Choice/Score/Noul questions, one call per hunk) and ranks them in code.
+(one Score and three Choice questions, one HTTP attempt per evaluable hunk) and
+ranks observations in code. Confidence never controls ranking or acquisition.
 CLI static mode writes HTML + JSON; MCP writes no report files. The call-flow
 engine underneath is forked from `calldiff` (Tanishq Kancharla, MIT, see
 LICENSE and the attribution section in README.md). See `README.md` for usage.
@@ -32,8 +33,12 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     input reading and output persistence; the CLI and MCP server both call it
     and neither duplicates pipeline logic.
   - `input.ts` (diff parsing + git range), `jev.ts` (TypeSafe client + mock),
-    `pipeline.ts` (deterministic checks, routing, weighted ranking),
-    `html.ts` (report), `types.ts` (`ReviewReport` and friends).
+    `pipeline.ts` (deterministic checks, routing, fixed-table ranking),
+    `context-plan.ts` (bounded whole-node admission before the single request),
+    `evidence.ts` / `evidence-syntax.ts` (bounded syntactic findings and agenda),
+    `module-resolution.ts` (conservative immutable import bindings),
+    `reference-check.ts` (opt-in before/after TypeScript diagnostics),
+    `html.ts` / `evidence-html.ts` (report), `types.ts` / `evidence-types.ts`.
   - `setup.ts` — `runSetup()` for `diffninja setup`: CLI detection, config
     writes (atomic, conflict-aware), and `updateFile()`. `toml.ts` — parses
     and edits one TOML table in place by key path, for Codex's config.
@@ -47,9 +52,12 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
 - `review_diff` invariants (see `src/review/mcp.ts`; README documents the
   user-facing contract):
   - Strict input object: `diff?`, `repo?`, `from?`, `to?`, `mock?`, `pr?`, `input?`,
-    `mode?` (`auto`/`connected`/`static`; default auto).
-    Auto and connected detect PR links in input string fields before static
-    validation. Connected requires a link, never falling back to diff/range.
+    `mode?` (`auto`/`connected`/`static`; default auto),
+    `expectedOutcome?: { title: string, description: string }`,
+    `referenceProject?: string` (repository-relative tsconfig).
+    Auto and connected detect PR links in diff/repo/from/to/pr/input before
+    static validation, never in expected-outcome text. Connected requires a link
+    and rejects metadata overrides/reference checking; it never falls back.
     Static skips detection, treats links as source, and rejects pr/input.
     Static analysis requires exactly one of `diff` or `from`+`to`; `repo` must
     be absolute for a range. In auto, `pr`/`input` require a PR link.
@@ -75,6 +83,17 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
 - Keep connected safeguards: immutable snapshot binding, canonical line anchors,
   stale-snapshot and duplicate-submit blocking, loopback-only Host/Origin/CSRF
   checks, and no general GitHub/command proxy.
+- Static reports lead with exact expected-outcome metadata and a deterministic
+  review agenda. Description/source matches are navigation hints, never proof
+  of fulfillment; generated claims remain separately attributed. All hunks stay
+  accessible through native folding, including without JavaScript.
+- Jev has no ensemble, adaptive loop, shuffle, or retry. State is capped at
+  24,000 serialized characters; at most eight complete context nodes are
+  considered. Oversized essentials route uncalled to a human; optional context
+  is omitted whole. Preserve explicit uncertainty and snapshot provenance.
+- Reference checks are opt-in and use only the trusted installed compiler and
+  dependencies. Never execute PR scripts, install its dependencies, check out
+  snapshots, or turn incomplete diagnostics into a clean bill of health.
 - Tests live in `test/` and run with `vitest`. `review-pipeline.test.ts` covers
   the deterministic checks, routing, ranking, and Jev request shape;
   `review-input.test.ts`, `review-html.test.ts`, and `review-cli.test.ts` cover

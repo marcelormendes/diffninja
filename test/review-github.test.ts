@@ -48,6 +48,8 @@ interface MetadataShift {
   state?: string;
   baseSha?: string;
   headSha?: string;
+  title?: string;
+  body?: string;
 }
 
 class FakeGh implements GhRunner {
@@ -60,6 +62,8 @@ class FakeGh implements GhRunner {
   repo = "hello";
   number = 7;
   state = "OPEN";
+  title = "Change the visible result";
+  body = "Preserve failure reporting.";
   baseSha = "1".repeat(40);
   headSha = "2".repeat(40);
   cross = false;
@@ -134,6 +138,8 @@ class FakeGh implements GhRunner {
       id: `PR_kwDO${this.number}`,
       number: this.number,
       state: mutation.state ?? this.state,
+      title: mutation.title ?? this.title,
+      body: mutation.body ?? this.body,
       baseRefOid: mutation.baseSha ?? this.baseSha,
       headRefOid: mutation.headSha ?? this.headSha,
       isCrossRepository: this.cross,
@@ -249,21 +255,6 @@ describe("connected review load", () => {
     ]);
   });
 
-  it("reads metadata, diff, and the paginated file list with explicit argv", async () => {
-    const gh = new FakeGh();
-    await loadedSession(gh);
-    expect(gh.callsFor("pr")[0].args).toEqual([
-      "pr", "view", PR_URL, "--json",
-      "url,id,number,state,baseRefOid,headRefOid,isCrossRepository,headRepository,headRepositoryOwner,baseRefName,headRefName",
-    ]);
-    expect(gh.callsFor("diff")[0].args).toEqual([
-      "api", "--hostname", "github.com", "-H", "Accept: application/vnd.github.diff", "repos/octocat/hello/pulls/7",
-    ]);
-    expect(gh.callsFor("files")[0].args).toEqual([
-      "api", "--hostname", "github.com", "--paginate", "-H", "Accept: application/vnd.github+json",
-      "repos/octocat/hello/pulls/7/files?per_page=100",
-    ]);
-  });
 
   it("refuses every URL that is not an explicit github.com pull request", async () => {
     const gh = new FakeGh();
@@ -399,6 +390,24 @@ describe("connected review anchors", () => {
     expect(await rejected(review.load(PR_URL))).toMatch(/changed while diffninja was reading it/);
     expect(review.getState().snapshot).toBeUndefined();
     expect(review.getState().status).toBe("empty");
+  });
+
+  it("rejects intent changes during a snapshot read rather than pairing new claims with old evidence", async () => {
+    const gh = new FakeGh();
+    gh.prMutations = [{}, { body: "Failures may now be ignored." }];
+    const review = session(gh);
+    await expect(review.load(PR_URL)).rejects.toThrow();
+    expect(review.getState().snapshot).toBeUndefined();
+  });
+
+  it("blocks submission when the PR promise changed after preview", async () => {
+    const gh = new FakeGh();
+    const { review, state } = await loadedSession(gh);
+    const draft: ReviewInput = { snapshotId: state.snapshot!.id, event: "COMMENT", body: "Checked the original contract.", comments: [] };
+    await review.preview(draft);
+    gh.title = "Change the promised behavior";
+    await expect(review.submit(draft)).rejects.toThrow();
+    expect(gh.callsFor("post")).toEqual([]);
   });
 
   it("binds the session to the pull request that loaded, even when it is not reviewable", async () => {

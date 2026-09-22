@@ -88,6 +88,12 @@ export type FunctionIndex = Map<string, FunctionInfo>;
  * first-wins bare-key insertion in {@link buildIndex}.
  */
 const indexDefinitions = new WeakMap<FunctionIndex, FunctionInfo[]>();
+const indexContextDefinitions = new WeakMap<FunctionIndex, FunctionInfo[]>();
+
+/** Callable and non-callable declarations available to snapshot review context. */
+export function allContextDefinitions(index: FunctionIndex): FunctionInfo[] {
+  return indexContextDefinitions.get(index) ?? allFunctions(index);
+}
 
 /**
  * Definitions grouped by `file\0key`, so a call can be resolved against the
@@ -172,10 +178,12 @@ export function buildIndex(functions: FunctionInfo[]): FunctionIndex {
 
   // Top level first: a helper declared inside a body must never take a bare key
   // away from a real top-level definition somewhere else in the repo (#19).
-  for (const fn of functions) if (!fn.local) record(fn);
-  for (const fn of functions) if (fn.local) record(fn);
+  const callables = functions.filter(fn => !fn.review?.kind);
+  for (const fn of callables) if (!fn.local) record(fn);
+  for (const fn of callables) if (fn.local) record(fn);
 
-  indexDefinitions.set(index, functions.slice());
+  indexDefinitions.set(index, callables);
+  indexContextDefinitions.set(index, functions.slice());
   indexByFile.set(index, byFile);
   return index;
 }

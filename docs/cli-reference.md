@@ -6,7 +6,7 @@ the everyday flows; this page covers everything else.
 ## Inputs
 
 ```bash
-# a PR link anywhere in argv opens a connected review (default)
+# a PR link in target/source arguments opens a connected review (default)
 diffninja https://github.com/OWNER/REPO/pull/123
 diffninja --pr github.com/OWNER/REPO/pull/123/files
 diffninja "Please review https://github.com/OWNER/REPO/pull/123"
@@ -23,11 +23,16 @@ diffninja --repo /path/to/repo --from main --to HEAD
 diffninja --diff change.patch --out review.html   # JSON twin written beside it
 diffninja --diff change.patch --mock             # offline demo, no API calls
 diffninja --diff change.patch --open             # open the report when done
+diffninja --repo /path/to/repo --from main --to HEAD \
+  --pr-title "Support partial success" --pr-description "Keep failed items retryable."
+diffninja --repo /path/to/repo --from main --to HEAD \
+  --reference-project tsconfig.json            # opt-in trusted reference checker
 ```
 
 Rules:
 
-- A PR link anywhere in argv takes precedence over diff/stdin/range inputs.
+- A PR link in target/source arguments takes precedence over diff/stdin/range
+  inputs. Links inside `--pr-title` and `--pr-description` are claims, not targets.
 - `--pr` / `--pull-request` accept a link; `--static` (alias `--export`) opts
   out of connected mode. Different PR links in one invocation are rejected.
 - Connected mode writes no report: `--out` requires `--static` with a PR link.
@@ -40,6 +45,15 @@ Rules:
   anything. It never searches for or guesses the missing target.
 - Use quoted arguments for pasted chat logs; `--stdin` reads a unified diff,
   not chat.
+- `--pr-title TEXT` and `--pr-description TEXT` preserve expected-outcome text
+  for local static inputs. Either may be supplied; neither is inferred when
+  absent. A PR URL supplies its own title and body and rejects overrides.
+- `--reference-project PATH` opts into before/after TypeScript reference checks
+  for a repository-relative tsconfig and requires immutable local snapshots.
+  Both metadata flags and reference checking are rejected in connected mode.
+- A static PR export preserves GitHub's canonical patch. `--repo` can enrich it
+  from local merge-base/head snapshots only when changed-line identities match;
+  it never silently substitutes a different local diff.
 
 Live **static analysis** needs `TYPESAFE_API_KEY` in the environment (get one
 at https://console.typesafe.ai). Connected reviews need authenticated `gh`,
@@ -58,15 +72,15 @@ PowerShell, or the printed URL); nothing in the report depends on an opener.
 ## Navigating the report
 
 The HTML is one self-contained file: open it directly with `file://` or
-`--open`. It makes no external requests and has no frontend dependencies. All
-hunks start expanded; full diffs and native folding remain available with
-JavaScript disabled. Light/dark colors follow your system preference.
+`--open`. It makes no external requests and has no frontend dependencies. Hunks
+start folded; full diffs and native folding remain available with JavaScript
+disabled. Light/dark colors follow your system preference.
 
 - **Expand all / Collapse all** affect the currently visible hunks.
 - **Status chips** show or hide attention, uncertain, low and passed hunks
   without changing their expanded state. Colors appear on hunk headers, left
-  borders and navigation dots; no scores or assessment commentary appear in
-  the HTML.
+  borders and navigation dots. Hunk model scores and assessment commentary stay
+  in JSON; the Outcome view shows deterministic evidence and its limits.
 - **Focus** or a numbered badge isolates a hunk full-width. Use the **Report**
   breadcrumb or **Escape** to return to your previous folds and scroll
   position.
@@ -77,10 +91,15 @@ JavaScript disabled. Light/dark colors follow your system preference.
   toolbar dropdown. Without JavaScript the ordinary anchor links remain
   visible.
 
-Use **Diff | Call flow** to switch between source changes and their syntactic
-call paths. Call flow files follow their most severe hunk, with a **View
-diff** link to that hunk. The coverage count states how many changed files
-have trees.
+Use **Outcome | Call flow | Diff** to switch views. Outcome leads with exact
+expected-outcome metadata, intent cross-checks, the first five reading tasks,
+automatic findings, and checked/not-checked scope. Source cards fold natively;
+their file, line range, and snapshot identify the evidence. Navigation matches
+do not establish that an author or generated claim is fulfilled. Agenda links
+clear filters/focus when needed so their target cannot remain hidden.
+
+Call flow files follow their most severe hunk, with a **View diff** link to that
+hunk. The coverage count states how many changed files have trees.
 
 - **Tree** folds with native disclosure arrows. Click a function name to zoom
   into its subtree; **Source** opens the function definition.
@@ -93,6 +112,8 @@ have trees.
   **Depth 1 / 2 / 3 / all** limits edges below that branch.
 - **Sequence** shows root-to-leaf `A → B → C` chip strips, not runtime
   execution order. It displays up to 10 paths per file in the current focus.
+  Graph and Sequence DOM is materialized on first use; the complete tree and diff
+  remain available without JavaScript.
 
 Source is embedded when the report is generated, including resolved
 definitions in files outside the diff. It comes from the immutable **to**
@@ -100,16 +121,38 @@ commit, or **from** for removed calls, with a path, line range, and commit
 reference. Reports therefore contain unchanged code as well as changed hunks;
 keep them private.
 
-Only git-range inputs have repository call flows. Patch-only inputs show a
-short git-range note, not invented diagrams. `callFlowAvailability`
-distinguishes `available`, `needs-git-range`, `no-changes`, and `failed`.
+Git-range inputs, including validated local enrichment of a static PR export,
+have repository call flows. Patch-only inputs show a short git-range note, not
+invented diagrams. `callFlowAvailability` distinguishes `available`,
+`needs-git-range`, `no-changes`, and `failed`.
 
-A single note distinguishes mock and live output. Reasons, judgments,
-warnings, priorities and request counts remain in the JSON twin; mock data is
-only a navigation preview, not a code assessment. The live adapter pins
-`jev-1.13.0`, retries transient failures up to twice, and uses a 10-second
-attempt timeout inside a 30-second per-hunk budget. See
-[the Jev audit](JEV_AUDIT.md) for sources, policy choices, and pricing.
+A single note distinguishes mock and live output. Hunk reasons, judgments,
+warnings, priorities and HTTP request counts remain in the JSON twin; mock
+judgments are navigation fixtures, not a code assessment. The live adapter pins
+`jev-1.13.0`: one HTTP attempt per evaluable hunk, a 10-second timeout, no retries,
+no ensemble, and no adaptive context loop. Options have fixed order and no
+temperature override is sent. Confidence is informational only; the deterministic
+agenda is independent of stochastic model hunk ordering. See the
+[analysis policy](../README.md#how-static-analysis-works).
+
+### Automatic-check boundaries
+
+Duplicate-body and unread-`errors` checks operate on supported JS/TS syntax,
+with bounded candidate and excerpt counts. A finding is a source observation,
+not a runtime defect verdict. Unknown bindings, dynamic calls, and unsupported
+syntax remain unproven. The report lists check coverage and limitations.
+
+The optional reference checker runs the repository's **trusted installed**
+TypeScript compiler against immutable before/after trees. It does not run PR
+scripts, install dependencies, emit code, or change the checkout. It compares
+only diagnostics 2304, 2305, 2307, 2339, 2503, 2551, 2552, and 7016, subtracting
+pre-existing errors even when lines moved; unchanged consumers can be findings.
+Both revisions use the current installed dependencies, not historical installs.
+
+Missing dependencies, unsupported project references or escaping configurations,
+and exceeded bounds produce **not checked**, not a pass. Bounds include 50,000
+files, 8 MiB per file, 512 MiB total snapshot content, and at most 500 selected
+diagnostics per revision. This is not a project build, test run, or safety proof.
 
 ## Connected GitHub reviews
 
@@ -141,8 +184,9 @@ GitHub rejects both Approve and Request changes on the authenticated user's
 own PR; Comment remains available. The effective `gh api user` login is
 displayed and checked again at submission.
 
-The snapshot binds repository, PR, base/head SHAs, and a fingerprint of the
-exact diff. Binary, incomplete, and unsupported patches (including submodules
+The snapshot binds repository, PR, base/head SHAs, exact title and description,
+and a fingerprint of the exact diff. Metadata edits invalidate it too. Binary,
+incomplete, and unsupported patches (including submodules
 and symlinks) cannot be submitted. Refresh after a snapshot mismatch: every
 inline draft is preserved but must be explicitly confirmed against the
 displayed current code or attached to a newly selected line before previewing

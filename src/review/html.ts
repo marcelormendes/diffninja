@@ -1,21 +1,33 @@
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
+import { BOUNDARY_OBSERVATIONS, EVIDENCE_SCOPES, FAILURE_OBSERVATIONS, OUTCOME_LEVELS } from "./jev.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
+import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
 import { escapeHtml } from "./escape-html.js";
 
 /**
  * Render a review report as one self-contained HTML document.
  *
- * The page is a plain diff review: file header, hunks with line numbers and
- * green/red lines. Ranking decides the order of the hunks and nothing else;
- * severity reaches the reviewer only as color (hunk header tint, left border,
- * jump-nav dot). Judgments, priority scores and model metadata stay in the JSON
- * sidecar; a skipped evaluation is also identified next to its unevaluated hunk.
+ * The document opens on the expected outcome: the pull request text, the intent
+ * cross-check, the checks that ran with their limits, and a short reading agenda
+ * whose top cards link the changed code, its direct caller or its contract. The
+ * call flow and the full diff are the other two views of the same document, so a
+ * reviewer reaches a hunk from the agenda in one click and every hunk stays
+ * reachable, including the ones no evaluation covers.
+ *
+ * The page is still a plain diff review underneath: file header, hunks with line
+ * numbers and green/red lines, ranking deciding order and severity reaching the
+ * reviewer as color. Ranking scores, model probabilities and the adapter's own
+ * rubric text stay in the JSON sidecar: the only model-derived content on the
+ * page is the hunk's own single-sample typed observations, printed from closed
+ * sets under a label that says what they are.
  *
  * Everything is server-rendered, so the report is readable with JavaScript
- * disabled. The single inline script is progressive enhancement: expand and
- * collapse, status filters that keep their fold state, focus mode, and a
- * keyboard cursor. No report string is placed in the script; it reads labels
- * from the DOM. Every string from a diff, path or report field is HTML-escaped.
+ * disabled; without the script the three views stack as sections and every hunk
+ * is one disclosure away. The single inline script is progressive enhancement:
+ * view switching, expand and collapse, status filters that keep their fold
+ * state, focus mode, and a keyboard cursor. No report string is placed in the
+ * script; it reads labels from the DOM. Every string from a diff, path, pull
+ * request body or report field is HTML-escaped.
  */
 export function renderReview(report: ReviewReport): string {
   const counts = countStatuses(report.items);
@@ -39,15 +51,17 @@ export function renderReview(report: ReviewReport): string {
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="color-scheme" content="light dark">',
     `<title>${escapeHtml(`diffninja review: ${report.title || "untitled diff"}`)}</title>`,
-    `<style>${STYLES}\n${CALL_FLOW_STYLES}</style>`,
+    `<style>${STYLES}\n${BRIEF_STYLES}\n${CALL_FLOW_STYLES}</style>`,
     "</head>",
-    "<body>",
+    `<body data-default-view="${report.evidence === undefined ? "call-flow" : "brief"}">`,
     '<div class="wrap">',
     renderHeader(report),
     '<nav class="view-switch" aria-label="Report view">',
-    '<a href="#view-call-flow" data-view="call-flow" aria-current="page">Call flow</a>',
+    '<a href="#view-brief" data-view="brief">Outcome</a>',
+    '<a href="#view-call-flow" data-view="call-flow">Call flow</a>',
     '<a href="#view-diff" data-view="diff">Diff</a>',
     "</nav>",
+    `<section class="brief" id="view-brief" aria-label="Expected outcome and reading agenda">${renderBrief(report)}</section>`,
     '<section id="view-call-flow" aria-label="Call flow">',
     renderCallFlows(report),
     "</section>",
@@ -174,7 +188,7 @@ function renderNav(items: readonly ReviewItem[]): string {
       const status = escapeHtml(item.status);
       return [
         "<li>",
-        `<a class="toc-link" href="#item-${rank}">`,
+        `<a class="toc-link" data-open-hunk href="#item-${rank}">`,
         `<span class="toc-rank mono">#${rank}</span>`,
         `<span class="dot dot-${status}" aria-hidden="true"></span>`,
         `<span class="toc-path mono">${escapeHtml(item.file)}</span>`,
@@ -202,7 +216,9 @@ function renderItems(items: readonly ReviewItem[]): string {
 function renderItem(item: ReviewItem, rank: number): string {
   const status = escapeHtml(item.status);
   return [
-    `<details class="card card-${status}" data-status="${status}" id="item-${rank}" open>`,
+    // Closed by default: a fresh report opens on the agenda, and the diff stays
+    // a short list of hunk headers until a reviewer opens what they came for.
+    `<details class="card card-${status}" data-status="${status}" id="item-${rank}">`,
     "<summary>",
     `<span class="rank fallback-rank mono">#${rank}</span>`,
     `<button type="button" class="rank enhanced mono" data-focus aria-label="Focus hunk ${rank}">#${rank}</button>`,
@@ -224,6 +240,7 @@ function renderItemBody(item: ReviewItem): string {
   return [
     '<div class="body">',
     special,
+    renderObservations(item),
     item.routing?.evaluation === "not_evaluated"
       ? `<p class="note">Not evaluated: essential context requires ${formatInteger(item.routing.requiredChars)} characters; the limit is ${formatInteger(item.routing.limitChars)}. No model judgment was recorded; manual review is required.</p>`
       : "",
@@ -232,6 +249,74 @@ function renderItemBody(item: ReviewItem): string {
   ]
     .filter((part) => part !== "")
     .join("\n");
+}
+
+/**
+ * What one model sample observed about this hunk, when a sample was taken.
+ *
+ * The four answers come from closed sets and each is printed only when it is one
+ * of the documented values: a value outside its set is named as unrecognized
+ * rather than echoed, so no model-authored text reaches the page. They are
+ * single-sample observations — one sample per hunk, about the added and removed
+ * lines only — and are labelled that way.
+ *
+ * `unknown` is a real answer meaning the supplied state could not classify the
+ * lines, so it is printed with that meaning spelled out; it is never shown as
+ * `none`/`untouched` (which would read as an absence claim) and never as a
+ * finding. Nothing here reads `reasons` or any other prose: the one sentence
+ * under the list is derived from these typed fields and from `item.status`.
+ * No score, probability or vendor confidence is shown.
+ */
+function renderObservations(item: ReviewItem): string {
+  const judgment = item.judgment;
+  if (judgment === undefined) {
+    return "";
+  }
+  const rows: readonly (readonly [string, readonly string[], string])[] = [
+    ["Outcome the lines produce", OUTCOME_LEVELS, judgment.outcome],
+    ["Boundary at these lines", BOUNDARY_OBSERVATIONS, judgment.boundary],
+    ["Failure handling at these lines", FAILURE_OBSERVATIONS, judgment.failureHandling],
+    ["Evidence the sample reached", EVIDENCE_SCOPES, judgment.evidenceScope],
+  ];
+  const unclassified = new Set<string>();
+  const list = rows
+    .map(([label, values, value]) => {
+      let shown: string;
+      if (values.includes(value)) {
+        shown = escapeHtml(value);
+        if (value === "unknown") {
+          unclassified.add(label);
+          shown += ' <span class="obs-unknown">not classified from the supplied state; a person should decide</span>';
+        }
+      } else {
+        shown = escapeHtml("unrecognized value");
+      }
+      return `<dt>${escapeHtml(label)}</dt><dd class="mono">${shown}</dd>`;
+    })
+    .join("");
+  // The escalation line is the typed-field reading of `status`, not a verdict.
+  const hints: string[] = [];
+  if (unclassified.size > 0) {
+    hints.push(
+      `${[...unclassified].join(" and ")} could not be classified from the supplied state, so this hunk is marked for a human read. That is not a claim about the code.`,
+    );
+  }
+  if (judgment.evidenceScope === "not-established") {
+    hints.push(
+      "The sample did not reach how these lines are called or what consumes them: missing evidence, not a defect claim.",
+    );
+  }
+  return [
+    '<details class="obs">',
+    '<summary>Single-sample typed observations</summary>',
+    '<div class="obs-body">',
+    '<p class="note">One sample for this hunk, from the added and removed lines and the context listed below. Descriptive answers, not a verdict, and not a merge approval.</p>',
+    `<dl class="obs-list">${list}</dl>`,
+    // Informational, in the dimmest style the report has.
+    ...hints.map((hint) => `<p class="note obs-note">${escapeHtml(hint)}</p>`),
+    "</div>",
+    "</details>",
+  ].join("\n");
 }
 
 /** How one rendered diff line is shaped, once it has been classified. */
@@ -326,25 +411,117 @@ function renderFooter(report: ReviewReport): string {
 }
 
 // One toolbar script. No report string is interpolated into it: it reads the
-// labels it needs from the escaped DOM, so a crafted path or diff cannot reach
-// the inline script.
+// labels it needs from the escaped DOM, so a crafted path, diff or pull request
+// body cannot reach the inline script.
 const SCRIPT = `
 (function () {
   'use strict';
   document.documentElement.classList.add('js');
+  var briefView = document.getElementById('view-brief');
   var diffView = document.getElementById('view-diff');
   var flowView = document.getElementById('view-call-flow');
   var viewLinks = Array.prototype.slice.call(document.querySelectorAll('[data-view]'));
+  var VIEWS = { brief: briefView, 'call-flow': flowView, diff: diffView };
   function showView(name) {
-    var flow = name === 'call-flow';
-    diffView.hidden = flow;
-    flowView.hidden = !flow;
+    for (var key in VIEWS) {
+      if (VIEWS[key]) VIEWS[key].hidden = key !== name;
+    }
     viewLinks.forEach(function (link) {
       if (link.getAttribute('data-view') === name) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
   }
-  showView(location.hash === '#view-diff' ? 'diff' : 'call-flow');
+  // The hash may name a view or any element inside one, which is where the
+  // agenda and the call flow both point.
+  function viewForHash() {
+    var hash = location.hash;
+    if (hash === '') return null;
+    if (VIEWS[hash.slice(1)]) return hash.slice(1);
+    var target = document.getElementById(hash.slice(1));
+    if (!target) return null;
+    for (var key in VIEWS) {
+      if (VIEWS[key] && VIEWS[key].contains(target)) return key;
+    }
+    return null;
+  }
+  // A new report carries an agenda, so that is what it opens on: the body names
+  // the opening view. A report without a cross-check opens on the call flow, its
+  // most useful overview, and an explicit hash always wins.
+  showView(viewForHash() || document.body.getAttribute('data-default-view') || 'call-flow');
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.card'));
+  var filters = Array.prototype.slice.call(document.querySelectorAll('[data-filter]'));
+  var toolbar = document.getElementById('toolbar');
+  var breadcrumb = document.getElementById('breadcrumb');
+  var focusRank = document.getElementById('focus-rank');
+  var focusPath = document.getElementById('focus-path');
+  var jump = document.querySelector('.jump-toggle');
+  var empty = document.getElementById('filter-empty');
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc-link'));
+  var cursor = 0;
+  var focusIndex = -1;
+  var focusWasOpen = true;
+  var returnControl = null;
+  var returnScroll = 0;
+
+  function statusesOn() {
+    return filters.filter(function (chip) {
+      return chip.getAttribute('aria-pressed') === 'true';
+    }).map(function (chip) { return chip.getAttribute('data-filter'); });
+  }
+
+  function visible() {
+    var list = [];
+    cards.forEach(function (card, index) { if (!card.hidden) list.push(index); });
+    return list;
+  }
+
+  function setCursor(index, move) {
+    if (index < 0 || index >= cards.length) return;
+    cursor = index;
+    cards.forEach(function (card, at) { card.classList.toggle('cursor', at === index); });
+    if (!move) return;
+    var card = cards[index];
+    var summary = card.querySelector('summary');
+    if (summary) summary.focus({ preventScroll: true });
+    measureToolbar();
+    card.scrollIntoView({ block: 'start' });
+  }
+
+  function apply() {
+    var on = statusesOn();
+    cards.forEach(function (card, index) {
+      card.hidden = focusIndex >= 0 ? index !== focusIndex : on.indexOf(card.getAttribute('data-status')) < 0;
+    });
+    links.forEach(function (link) {
+      var target = document.getElementById(link.hash.slice(1));
+      var item = link.parentElement;
+      if (target && item) item.hidden = target.hidden;
+    });
+    filters.forEach(function (chip) { chip.disabled = focusIndex >= 0; });
+    document.body.classList.toggle('focus-mode', focusIndex >= 0);
+    breadcrumb.hidden = focusIndex < 0;
+    var shown = visible();
+    if (empty) empty.hidden = shown.length > 0;
+    if (!cards[cursor] || cards[cursor].hidden) {
+      if (shown.length) setCursor(shown[0], false);
+    }
+  }
+
+  // One reveal for every link that points at a hunk: clear the view state that
+  // could hide it (a status filter, focus mode, another view) and open it.
+  function revealHunk(hash) {
+    var target = document.getElementById(hash.slice(1));
+    if (!target) return false;
+    if (focusIndex >= 0) exitFocus();
+    filters.forEach(function (chip) { chip.setAttribute('aria-pressed', 'true'); });
+    showView('diff');
+    apply();
+    target.open = true;
+    setJump(false);
+    setCursor(cards.indexOf(target), true);
+    history.replaceState(null, '', hash);
+    return true;
+  }
   document.addEventListener('click', function (event) {
     if (!event.target.closest) return;
     var link = event.target.closest('[data-view]');
@@ -476,29 +653,12 @@ const SCRIPT = `
       return;
     }
     if (button && button === jump) { setJump(jump.getAttribute('aria-expanded') !== 'true'); return; }
-    var link = event.target.closest('.toc-link');
-    var flowDiff = event.target.closest('[data-flow-diff]');
-    if (flowDiff) {
+    // Both the agenda's evidence links and the call flow's "View diff" links
+    // land on a hunk, whether or not the current filters would hide it.
+    var openHunk = event.target.closest('[data-open-hunk], .toc-link');
+    if (openHunk) {
       event.preventDefault();
-      var hunk = document.getElementById(flowDiff.hash.slice(1));
-      if (!hunk) return;
-      if (focusIndex >= 0) exitFocus();
-      filters.forEach(function (chip) { chip.setAttribute('aria-pressed', 'true'); });
-      showView('diff');
-      apply();
-      hunk.open = true;
-      setCursor(cards.indexOf(hunk), true);
-      history.replaceState(null, '', flowDiff.hash);
-      return;
-    }
-    if (link) {
-      event.preventDefault();
-      var target = document.getElementById(link.hash.slice(1));
-      if (!target) return;
-      target.open = true;
-      setJump(false);
-      setCursor(cards.indexOf(target), true);
-      history.replaceState(null, '', link.hash);
+      revealHunk(openHunk.hash);
     }
   });
 
@@ -551,10 +711,22 @@ const SCRIPT = `
 
   apply();
   setCursor(cursor, false);
-  var initial = location.hash ? document.getElementById(location.hash.slice(1)) : null;
-  var initialAt = initial ? cards.indexOf(initial) : -1;
-  if (initialAt >= 0) setCursor(initialAt, true);
   measureToolbar();
+  // A link back into the report opens the hunk it names, in the view that shows
+  // it, instead of landing on a closed card in a hidden section.
+  if (location.hash && cards.length && !diffView.hidden) revealHunk(location.hash);
+  else if (location.hash) {
+    var initial = document.getElementById(location.hash.slice(1));
+    var initialAt = initial ? cards.indexOf(initial) : -1;
+    if (initialAt >= 0) setCursor(initialAt, true);
+  }
+  // Browser back and forward, and a hash typed or pasted into the address bar,
+  // arrive as a hash change rather than a load: route them the same way.
+  window.addEventListener('hashchange', function () {
+    var name = viewForHash();
+    if (name) showView(name);
+    if (cards.length && location.hash && !diffView.hidden) revealHunk(location.hash);
+  });
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureToolbar).observe(toolbar);
   window.addEventListener('resize', measureToolbar);
 }());
@@ -629,8 +801,8 @@ a { color: var(--teal); }
 .masthead {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-bottom: 16px;
+  gap: 7px;
+  padding-bottom: 12px;
   border-bottom: 2px solid var(--line-strong);
 }
 .brand {
@@ -772,6 +944,15 @@ button:disabled { cursor: default; opacity: .65; }
 .focus-button { font-size: 12px; padding: 3px 8px; }
 .body { border-top: 1px solid var(--line); padding: 0 0 2px; }
 .note { margin: 12px 14px; font-size: 13px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.obs { margin: 10px 14px; }
+.obs > summary { cursor: pointer; font-size: 12.5px; color: var(--ink-soft); }
+.obs-body { border: 1px dashed var(--line-strong); border-radius: 6px; padding: 8px 10px; margin-top: 6px; }
+.obs-body .note { margin: 0 0 6px; font-size: 12.5px; }
+.obs-note { font-style: italic; }
+.obs-unknown { font-family: var(--sans); color: var(--ink-soft); }
+.obs-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+.obs-list dt { font-size: 12.5px; color: var(--ink-soft); }
+.obs-list dd { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .diff-wrap {
   border-top: 1px solid var(--line);
   background: var(--panel);

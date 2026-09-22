@@ -15,7 +15,7 @@ function gitBuffer(
   input?: Buffer,
   maxBuffer = 64 * 1024 * 1024,
 ): Buffer {
-  return execFileSync("git", args, {
+  return execFileSync("git", ["--no-replace-objects", ...args], {
     cwd,
     input,
     maxBuffer,

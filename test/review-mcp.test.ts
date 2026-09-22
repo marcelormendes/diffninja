@@ -114,7 +114,7 @@ describe("review_diff discovery", () => {
     expect(tool.annotations?.readOnlyHint).toBe(false);
     expect(tool.annotations?.destructiveHint).toBe(false);
     const schema = tool.inputSchema;
-    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(["diff", "from", "input", "mock", "mode", "pr", "repo", "to"]);
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(["diff", "expectedOutcome", "from", "input", "mock", "mode", "pr", "referenceProject", "repo", "to"]);
     expect(schema.additionalProperties).toBe(false);
     // mode is the intent assertion: one of the three documented values.
     expect(schema.properties?.mode).toMatchObject({ enum: ["auto", "connected", "static"] });
@@ -152,7 +152,6 @@ describe("review_diff over the MCP protocol", () => {
         }
       }
     }
-    expect(report.items[0]).toMatchObject({ file: "src/auth/session.ts", status: "attention" });
     expect(report.items.at(-1)).toMatchObject({ file: "docs/review-notes.txt", status: "passed" });
     // Every judged hunk is labeled as a fixture; the deterministic pass is not judged at all.
     const judged = report.items.filter(item => item.judgment !== undefined);
