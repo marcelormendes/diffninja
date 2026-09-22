@@ -5,8 +5,13 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { buildIndex, extractFunctions } from "../src/extract.js";
 import { buildCallContext } from "../src/review/call-context.js";
+import type { ContextSources } from "../src/review/call-context.js";
 import { reviewDiff } from "../src/review/service.js";
-import type { ReviewUnit } from "../src/review/types.js";
+import { buildContextState, MAX_CONTEXT_NODES } from "../src/review/context-plan.js";
+import { buildJevState } from "../src/review/jev.js";
+import { parseDiff } from "../src/review/input.js";
+import type { SourceLoc } from "../src/types.js";
+import type { ReviewContextNode, ReviewUnit } from "../src/review/types.js";
 
 function unit(line: number): ReviewUnit {
   const header = `@@ -${line} +${line} @@`;
@@ -15,7 +20,17 @@ function unit(line: number): ReviewUnit {
 
 function context(source: string, line: number): string[] {
   const index = buildIndex(extractFunctions("caller.ts", source));
-  return buildCallContext([unit(line)], buildIndex([]), index).get("caller") ?? [];
+  return buildCallContext([unit(line)], buildIndex([]), index).get("caller")?.entries ?? [];
+}
+
+/** Nodes for a hunk whose prior snapshot has no definitions of its own. */
+function nodes(source: string, line: number, sources: ContextSources = {}): ReviewContextNode[] {
+  const index = buildIndex(extractFunctions("caller.ts", source));
+  return buildCallContext([unit(line)], buildIndex([]), index, sources).get("caller")?.nodes ?? [];
+}
+
+function indexOf(source: string) {
+  return buildIndex(extractFunctions("caller.ts", source));
 }
 
 describe("hunk call context", () => {
@@ -80,7 +95,7 @@ describe("hunk call context", () => {
     const index = buildIndex(extractFunctions("caller.ts", source));
     const reviewUnit = unit(1);
     reviewUnit.diff += "\n function callee(param) { return param; }\n function caller2(arg) { callee2(arg); }\n function callee2(param) { return param; }";
-    const blocks = buildCallContext([reviewUnit], buildIndex([]), index).get(reviewUnit.id)!;
+    const blocks = buildCallContext([reviewUnit], buildIndex([]), index).get(reviewUnit.id)!.entries;
     expect(blocks.some(block => block.startsWith("call callee @"))).toBe(true);
     expect(blocks.some(block => block.startsWith("call callee2 @"))).toBe(false);
     expect(blocks.join("\n")).toContain("reason=unrelated-to-hunk");
@@ -110,7 +125,7 @@ describe("hunk call context", () => {
       "function caller(arg1, arg2) { callee(arg1, arg2); }\nfunction callee(param1, param2) {}"));
     const after = buildIndex(extractFunctions("caller.ts",
       "function caller(arg1, arg2) { callee(arg1, arg2); }\nfunction callee(param2, param1) {}"));
-    const blocks = buildCallContext([unit(2)], before, after).get("caller")!;
+    const blocks = buildCallContext([unit(2)], before, after).get("caller")!.entries;
     const prior = blocks.find(block => block.includes("snapshot=before"))!;
     const current = blocks.find(block => block.includes("snapshot=after"))!;
     expect(prior).toContain('arg[1] -> param1: "arg1"');
@@ -149,8 +164,213 @@ describe("hunk call context", () => {
       expect(after).toContain('arg[1] -> param: "arg + 1"');
       expect(report.items[0].judgment).toBeDefined();
       expect(report.items[0].routing).toBeUndefined();
+
+      // The same extraction supplies the keyed nodes: the parent definition's
+      // body, read from each snapshot, with that snapshot's own binding.
+      const nodes = report.items[0].contextNodes!;
+      const afterNode = nodes.find(node => node.key === "after:caller")!;
+      const beforeNode = nodes.find(node => node.key === "before:caller")!;
+      expect([afterNode, beforeNode].map(node => [node.label, node.file, node.line])).toEqual([
+        ["caller(arg)", "caller.ts", 1], ["caller(arg)", "caller.ts", 1],
+      ]);
+      expect(afterNode.detail).toContain("source=caller.ts:1 snapshot=after begin\nexport function caller(arg) { return callee(arg + 1); }\n  source-end");
+      expect(beforeNode.detail).toContain("source=caller.ts:1 snapshot=before begin\nexport function caller(arg) { return callee(arg); }\n  source-end");
+      expect(afterNode.detail).toContain('snapshot=after target=lexical');
+      expect(afterNode.detail).toContain('arg[1] -> param: "arg + 1"');
+      expect(beforeNode.detail).not.toContain('arg[1] -> param: "arg + 1"');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("structured context nodes", () => {
+  const source = [
+    "function caller(arg) { callee(arg); }",
+    "function callee(param) { return param; }",
+  ].join("\n");
+
+  test("keys a parent definition by snapshot and carries its whole source verbatim", () => {
+    const planned = nodes(source, 1, { after: () => source });
+    expect(planned.map(node => node.key)).toEqual(["after:caller", "after:callee"]);
+    const [node] = planned;
+    expect(node).toMatchObject({ key: "after:caller", label: "caller(arg)", file: "caller.ts", line: 1 });
+    expect(node.detail).toContain("context node after:caller");
+    expect(node.detail).toContain("location=caller.ts:1 snapshot=after role=changed-definition hunk=caller file=caller.ts");
+    expect(node.detail).toContain("declared-parameters=(arg)");
+    // The markers bound exactly the snapshot's own text: nothing re-indented,
+    // excerpted, or rewritten on the way into the node.
+    expect(node.detail).toContain(`source=caller.ts:1 snapshot=after begin\n${source}\n  source-end`);
+    expect(node.detail).toContain("evidence=call-sites-in-this-definition count=1");
+    expect(node.detail).toContain('arg[1] -> param: "arg"');
+  });
+
+  test("reads each node from the location the extraction reported", () => {
+    const requested: SourceLoc[] = [];
+    nodes([
+      "function caller(arg) {",
+      "  return callee(arg);",
+      "}",
+      "function callee(param) { return param; }",
+    ].join("\n"), 2, { after: definition => { requested.push(definition); return "function callee(param) { return param; }"; } });
+    expect(requested).toEqual([
+      { file: "caller.ts", line: 1, endLine: 3 },
+      { file: "caller.ts", line: 4 },
+    ]);
+  });
+
+  test("states an unavailable source instead of hiding the node", () => {
+    const [node] = nodes(source, 1);
+    expect(node.key).toBe("after:caller");
+    expect(node.detail).toContain("source=caller.ts:1 snapshot=after unavailable reason=whole-definition-not-readable");
+    expect(node.detail).not.toContain("source-end");
+    expect(node.detail).toContain("evidence=call-sites-in-this-definition count=1");
+  });
+
+  test("adds the caller that reaches the changed definition and the callee it reaches", () => {
+    const planned = nodes([
+      "function caller(arg) { callee(arg); }",
+      "function callee(param) { helper(param); }",
+      "function helper(param) { return param; }",
+    ].join("\n"), 2, { after: () => null });
+    const caller = planned.find(node => node.key === "after:caller")!;
+    expect(caller.detail).toContain("role=caller");
+    expect(caller.detail).toContain("evidence=call-sites-in-this-definition count=1");
+    expect(caller.detail).toContain('call callee @ caller.ts:1');
+    expect(caller.detail).toContain('arg[1] -> param: "arg"');
+    const callee = planned.find(node => node.key === "after:callee")!;
+    expect(callee.detail).toContain('call helper @ caller.ts:2');
+    expect(callee.detail).toContain("evidence=call-sites-in-this-definition count=1");
+    expect(planned.find(node => node.key === "after:helper")!.detail).toContain("role=callee");
+  });
+
+  test("keeps upstream ancestor definitions addressable, not just their call sites", () => {
+    const definitions = [
+      "function root(value) { grandparent(value); }",
+      "function grandparent(value) { parent(value); }",
+      "function parent(value) { leaf(value); }",
+      "function leaf(value) { return value; }",
+    ];
+    const planned = nodes(definitions.join("\n"), 4, {
+      after: loc => definitions[loc.line - 1],
+    });
+    expect(planned.map(node => node.key)).toEqual([
+      "after:leaf", "after:parent", "after:grandparent", "after:root",
+    ]);
+    for (const node of planned) {
+      expect(node.detail).toContain(definitions[node.line - 1]);
+    }
+  });
+
+  test("keeps each snapshot's own source and binding on its own node", () => {
+    const before = indexOf("function caller(arg1, arg2) { callee(arg1, arg2); }\nfunction callee(param1, param2) {}");
+    const after = indexOf("function caller(arg1, arg2) { callee(arg1, arg2); }\nfunction callee(param2, param1) {}");
+    const planned = buildCallContext([unit(2)], before, after, {
+      before: () => "function callee(param1, param2) {}",
+      after: () => "function callee(param2, param1) {}",
+    }).get("caller")!.nodes;
+    const current = planned.find(node => node.key === "after:callee")!;
+    const prior = planned.find(node => node.key === "before:callee")!;
+    expect(current.detail).toContain("source=caller.ts:2 snapshot=after begin\nfunction callee(param2, param1) {}\n  source-end");
+    expect(current.detail).toContain('arg[1] -> param2: "arg1"');
+    expect(prior.detail).toContain("source=caller.ts:2 snapshot=before begin\nfunction callee(param1, param2) {}\n  source-end");
+    expect(prior.detail).toContain('arg[1] -> param1: "arg1"');
+    expect(prior.detail).not.toContain('arg[1] -> param2');
+  });
+
+  test("carries the caller, the changed definition, and its callees as nodes within depth", () => {
+    const lines = [
+      "function caller(arg) {",
+      "  changed(arg);",
+      "  sibling(arg);",
+      "}",
+      "function changed(input) {",
+      "  return callee(input);",
+      "}",
+      "function sibling(param) { return param; }",
+      "function callee(param) {",
+      "  return nested(param);",
+      "}",
+      "function nested(param) {",
+      "  return deeper(param);",
+      "}",
+      "function deeper(param) {",
+      "  return deepest(param);",
+      "}",
+      "function deepest(param) { return beyond(param); }",
+      "function beyond(param) { return param; }",
+    ];
+    const source = lines.join("\n");
+    const planned = nodes(source, 5, {
+      after: definition => lines.slice(definition.line - 1, definition.endLine ?? definition.line).join("\n"),
+    });
+    // Sibling calls are not on the path; descendants beyond the depth cap stay absent.
+    expect(planned.some(node => node.key === "after:sibling" || node.key === "after:beyond")).toBe(false);
+    const detailOf = (key: string) => planned.find(node => node.key === key)!.detail;
+    // Every node carries the snapshot's own text for its own span, whole.
+    expect(detailOf("after:caller")).toContain(
+      "source=caller.ts:1-4 snapshot=after begin\nfunction caller(arg) {\n  changed(arg);\n  sibling(arg);\n}\n  source-end",
+    );
+    expect(detailOf("after:changed")).toContain(
+      "source=caller.ts:5-7 snapshot=after begin\nfunction changed(input) {\n  return callee(input);\n}\n  source-end",
+    );
+    expect(detailOf("after:callee")).toContain(
+      "source=caller.ts:9-11 snapshot=after begin\nfunction callee(param) {\n  return nested(param);\n}\n  source-end",
+    );
+    // A call site stays on the definition that writes it, and the binding it
+    // resolved to stays on the callee node, however deep the callee sits.
+    expect(detailOf("after:changed")).toContain("evidence=call-sites-in-this-definition count=1");
+    expect(detailOf("after:changed")).toContain('call callee @ caller.ts:6');
+    expect(detailOf("after:callee")).toContain("evidence=call-sites-reaching-this-definition count=1");
+    expect(detailOf("after:callee")).toContain('call callee @ caller.ts:6');
+    expect(detailOf("after:callee")).toContain('arg[1] -> param: "input"');
+    expect(detailOf("after:callee")).toContain('call nested @ caller.ts:10');
+    expect(detailOf("after:deeper")).toContain('call deepest @ caller.ts:16');
+    expect(detailOf("after:deepest")).toContain("evidence=call-sites-reaching-this-definition count=1");
+    // The caller's other calls are not expanded, and the walk stops at depth four.
+    expect(detailOf("after:caller")).toContain('call changed @ caller.ts:2');
+    const blocks = context(source, 5).join("\n");
+    expect(blocks).toContain("reason=distant-descendants-or-siblings depth-limit=4");
+    expect(blocks).not.toContain('call sibling @ caller.ts:3');
+    expect(blocks).not.toContain("call beyond @ caller.ts:19");
+  });
+
+  test("retains an unseen dependency before new-file bodies already visible in the diff", () => {
+    const lines = Array.from({ length: MAX_CONTEXT_NODES + 1 }, (_, i) =>
+      `export function caller${i}(value) { return dependency(value); }`);
+    const dependency = "export function dependency(value) { if (value < 0) throw new Error('negative'); return value; }";
+    const [reviewUnit] = parseDiff([
+      "diff --git a/caller.ts b/caller.ts", "--- /dev/null", "+++ b/caller.ts",
+      `@@ -0,0 +1,${lines.length} @@`, ...lines.map(line => `+${line}`),
+    ].join("\n"));
+    const index = buildIndex([
+      ...extractFunctions("caller.ts", lines.join("\n")),
+      ...extractFunctions("dependency.ts", dependency),
+    ]);
+    const planned = buildCallContext([reviewUnit], buildIndex([]), index, {
+      after: loc => loc.file === "dependency.ts" ? dependency : lines[loc.line - 1],
+    }).get(reviewUnit.id)!.nodes;
+    const state = buildContextState(buildJevState(reviewUnit), planned);
+    const supplied = state.contextNodes ?? [];
+    expect(supplied.length).toBeLessThanOrEqual(MAX_CONTEXT_NODES);
+    expect(supplied.find(node => node.key === "after:dependency")?.detail).toContain(dependency);
+    // Reordering never discards the original source or its call evidence.
+    expect(planned.find(node => node.key === "after:caller0")?.detail).toContain(lines[0]);
+    // A node the state carries is carried whole, never as a shortened definition.
+    for (const carried of supplied) {
+      expect(carried.detail).toBe(planned.find(given => given.key === carried.key)?.detail);
+    }
+  });
+
+  test("reports no evidence rather than an empty node body", () => {
+    const [node] = nodes("function caller() { return 1; }", 1, { after: () => "function caller() { return 1; }" });
+    expect(node.detail).toContain("evidence=none-selected reason=no-selected-call-site-touches-this-definition");
+  });
+
+  test("omits units that contribute neither blocks nor nodes", () => {
+    const index = buildIndex(extractFunctions("other.ts", "function elsewhere() {}"));
+    const reviewUnit = unit(1);
+    reviewUnit.diff = "@@ -1 +1 @@\n-x;\n+y;";
+    expect(buildCallContext([reviewUnit], buildIndex([]), index).has("caller")).toBe(false);
   });
 });

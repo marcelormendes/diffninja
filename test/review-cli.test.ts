@@ -50,6 +50,18 @@ describe("diffninja command", () => {
       expect(stdinReport.items).toEqual(fileReport.items);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+  it("treats a PR URL in expected-outcome text as evidence, not a navigation target", () => {
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-intent-"));
+    try {
+      const out = join(dir, "report.html");
+      const description = "Preserve behavior from https://github.com/octocat/hello/pull/7.";
+      execFileSync(process.execPath, ["--import", tsx, cli, "--diff", patch, "--mock", "--out", out, "--pr-description", description]);
+      const report = JSON.parse(readFileSync(out + ".json", "utf8"));
+      expect(report.source).toBe(patch);
+      expect(report.items).toHaveLength(5);
+      expect(report.pr.body).toBe(description);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it("refuses live review without credentials", () => {
     const env = { ...process.env, TYPESAFE_API_KEY: "" };
     const result = spawnSync(process.execPath, ["--import", tsx, cli, "--diff", patch], { env, encoding: "utf8" });

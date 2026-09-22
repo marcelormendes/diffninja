@@ -1,7 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { parseDiff } from "../src/review/input.js";
+import { parseDiff, gitDiff } from "../src/review/input.js";
+import { readSnapshotFile } from "../src/git.js";
+import { reviewDiff } from "../src/review/service.js";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("review diff input", () => {
+  it("ignores local replacement objects and refuses evidence for a different patch", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "diffninja-replaced-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git("init", "-b", "main");
+      const revisions: string[] = [];
+      for (const value of [1, 2, 99]) {
+        writeFileSync(join(repo, "value.ts"), `export function value() { return ${value}; }\n`);
+        git("add", ".");
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", String(value));
+        revisions.push(git("rev-parse", "HEAD"));
+      }
+      git("replace", revisions[1], revisions[2]);
+      const result = gitDiff(repo, revisions[0], revisions[1]);
+      expect(result.diff).toContain("+export function value() { return 2; }");
+      expect(result.diff).not.toContain("99");
+      expect(readSnapshotFile(repo, { kind: "commit", ref: revisions[1] }, "value.ts")).toBe("export function value() { return 2; }\n");
+      await expect(reviewDiff({
+        repo, from: revisions[0], to: revisions[1], diff: result.diff.replace("return 2;", "return 3;"),
+      }, { mock: true })).rejects.toThrow();
+    } finally { rmSync(repo, { recursive: true, force: true }); }
+  });
   it("preserves multiple files, hunks, deletions and line numbers", () => {
     const units = parseDiff(`diff --git a/a.ts b/a.ts
 --- a/a.ts

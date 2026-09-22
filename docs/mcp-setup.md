@@ -55,13 +55,18 @@ The sections below are the manual equivalents, one CLI at a time.
 | `pr` | string | GitHub PR link; starts a connected review. |
 | `input` | string | Free text containing a GitHub PR link; starts a connected review. |
 | `mock` | boolean | Offline fixture judgments for static analysis only. Ignored for connected reviews, which still read GitHub. |
+| `expectedOutcome` | `{ "title": string, "description": string }` | Exact, untrusted expected-outcome metadata for static analysis. Links here never select a PR. |
+| `referenceProject` | string | Static git range only: repository-relative tsconfig for opt-in diagnostics using the trusted installed TypeScript compiler. |
 
 Rules enforced by the schema and the tool:
 
-- In `auto` (default) or `connected`, a GitHub PR link in **any input string
-  field** selects connected mode before static input validation. Different
-  links in one call are rejected.
+- In `auto` (default) or `connected`, a GitHub PR link in `diff`, `repo`,
+  `from`, `to`, `pr`, or `input` selects connected mode before static input
+  validation. Different links in one call are rejected. Expected-outcome text
+  is never interpreted as a target.
 - `connected` requires a link even when a valid or empty diff is supplied.
+  It rejects `expectedOutcome` and `referenceProject`: GitHub supplies connected
+  metadata, and reference checking belongs to static analysis.
 - `static` never navigates links in source text; `pr` and `input` are
   rejected.
 - For static analysis, provide **exactly one** input: `diff`, or `from`
@@ -71,6 +76,13 @@ Rules enforced by the schema and the tool:
   process environment. There is no API key argument.
 - Range reviews use the bundled `calldiff` engine for call flows; inline
   diffs report patch-only warnings instead, since full files are unavailable.
+- `expectedOutcome` preserves both strings in `report.pr`. It supports source
+  navigation and explicit intent limitations, not an automatic fulfillment
+  verdict. Generated and author claims remain separately attributed.
+- `referenceProject` compares selected unresolved-reference diagnostics between
+  immutable snapshots, including unchanged consumers. It never installs or runs
+  PR code; unsupported/incomplete checks are explicit. See
+  [check boundaries](cli-reference.md#automatic-check-boundaries).
 
 For static inputs, `structuredContent` **is** the `ReviewReport`, with
 `content` carrying the same report as JSON text. For PR inputs, both carry
@@ -102,6 +114,11 @@ The last one is live: it sends the changed hunks and matching call flows to
 TypeSafe and needs `TYPESAFE_API_KEY`. In static mode the report carries
 `source` and `mode` (`live` or `mock`). Mock judgments are placeholders from
 fixtures — they do not mean a hunk is safe.
+The result also includes deterministic evidence, a short reading agenda, and
+check coverage. Live Jev evaluation makes one HTTP attempt per evaluable hunk,
+with four fixed-order typed questions and no retries or adaptive rounds.
+Confidence does not rank hunks; stochastic judgments may differ between runs
+without changing the deterministic evidence agenda.
 
 Git-range call-flow analysis inherits calldiff's on-demand npm grammar
 installation into `CALLDIFF_GRAMMAR_CACHE` (default

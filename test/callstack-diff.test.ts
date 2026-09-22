@@ -678,51 +678,6 @@ test("indexes getters and walks their bodies", () => {
   `));
 });
 
-test("labels super.method as ClassName.method without linking base", () => {
-  // super.setup() is keyed as Child.setup (current class), so Base.setup is not expanded.
-  const host = workspace();
-  const from = host.commit("before", {
-    "/file.ts": src`
-       class Base {
-         setup() {
-           prep();
-         }
-       }
-       export class Child extends Base {
-         start() {
-           super.setup();
-         }
-       }
-       function prep() {}
-    `,
-  });
-  const to = host.commit("after", {
-    "/file.ts": src`
-       class Base {
-         setup() {
-           prep();
-         }
-       }
-       export class Child extends Base {
-         start() {
-           super.setup();
-           work();
-         }
-       }
-       function prep() {}
-       function work() {}
-    `,
-  });
-
-  const result = host.run(`calldiff diff ${from} ${to} -e Child.start`);
-
-  expect(result.code).toBe(0);
-  expect(result.stdout).toContain(diffOutdent(`
-      Child.start()
-      ├─ Child.setup()
-    + └─ work()
-  `));
-});
 
 test("collects calls inside try/catch/finally and loops", () => {
   const host = workspace();

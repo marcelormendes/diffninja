@@ -1,34 +1,36 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
-  CATEGORY_RUBRIC,
+  BOUNDARY_OBSERVATIONS,
+  EVIDENCE_SCOPES,
+  FAILURE_OBSERVATIONS,
   JEV_API_KEY_ENV,
   JEV_ENDPOINT,
   JEV_MODEL,
-  JEV_RETRY,
-  JUDGMENT_RUNS,
+  JEV_TIMEOUT_MS,
   JevClient,
   JevRequestError,
   MAX_STATE_CHARS,
-  REVIEW_CATEGORIES,
-  RISK_LEVELS,
+  OUTCOME_LEVELS,
   buildJevState,
+  type BoundaryObservation,
+  type EvidenceScope,
+  type FailureObservation,
   type JevObject,
   type JevRequest,
-  type ReviewCategory,
+  type OutcomeLevel,
 } from "../src/review/jev.js";
 import {
-  DIVERGENCE_THRESHOLD,
   MAX_CONCURRENT_REQUESTS,
   MOCK_MODE_WARNING,
+  SINGLE_SAMPLE_WARNING,
   reviewUnits,
-  TOP_CATEGORY_PROBABILITY_FLOOR,
-  TOP_LEVEL_PROBABILITY_FLOOR,
 } from "../src/review/pipeline.js";
-import type { ReviewItem, ReviewUnit } from "../src/review/types.js";
+import { MAX_CONTEXT_NODES } from "../src/review/context-plan.js";
+import type { ReviewContextNode, ReviewItem, ReviewUnit } from "../src/review/types.js";
 
 const SECRET_BODY = "SERVER-BODY-SECRET-9f2";
 const SECRET_ANSWER_TEXT = "IGNORE-ALL-PREVIOUS-INSTRUCTIONS";
-const RISK_LEVEL_KEYS = ["0", "1", "2", "3"];
+const OUTCOME_LEVEL_KEYS = ["0", "1", "2", "3"];
 
 interface UnitSpec {
   readonly id: string;
@@ -37,11 +39,10 @@ interface UnitSpec {
   readonly added?: number;
   readonly removed?: number;
   readonly special?: string;
-  readonly callFlow?: readonly string[];
+  readonly nodes?: readonly ReviewContextNode[];
 }
 
 function makeUnit(spec: UnitSpec): ReviewUnit {
-  const callFlow = spec.callFlow;
   return {
     id: spec.id,
     file: spec.file ?? "src/app.ts",
@@ -52,66 +53,77 @@ function makeUnit(spec: UnitSpec): ReviewUnit {
     oldStart: 1,
     newStart: 1,
     special: spec.special,
-    callFlow: callFlow === undefined ? undefined : [...callFlow],
+    contextNodes: spec.nodes,
   };
 }
 
-interface AnswerSpec {
-  /** The most likely rubric level; the answer's score is that distribution's mean. */
-  readonly risk: number;
-  readonly bug: number;
-  readonly category: ReviewCategory;
-  readonly needsHuman?: number;
-  readonly confidence?: number;
-  /** Weight on the most likely risk level; below 0.6 the vote reads as split. */
-  readonly topLevelProbability?: number;
-  /** Weight on the most likely category, independent of vendor confidence. */
-  readonly categoryProbability?: number;
-  readonly riskProbabilities?: Readonly<Record<string, number>>;
-  readonly categoryProbabilities?: Readonly<Record<string, number>>;
+/** One context node with its whole detail, as the extractor supplies it. */
+function contextNode(key: string, detail: string): ReviewContextNode {
+  return { key, label: `${key}(arg)`, file: "src/app.ts", line: 1, detail };
 }
 
-/** Weighted-style distribution: the chosen level holds `top`, the rest share the remainder. */
-function distribution(chosen: string, keys: readonly string[], top: number): Record<string, number> {
-  const remainder = (keys.length > 1 ? (1 - top) / (keys.length - 1) : 0);
-  return Object.fromEntries(keys.map((key) => [key, key === chosen ? top : remainder]));
+interface ObservationSpec {
+  readonly outcome: OutcomeLevel;
+  readonly boundary?: BoundaryObservation;
+  readonly failureHandling?: FailureObservation;
+  readonly evidenceScope?: EvidenceScope;
+  readonly confidence?: number;
+  /** Weight on the returned outcome level; under the floor the scale reads as unseparated. */
+  readonly outcomeTop?: number;
+  /** Weight on each returned choice option; under the floor that answer reads as unseparated. */
+  readonly choiceTop?: number;
+  /** Exact distributions, when a case needs a shape the knobs above cannot express. */
+  readonly outcomeProbabilities?: Readonly<Record<string, number>>;
+  readonly boundaryProbabilities?: Readonly<Record<string, number>>;
+}
+
+/** Weighted-style distribution: the returned option holds `top`, the rest share the remainder. */
+function distribution(chosen: string, options: readonly string[], top: number): Record<string, number> {
+  const remainder = options.length > 1 ? (1 - top) / (options.length - 1) : 0;
+  return Object.fromEntries(options.map((option) => [option, option === chosen ? top : remainder]));
 }
 
 /**
- * Build one documented response body. The score is derived from the answer's own
- * level distribution, as the API derives it, so the fixture is a body the adapter
+ * One documented response body. The score is derived from its own level
+ * distribution, as the API derives it, so the fixture is a body the adapter
  * accepts for the reason a live body is accepted.
  */
-function answersOf(spec: AnswerSpec): JevObject {
+function answersOf(spec: ObservationSpec): JevObject {
   const confidence = spec.confidence ?? 0.9;
-  const riskProbabilities = spec.riskProbabilities ?? distribution(
-    String(Math.round(spec.risk)),
-    RISK_LEVEL_KEYS,
-    spec.topLevelProbability ?? 0.7,
+  const choiceTop = spec.choiceTop ?? 0.9;
+  const outcomeProbabilities = spec.outcomeProbabilities ?? distribution(
+    String(OUTCOME_LEVELS.indexOf(spec.outcome)),
+    OUTCOME_LEVEL_KEYS,
+    spec.outcomeTop ?? 0.9,
   );
   let score = 0;
-  for (const [level, probability] of Object.entries(riskProbabilities)) {
+  for (const [level, probability] of Object.entries(outcomeProbabilities)) {
     score += Number(level) * probability;
   }
   return {
-    impact_risk: {
-      type: "score",
-      score,
-      probabilities: riskProbabilities,
-      confidence,
-    },
-    likely_bug: { type: "noul", noul: spec.bug },
-    category: {
+    outcome: { type: "score", score, probabilities: outcomeProbabilities, confidence },
+    boundary: {
       type: "choice",
-      choice: spec.category,
-      probabilities: spec.categoryProbabilities ?? distribution(spec.category, REVIEW_CATEGORIES, spec.categoryProbability ?? 0.9),
+      choice: spec.boundary ?? "none",
+      probabilities: spec.boundaryProbabilities ?? distribution(spec.boundary ?? "none", BOUNDARY_OBSERVATIONS, choiceTop),
       confidence,
     },
-    needs_human: { type: "noul", noul: spec.needsHuman ?? 0.2 },
+    failure_handling: {
+      type: "choice",
+      choice: spec.failureHandling ?? "untouched",
+      probabilities: distribution(spec.failureHandling ?? "untouched", FAILURE_OBSERVATIONS, choiceTop),
+      confidence,
+    },
+    evidence_scope: {
+      type: "choice",
+      choice: spec.evidenceScope ?? "changed-code",
+      probabilities: distribution(spec.evidenceScope ?? "changed-code", EVIDENCE_SCOPES, choiceTop),
+      confidence,
+    },
   };
 }
 
-function answerBody(spec: AnswerSpec): string {
+function answerBody(spec: ObservationSpec): string {
   return JSON.stringify({ model: JEV_MODEL, answers: answersOf(spec) });
 }
 
@@ -120,6 +132,7 @@ interface FetchLog {
   readonly method: string;
   readonly authorization: string | null;
   readonly request: JevRequest;
+  readonly body: string;
 }
 
 interface FetchHost {
@@ -128,26 +141,27 @@ interface FetchHost {
 }
 
 function installFetch(
-  reply: (request: JevRequest) => Response | Promise<Response>,
+  reply: (request: JevRequest, callIndex: number) => Response | Promise<Response>,
 ): FetchHost {
   const log: FetchLog[] = [];
   const fetchImpl: typeof globalThis.fetch = async (input, init) => {
     const headers = new Headers(init?.headers);
-    const raw: unknown = JSON.parse(String(init?.body ?? ""));
+    const body = String(init?.body ?? "");
     // SAFETY: the adapter serializes this request; the stub only reads it back.
-    const request = raw as JevRequest;
+    const request = JSON.parse(body) as JevRequest;
     log.push({
       url: String(input),
       method: init?.method ?? "GET",
       authorization: headers.get("authorization"),
       request,
+      body,
     });
-    return reply(request);
+    return reply(request, log.length - 1);
   };
   return { fetch: fetchImpl, log };
 }
 
-function scriptedFetch(script: Readonly<Record<string, AnswerSpec>>): FetchHost {
+function scriptedFetch(script: Readonly<Record<string, ObservationSpec>>): FetchHost {
   return installFetch((request) => {
     const spec = script[request.state.file];
     if (spec === undefined) throw new Error(`no scripted answer for ${request.state.file}`);
@@ -171,6 +185,11 @@ function itemById(items: readonly ReviewItem[], id: string): ReviewItem {
   return item;
 }
 
+/** Failure notes are the run-level warnings that are not the fixed sample notice. */
+function failureWarnings(warnings: readonly string[]): string[] {
+  return warnings.filter((warning) => warning !== SINGLE_SAMPLE_WARNING && warning !== MOCK_MODE_WARNING);
+}
+
 function withMissingApiKeyEnv(): () => void {
   const saved = process.env[JEV_API_KEY_ENV];
   delete process.env[JEV_API_KEY_ENV];
@@ -180,286 +199,379 @@ function withMissingApiKeyEnv(): () => void {
   };
 }
 
+function stateCharsOf(unit: ReviewUnit): number {
+  return JSON.stringify(buildJevState(unit)).length;
+}
+
 const CODE_HUNK = "@@ -1,2 +1,3 @@\n const a = 1;\n+const b = 2;";
 
-describe("reviewUnits ranking and requests", () => {
-  test("ranks weighted judgments and posts the documented request", async () => {
+describe("one request per hunk", () => {
+  test("ranks deterministic observations and posts exactly one documented request per hunk", async () => {
     const units = [
-      makeUnit({
-        id: "high",
-        file: "src/high.ts",
-        diff: CODE_HUNK,
-        added: 1,
-        callFlow: ["runCheckout()", "└─ deleteOrder()"],
-      }),
-      makeUnit({ id: "clean", file: "src/clean.ts", diff: CODE_HUNK, added: 1 }),
-      makeUnit({ id: "mid", file: "src/mid.ts", diff: CODE_HUNK, added: 1 }),
+      makeUnit({ id: "high", file: "src/high.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "clean", file: "src/clean.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "mid", file: "src/mid.ts", diff: CODE_HUNK }),
     ];
     const host = scriptedFetch({
-      "src/high.ts": { risk: 3, bug: 0.78, category: "security" },
-      "src/mid.ts": { risk: 1, bug: 0.2, category: "refactor" },
-      "src/clean.ts": { risk: 0, bug: 0.02, category: "style" },
+      "src/high.ts": {
+        outcome: "contract",
+        boundary: "limit",
+        failureHandling: "swallowed",
+        evidenceScope: "direct-callers",
+      },
+      "src/mid.ts": { outcome: "internal" },
+      "src/clean.ts": { outcome: "none" },
     });
 
     const result = await reviewUnits(units, { apiKey: "test-key", fetch: host.fetch });
 
-    expect(result.modelCalls).toBe(units.length * JUDGMENT_RUNS);
+    // One HTTP attempt per judged hunk: no ensemble, no second round, no retry.
+    expect(result.modelCalls).toBe(units.length);
+    expect(host.log).toHaveLength(units.length);
+    expect(result.warnings).toContain(SINGLE_SAMPLE_WARNING);
+
     expect(result.items.map((item) => item.id)).toEqual(["high", "mid", "clean"]);
     expect(result.items.map((item) => item.status)).toEqual(["attention", "low", "low"]);
-    // Scores 2.4 / 1.2 / 0.6 x 50 + bug x 30 + needs-human x 20 + the category boost.
-    expect(result.items.map((item) => item.priority)).toEqual([79, 30, 15]);
+    // contract 75 + limit 15 + swallowed 15 + direct-callers 2, then internal 25.
+    expect(result.items.map((item) => item.priority)).toEqual([100, 25, 5]);
 
-    expect(host.log).toHaveLength(units.length * JUDGMENT_RUNS);
     expect(host.log[0].url).toBe(JEV_ENDPOINT);
     expect(host.log[0].method).toBe("POST");
     expect(host.log[0].authorization).toBe("Bearer test-key");
     const request = host.log[0].request;
     expect(request.model).toBe(JEV_MODEL);
+    expect(Object.keys(request).sort()).toEqual(["model", "questions", "state"]);
     expect(Object.keys(request.questions).sort()).toEqual([
-      "category",
-      "impact_risk",
-      "likely_bug",
-      "needs_human",
+      "boundary",
+      "evidence_scope",
+      "failure_handling",
+      "outcome",
     ]);
-    expect(request.questions.impact_risk.type).toBe("score");
-    expect(request.questions.impact_risk.criteria).toHaveLength(RISK_LEVEL_KEYS.length);
-    expect(request.questions.likely_bug.type).toBe("noul");
-    expect(request.questions.needs_human.type).toBe("noul");
-    expect(request.questions.category.type).toBe("choice");
-    expect(Object.keys(request.questions.category.criteria).sort()).toEqual(
-      [...REVIEW_CATEGORIES].sort(),
-    );
+    // The four narrow questions and their closed option sets, in canonical order:
+    // nothing is shuffled, so a request is reproducible byte for byte.
+    expect(request.questions.outcome.type).toBe("score");
+    expect(request.questions.outcome.criteria).toHaveLength(OUTCOME_LEVELS.length);
+    for (const criterion of request.questions.outcome.criteria) expect(criterion.length).toBeGreaterThan(0);
+    expect(request.questions.outcome.criteria[0]).toMatch(/unchanged/u);
+    expect(request.questions.outcome.criteria[3]).toMatch(/interface|schema|boundary/u);
+    expect(request.questions.boundary.type).toBe("choice");
+    expect(Object.keys(request.questions.boundary.criteria)).toEqual([...BOUNDARY_OBSERVATIONS]);
+    expect(Object.keys(request.questions.failure_handling.criteria)).toEqual([...FAILURE_OBSERVATIONS]);
+    expect(Object.keys(request.questions.evidence_scope.criteria)).toEqual([...EVIDENCE_SCOPES]);
+    // State is exactly the fields a question refers to, with no answer field that
+    // the adapter already knows and no call-flow text.
+    expect(Object.keys(request.state).sort()).toEqual(["contextNote", "diff", "file", "hunk"]);
 
-    expect(request.state.callFlow).toEqual(["runCheckout()", "└─ deleteOrder()"]);
-    // State is exactly the fields a question refers to: nothing extra to distract
-    // the model, and no answer field that code already knows.
-    expect(Object.keys(request.state).sort()).toEqual([
-      "callFlow",
-      "contextNote",
-      "diff",
-      "file",
-      "hunk",
-    ]);
-    const withoutFlow = host.log[1].request.state;
-    expect(withoutFlow.callFlow).toBeUndefined();
+    const high = itemById(result.items, "high");
+    expect(high.judgment).toEqual({
+      outcome: "contract",
+      boundary: "limit",
+      failureHandling: "swallowed",
+      evidenceScope: "direct-callers",
+      confidence: 0.9,
+    });
+    const reasons = high.reasons.join(" | ");
+    expect(reasons).toMatch(/observable outcome: contract/u);
+    expect(reasons).toMatch(/boundary observation: limit/u);
+    expect(reasons).toMatch(/failure handling: swallowed/u);
+    expect(reasons).toMatch(/evidence scope: direct-callers/u);
+    expect(reasons).toMatch(/routed to attention/u);
     // The key travels in the Authorization header only, never in the body.
     for (const entry of host.log) {
       expect(entry.authorization).toBe("Bearer test-key");
-      expect(JSON.stringify(entry.request)).not.toContain("test-key");
+      expect(entry.body).not.toContain("test-key");
     }
+  });
+
+  test("sends the same request body for the same hunk, so no answer drives a random order", async () => {
+    const unit = makeUnit({ id: "hunk", file: "src/a.ts", diff: CODE_HUNK });
+    const first = scriptedFetch({ "src/a.ts": { outcome: "internal" } });
+    const second = scriptedFetch({ "src/a.ts": { outcome: "internal" } });
+
+    await reviewUnits([unit], { apiKey: "k", fetch: first.fetch });
+    await reviewUnits([unit], { apiKey: "k", fetch: second.fetch });
+
+    expect(first.log).toHaveLength(1);
+    expect(second.log).toHaveLength(1);
+    expect(second.log[0].body).toBe(first.log[0].body);
+    // The question criteria are in one canonical order on every request.
+    expect(second.log[0].authorization).toBe(first.log[0].authorization);
   });
 
   test("keeps the input units untouched and reports one item per unit", async () => {
     const units = [
-      makeUnit({ id: "judged", file: "src/a.ts", diff: CODE_HUNK, added: 1 }),
+      makeUnit({ id: "judged", file: "src/a.ts", diff: CODE_HUNK }),
       makeUnit({ id: "trivial", diff: "@@ -1,2 +1,2 @@\n const a = 1;" }),
     ];
     const snapshot = structuredClone(units);
-    const host = scriptedFetch({ "src/a.ts": { risk: 1, bug: 0.2, category: "refactor" } });
+    const host = scriptedFetch({ "src/a.ts": { outcome: "internal" } });
 
     const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
 
     expect(result.items).toHaveLength(2);
     expect(result.items.map((item) => item.id).sort()).toEqual(["judged", "trivial"]);
-    // The trivial hunk is explained by the deterministic rule that spared it.
     const trivial = itemById(result.items, "trivial");
     expect(trivial.status).toBe("passed");
     expect(trivial.reasons.join("\n")).toMatch(/exact no-op/);
-    // The judged hunk carries the model's own answer and its routing note.
     const judged = itemById(result.items, "judged");
-    expect(judged.judgment?.category).toBe("refactor");
+    expect(judged.judgment?.outcome).toBe("internal");
     expect(judged.reasons.join("\n")).toMatch(/routed to low/);
     expect(units).toEqual(snapshot);
-    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+    expect(host.log).toHaveLength(1);
   });
 });
 
-describe("multi-run judgments", () => {
-  /** Return named probabilities in request order, as a choice API may do. */
-  function runFetch(runs: readonly AnswerSpec[]): FetchHost {
-    let next = 0;
-    return installFetch((request) => {
-      const spec = runs[next];
-      next += 1;
-      if (spec === undefined) throw new Error("no scripted judgment run");
-      const probabilities = spec.categoryProbabilities ??
-        distribution(spec.category, REVIEW_CATEGORIES, spec.categoryProbability ?? 0.9);
-      const ordered = Object.fromEntries(
-        Object.keys(request.questions.category.criteria)
-          .filter((option) => Object.hasOwn(probabilities, option))
-          .map((option) => [option, probabilities[option]]),
-      );
-      return new Response(answerBody({ ...spec, categoryProbabilities: ordered }));
-    });
-  }
-
-  test("shuffles all ten options afresh on every attempt without changing ordinal risk levels", async () => {
-    const categories = [...REVIEW_CATEGORIES];
-    const levels = [...RISK_LEVELS];
-    const host = installFetch(() => host.log.length === 1
-      ? new Response("", { status: 429, headers: { "retry-after": "0" } })
-      : new Response(answerBody({ risk: 1, bug: 0.1, category: "refactor" })));
-    // Distinct entropy per attempt makes freshness deterministic, including retries.
-    const client = new JevClient("k", host.fetch, undefined, (max) => host.log.length % max);
-    const state = buildJevState(makeUnit({ id: "caller", diff: CODE_HUNK }));
-    for (let index = 0; index < 12; index += 1) await client.judge(state);
-
-    expect(host.log).toHaveLength(12 * JUDGMENT_RUNS + 1);
-    const orders = host.log.map(({ request }) => Object.keys(request.questions.category.criteria));
-    for (const { request } of host.log) {
-      expect(Object.keys(request).sort()).toEqual(["model", "questions", "state"]);
-      expect(Object.keys(request.questions.category.criteria).sort()).toEqual([...categories].sort());
-      expect(request.questions.category.criteria).toEqual(CATEGORY_RUBRIC);
-      expect(request.questions.impact_risk.criteria).toEqual(levels);
-    }
-    expect(new Set(orders.slice(0, JUDGMENT_RUNS + 1).map((order) => order.join(","))).size)
-      .toBe(JUDGMENT_RUNS + 1);
-    expect(new Set(orders.map((order) => order.join(","))).size).toBeGreaterThan(10);
-    expect(REVIEW_CATEGORIES).toEqual(categories);
-    expect(RISK_LEVELS).toEqual(levels);
-  });
-
-  test("averages probability vectors by name, not permutation or winning votes", async () => {
-    const host = runFetch([
-      {
-        risk: 0, bug: 0.1, needsHuman: 0.2, confidence: 0.2, category: "refactor",
-        riskProbabilities: { "0": 1 },
-        categoryProbabilities: { refactor: 0.55, security: 0.45 },
-      },
-      {
-        risk: 3, bug: 0.2, needsHuman: 0.4, confidence: 0.4, category: "refactor",
-        riskProbabilities: { "3": 1 },
-        categoryProbabilities: { refactor: 0.55, security: 0.45 },
-      },
-      {
-        risk: 3, bug: 0.3, needsHuman: 0.6, confidence: 0.6, category: "security",
-        riskProbabilities: { "0": 0.5, "3": 0.5 },
-        categoryProbabilities: { security: 1 },
-      },
-    ]);
-    const client = new JevClient("k", host.fetch, undefined, (max) => host.log.length % max);
-    const result = await client.judge(
-      buildJevState(makeUnit({ id: "caller", diff: CODE_HUNK })),
-    );
-
-    expect(host.log).toHaveLength(JUDGMENT_RUNS);
-    expect(new Set(host.log.map(({ request }) =>
-      Object.keys(request.questions.category.criteria).join(","))).size).toBe(JUDGMENT_RUNS);
-    for (const category of REVIEW_CATEGORIES) {
-      const expected = category === "security" ? 1.9 / 3 : category === "refactor" ? 1.1 / 3 : 0;
-      expect(result.categoryProbabilities[category]).toBeCloseTo(expected);
-    }
-    expect(result.riskProbabilities).toEqual({ "0": 0.5, "1": 0, "2": 0, "3": 0.5 });
-    expect(result.judgment.category).toBe("security");
-    expect(result.judgment.risk).toBeCloseTo(1.5);
-    expect(result.judgment.bug).toBeCloseTo(0.2);
-    expect(result.judgment.needsHuman).toBeCloseTo(0.4);
-    expect(result.judgment.confidence).toBeCloseTo(0.4);
-    expect(result.categoryTopProbability).toBeCloseTo(1.9 / 3);
-    expect(result.riskTopProbability).toBeCloseTo(0.5);
-    expect(result.divergence).toBeCloseTo(0.5);
-  });
-
-  test.each(["category", "risk"] as const)(
-    "routes strongly divergent %s runs to uncertain even when the mean clears both floors",
-    async (question) => {
-      const agreed: AnswerSpec = {
-        risk: 3, bug: 0.8, category: "security", topLevelProbability: 1, categoryProbability: 1,
-      };
-      const runs = Array<AnswerSpec>(JUDGMENT_RUNS).fill(agreed);
-      const stable = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
-        apiKey: "k", fetch: runFetch(runs).fetch,
-      });
-      runs[JUDGMENT_RUNS - 1] = question === "category"
-        ? { ...agreed, category: "refactor" }
-        : { ...agreed, risk: 0 };
-      const assessment = await new JevClient("k", runFetch(runs).fetch).judge(
-        buildJevState(makeUnit({ id: "caller", diff: CODE_HUNK })),
-      );
-      const unstable = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
-        apiKey: "k", fetch: runFetch(runs).fetch,
-      });
-
-      // One outlier leaves a clear aggregate winner, but must not be hidden by it.
-      const majority = (JUDGMENT_RUNS - 1) / JUDGMENT_RUNS;
-      expect(assessment.categoryTopProbability).toBeGreaterThanOrEqual(TOP_CATEGORY_PROBABILITY_FLOOR);
-      expect(assessment.riskTopProbability).toBeGreaterThanOrEqual(TOP_LEVEL_PROBABILITY_FLOOR);
-      expect(assessment.divergence).toBeGreaterThanOrEqual(DIVERGENCE_THRESHOLD);
-      expect(stable.items[0].status).toBe("attention");
-      expect(unstable.items[0].status).toBe("uncertain");
-      expect(unstable.items[0].judgment?.category).toBe("security");
-      expect(unstable.items[0].judgment?.risk).toBeCloseTo(question === "risk" ? 3 * majority : 3);
-    },
-  );
-
-  test.each(["category", "risk"] as const)(
-    "routes an averaged %s probability below its floor to uncertain despite high confidence",
-    async (question) => {
-      const runs = [0.65, 0.55, 0.57].map((top): AnswerSpec => ({
-        risk: 3, bug: 0.8, category: "security", confidence: 0.99,
-        categoryProbability: question === "category" ? top : 0.9,
-        topLevelProbability: question === "risk" ? top : 0.9,
-      }));
-      const result = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
-        apiKey: "k", fetch: runFetch(runs).fetch,
-      });
-      expect(result.items[0].judgment?.confidence).toBeCloseTo(0.99);
-      expect(result.items[0].status).toBe("uncertain");
-    },
-  );
-
-  test("does not treat modest distribution variation as unstable", async () => {
-    const host = runFetch([0.9, 0.65, 0.55].map((top): AnswerSpec => ({
-      risk: 3, bug: 0.8, category: "security", categoryProbability: top,
-    })));
-    const result = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
+describe("deterministic status and priority", () => {
+  test.each([
+    { outcome: "none", status: "low", priority: 5 },
+    { outcome: "internal", status: "low", priority: 25 },
+    { outcome: "caller-visible", status: "attention", priority: 55 },
+    { outcome: "contract", status: "attention", priority: 75 },
+  ] as const)("routes outcome $outcome to $status with priority $priority", async (row) => {
+    const host = scriptedFetch({ "src/a.ts": { outcome: row.outcome } });
+    const result = await reviewUnits([makeUnit({ id: "a", file: "src/a.ts", diff: CODE_HUNK })], {
       apiKey: "k", fetch: host.fetch,
     });
-    expect(result.items[0].status).toBe("attention");
+    expect(result.items[0].status).toBe(row.status);
+    expect(result.items[0].priority).toBe(row.priority);
   });
 
-  test.each(["rejection", "malformed"] as const)("discards earlier runs after a later %s", async (failure) => {
-    const host = installFetch(() => host.log.length === 1
-      ? new Response(answerBody({ risk: 3, bug: 0.8, category: "security" }))
-      : new Response("{}", { status: failure === "rejection" ? 401 : 200 }));
-    const result = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
-      apiKey: "k", fetch: host.fetch,
+  test("raises priority for a boundary limit or a discarded failure without inventing a new status", async () => {
+    const host = scriptedFetch({
+      "src/limit.ts": { outcome: "internal", boundary: "limit" },
+      "src/swallowed.ts": { outcome: "internal", failureHandling: "swallowed" },
+      "src/plain.ts": { outcome: "internal" },
     });
-    expect(result.modelCalls).toBe(2);
-    expect(result.items[0].status).toBe("uncertain");
-    expect(result.items[0].judgment).toBeUndefined();
-    expect(result.warnings).toHaveLength(1);
+    const result = await reviewUnits([
+      makeUnit({ id: "limit", file: "src/limit.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "swallowed", file: "src/swallowed.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "plain", file: "src/plain.ts", diff: CODE_HUNK }),
+    ], { apiKey: "k", fetch: host.fetch });
+
+    expect(itemById(result.items, "limit").status).toBe("attention");
+    expect(itemById(result.items, "swallowed").status).toBe("attention");
+    expect(itemById(result.items, "plain").status).toBe("low");
+    expect(itemById(result.items, "limit").priority).toBe(40);
+    expect(itemById(result.items, "swallowed").priority).toBe(40);
+    expect(itemById(result.items, "plain").priority).toBe(25);
   });
 
-  test("shares the existing total deadline across successful runs", async () => {
-    let now = 0;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const host = installFetch(() => {
-      now += JEV_RETRY.totalTimeoutMs;
-      return new Response(answerBody({ risk: 3, bug: 0.8, category: "security" }));
+  test("treats missing evidence as a reading prompt, never as a veto", async () => {
+    const host = scriptedFetch({
+      "src/known.ts": { outcome: "none", evidenceScope: "contracts" },
+      "src/unknown.ts": { outcome: "none", evidenceScope: "not-established" },
     });
-    try {
-      const result = await reviewUnits([makeUnit({ id: "caller", diff: CODE_HUNK })], {
+    const result = await reviewUnits([
+      makeUnit({ id: "known", file: "src/known.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "unknown", file: "src/unknown.ts", diff: CODE_HUNK }),
+    ], { apiKey: "k", fetch: host.fetch });
+
+    const unknown = itemById(result.items, "unknown");
+    // The status is unchanged: absent evidence is not a defect, so it cannot veto
+    // a hunk the model read as minor. Only the reading priority moves.
+    expect(unknown.status).toBe("low");
+    expect(unknown.priority).toBeGreaterThan(itemById(result.items, "known").priority);
+    expect(unknown.judgment?.evidenceScope).toBe("not-established");
+    expect(unknown.reasons.join(" ")).toContain("missing evidence, not a defect claim");
+  });
+
+  test.each(["boundary", "failure_handling"] as const)(
+    "escalates an unknown %s answer instead of forcing it into an absence claim",
+    async (question) => {
+      const spec = question === "boundary"
+        ? { outcome: "internal", boundary: "unknown" } as const
+        : { outcome: "internal", failureHandling: "unknown" } as const;
+      const host = scriptedFetch({ "src/unclear.ts": spec });
+      const result = await reviewUnits([makeUnit({ id: "unclear", file: "src/unclear.ts", diff: CODE_HUNK })], {
         apiKey: "k", fetch: host.fetch,
       });
-      expect(result.modelCalls).toBe(1);
-      expect(result.items[0].status).toBe("uncertain");
-      expect(result.items[0].judgment).toBeUndefined();
-    } finally {
-      clock.mockRestore();
+
+      const item = result.items[0];
+      // Unknown is an escalation with no reading weight: the hunk is not ranked as
+      // attention and not ranked as a clean low, so it cannot be read as "no
+      // boundary here" or "no failure path here".
+      expect(item.status).toBe("uncertain");
+      expect(item.priority).toBe(25);
+      expect(item.judgment?.[question === "boundary" ? "boundary" : "failureHandling"]).toBe("unknown");
+      expect(item.reasons.join(" ")).toContain("was unknown");
+      expect(item.reasons.join(" ")).toMatch(/adds no reading weight/u);
+    },
+  );
+
+  test("escalates an exact tie instead of ranking the option the list order happens to name first", async () => {
+    // Two levels share the top weight. No option was voted for, so the level the
+    // canonical order names must not be read as a decisive low.
+    const host = scriptedFetch({
+      "src/tie.ts": { outcome: "none", outcomeProbabilities: { "0": 0.5, "3": 0.5 } },
+      // One vote above the floor still decides.
+      "src/decided.ts": { outcome: "contract", outcomeProbabilities: { "0": 0.4, "3": 0.6 } },
+    });
+    const result = await reviewUnits([
+      makeUnit({ id: "tie", file: "src/tie.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "decided", file: "src/decided.ts", diff: CODE_HUNK }),
+    ], { apiKey: "k", fetch: host.fetch });
+
+    const tie = itemById(result.items, "tie");
+    expect(tie.status).toBe("uncertain");
+    // The named level is still recorded, so the tie is visible rather than hidden.
+    expect(tie.judgment?.outcome).toBe("none");
+    expect(tie.reasons.some((reason) => reason.includes("did not separate its options"))).toBe(true);
+
+    const decided = itemById(result.items, "decided");
+    expect(decided.status).toBe("attention");
+    expect(decided.reasons.join(" ")).not.toContain("did not separate its options");
+  });
+
+  test("escalates a tie that only the sum tolerance makes exceed a half", async () => {
+    // 0.505/0.505 is accepted by the distribution sum tolerance, so the raw peak
+    // is above 0.5. Normalizing by the accounted total shows the even split it is.
+    const host = scriptedFetch({
+      "src/tolerance-tie.ts": { outcome: "none", outcomeProbabilities: { "0": 0.505, "3": 0.505 } },
+    });
+    const result = await reviewUnits([makeUnit({ id: "tol-tie", file: "src/tolerance-tie.ts", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+
+    expect(result.items[0].status).toBe("uncertain");
+    expect(result.items[0].reasons.some((reason) => reason.includes("did not separate its options"))).toBe(true);
+  });
+
+  test("escalates a plurality that most of the vote did not back", async () => {
+    // The reported level is the top of the scale but no level holds a majority of
+    // the accounted vote: the scale was not separated, so this run does not rank it.
+    const host = scriptedFetch({
+      "src/plurality.ts": { outcome: "caller-visible", outcomeProbabilities: { "0": 0.45, "2": 0.35, "3": 0.2 } },
+    });
+    const result = await reviewUnits([makeUnit({ id: "plurality", file: "src/plurality.ts", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+
+    const item = result.items[0];
+    // Level 0 holds the plurality, so it is the level reported — and it still
+    // escalates, because a plurality is not a majority.
+    expect(item.judgment?.outcome).toBe("none");
+    expect(item.status).toBe("uncertain");
+    expect(item.reasons.some((reason) => reason.includes("did not separate its options"))).toBe(true);
+  });
+
+  test("escalates an exact tie on a choice observation too", async () => {
+    const host = scriptedFetch({
+      "src/choice-tie.ts": { outcome: "internal", boundaryProbabilities: { none: 0.5, limit: 0.5 } },
+    });
+    const result = await reviewUnits([makeUnit({ id: "choice-tie", file: "src/choice-tie.ts", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+
+    const item = result.items[0];
+    // A tied boundary distribution cannot be read as "no boundary" or as a limit.
+    expect(item.status).toBe("uncertain");
+    expect(item.judgment?.boundary).toBe("none");
+    expect(item.reasons.some((reason) => reason.includes("boundary answer did not separate its options"))).toBe(true);
+  });
+
+  test("escalates a choice named within float slack of its rival, where the maximum is not the reported option", async () => {
+    // The winner identity is checked with float slack, so naming `none` beside a
+    // marginally larger `limit` is accepted. The maximum crosses 0.5 while the
+    // reported option does not, so the reported option's own share decides.
+    const host = scriptedFetch({
+      "src/slack-tie.ts": {
+        outcome: "internal",
+        boundaryProbabilities: { none: 0.4999997, limit: 0.5000003 },
+      },
+    });
+    const result = await reviewUnits([makeUnit({ id: "slack", file: "src/slack-tie.ts", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+
+    const item = result.items[0];
+    expect(item.judgment?.boundary).toBe("none");
+    expect(item.status).toBe("uncertain");
+    expect(item.reasons.some((reason) => reason.includes("boundary answer did not separate its options"))).toBe(true);
+  });
+
+  test("does not rank on vendor confidence", async () => {
+    const host = scriptedFetch({
+      "src/low.ts": { outcome: "internal", confidence: 0.1 },
+      "src/high.ts": { outcome: "internal", confidence: 1 },
+    });
+    const result = await reviewUnits([
+      makeUnit({ id: "low", file: "src/low.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "high", file: "src/high.ts", diff: CODE_HUNK }),
+    ], { apiKey: "k", fetch: host.fetch });
+
+    expect(itemById(result.items, "low").priority).toBe(itemById(result.items, "high").priority);
+    expect(itemById(result.items, "low").status).toBe("low");
+    // Confidence is reported as the returned lowest value, and is not a gate.
+    expect(itemById(result.items, "low").judgment?.confidence).toBeCloseTo(0.1);
+    expect(itemById(result.items, "low").reasons.join(" ")).toMatch(/informational, not a ranking gate/u);
+  });
+
+  test("escalates an answer that did not separate its own options, keeping the observations", async () => {
+    const host = scriptedFetch({
+      "src/flat.ts": { outcome: "contract", failureHandling: "swallowed", choiceTop: 0.3 },
+    });
+    const result = await reviewUnits([makeUnit({ id: "flat", file: "src/flat.ts", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+
+    const item = result.items[0];
+    expect(item.status).toBe("uncertain");
+    // Escalation changes the route, not the recorded observations.
+    expect(item.judgment?.failureHandling).toBe("swallowed");
+    // The unseparated answer is reported once per affected observation: this
+    // fixture scatters the boundary, failure-handling, and evidence-scope answers,
+    // and only those three.
+    const reported = item.reasons.filter((reason) => reason.includes("did not separate its options"));
+    expect(reported).toHaveLength(3);
+    for (const label of ["boundary", "failure handling", "evidence scope"]) {
+      expect(reported.join(" ")).toContain(`${label} answer did not separate its options`);
     }
+  });
+
+  test("escalates on an unseparated outcome scale even when the peak level is high", async () => {
+    const host = scriptedFetch({
+      "src/split.ts": { outcome: "contract", outcomeTop: 0.3 },
+    });
+    const result = await reviewUnits([makeUnit({ id: "split", file: "src/split.ts", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+    expect(result.items[0].status).toBe("uncertain");
+    // A scattered scale escalates even though the peak level would rank high.
+    expect(result.items[0].judgment?.outcome).toBe("contract");
+    expect(result.items[0].reasons.some((reason) => reason.includes("outcome answer did not separate its options"))).toBe(true);
+  });
+
+  test("clamps priority and reports the weighted outcome position as returned", async () => {
+    const host = scriptedFetch({
+      "src/top.ts": {
+        outcome: "contract",
+        boundary: "limit",
+        failureHandling: "swallowed",
+        evidenceScope: "contracts",
+        outcomeTop: 0.7,
+      },
+    });
+    const result = await reviewUnits([makeUnit({ id: "top", file: "src/top.ts", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+    const item = result.items[0];
+    expect(item.priority).toBe(100);
+    expect(item.status).toBe("attention");
+    // The weighted mean of {0:0.1, 1:0.1, 2:0.1, 3:0.7} is 2.4, reported as such.
+    expect(item.reasons.join(" ")).toMatch(/weight 2\.4\/3/u);
   });
 });
 
 describe("deterministic passes", () => {
   test("increment and decrement code is never mistaken for patch file headers", async () => {
-    const host = installFetch(() => new Response(answerBody({ risk: 2, bug: 0.8, category: "bug-risk" })));
+    const host = installFetch(() => new Response(answerBody({ outcome: "internal" })));
     const result = await reviewUnits([
       makeUnit({ id: "operators", diff: "@@ -1 +1 @@\n---counter;\n+++counter;", added: 1, removed: 1 }),
     ], { apiKey: "test-key", fetch: host.fetch });
-    expect(result.items[0].status).toBe("attention");
-    expect(result.modelCalls).toBe(JUDGMENT_RUNS);
+    expect(result.items[0].status).toBe("low");
+    expect(result.modelCalls).toBe(1);
   });
+
   test("passes exact no-ops and blank-only text documents, and judges everything else", async () => {
     const units = [
       makeUnit({ id: "no-op", file: "src/app.ts", diff: "@@ -1,2 +1,2 @@\n const a = 1;" }),
@@ -468,8 +580,8 @@ describe("deterministic passes", () => {
       makeUnit({ id: "comment", file: "src/comment.ts", diff: CODE_HUNK, added: 1 }),
     ];
     const host = scriptedFetch({
-      "src/blank.ts": { risk: 1, bug: 0.2, category: "refactor" },
-      "src/comment.ts": { risk: 1, bug: 0.2, category: "refactor" },
+      "src/blank.ts": { outcome: "none" },
+      "src/comment.ts": { outcome: "internal" },
     });
 
     const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
@@ -480,10 +592,10 @@ describe("deterministic passes", () => {
     expect(itemById(result.items, "blank-ts").status).toBe("low");
     expect(itemById(result.items, "comment").status).toBe("low");
     expect(host.log.map((entry) => entry.request.state.file).sort()).toEqual([
-      ...Array<string>(JUDGMENT_RUNS).fill("src/blank.ts"),
-      ...Array<string>(JUDGMENT_RUNS).fill("src/comment.ts"),
+      "src/blank.ts",
+      "src/comment.ts",
     ]);
-    expect(result.modelCalls).toBe(2 * JUDGMENT_RUNS);
+    expect(result.modelCalls).toBe(2);
   });
 });
 
@@ -511,198 +623,80 @@ describe("manual-review fallbacks", () => {
   });
 });
 
-/** The serialized size the cap is measured against, for one unit's state. */
-function stateCharsOf(unit: ReviewUnit): number {
-  return JSON.stringify(buildJevState(unit)).length;
-}
-
-/** One standalone call block as the context builder supplies it, `chars` long. */
-function callFlowBlock(index: number, chars: number): string {
-  const head = `call callee${index} @ src/app.ts:${index + 1}\n  snapshot=after target=lexical\n  mapping=positional\n  arg[1] -> param1: "`;
-  return `${head}${"a".repeat(chars - head.length)}"`;
-}
-
-/** A flow too large to send whole, ending in the builder's aggregate omission marker. */
-function oversizedFlow(): string[] {
-  const blocks = Array.from({ length: 30 }, (_value, index) => callFlowBlock(index, 900));
-  blocks.push("[call-flow context omitted: unrelated trees and snippets beyond the depth limit]");
-  return blocks;
-}
-
-/**
- * A hunk whose state with no call flow, and therefore the no-flow note, is exactly
- * `chars` characters. The diff tail is a quote, so the fixture measures JSON
- * escaping rather than raw diff length. Throws rather than silently testing a
- * different size.
- */
+/** A hunk whose essential state is exactly `chars` characters, or a thrown error. */
 function unitAtEssentialChars(chars: number): ReviewUnit {
   const file = "src/boundary.ts";
-  const probe = stateCharsOf(makeUnit({ id: "boundary", file, diff: hunkWithFiller(0) }));
-  // Each filler character costs exactly one serialized character.
-  return unitAssertingChars(
-    makeUnit({ id: "boundary", file, diff: hunkWithFiller(chars - probe) }),
-    chars,
-  );
-}
-
-/**
- * A hunk whose state, with every supplied call-flow entry included, is exactly
- * `chars` characters. Only meaningful at or under the cap with a flow small enough
- * to fit whole; a larger flow would be pruned and the size would not be linear.
- */
-function unitAtFullFlowChars(chars: number, callFlow: readonly string[]): ReviewUnit {
-  const file = "src/boundary.ts";
-  const probe = stateCharsOf(makeUnit({ id: "boundary", file, diff: hunkWithFiller(0), callFlow }));
-  return unitAssertingChars(
-    makeUnit({ id: "boundary", file, diff: hunkWithFiller(chars - probe), callFlow }),
-    chars,
-  );
-}
-
-/** The unit when its state is exactly `chars` characters; a thrown error when it is not. */
-function unitAssertingChars(unit: ReviewUnit, chars: number): ReviewUnit {
+  const probe = stateCharsOf(makeUnit({ id: "boundary", file, diff: `${CODE_HUNK}\n+` }));
+  const unit = makeUnit({ id: "boundary", file, diff: `${CODE_HUNK}\n+${"x".repeat(chars - probe)}` });
   const actual = stateCharsOf(unit);
   if (actual !== chars) throw new Error(`fixture is ${actual} serialized characters, not ${chars}`);
   return unit;
 }
 
-/** The shared hunk plus `filler` unescaped filler characters and one closing quote. */
-function hunkWithFiller(filler: number): string {
-  return `${CODE_HUNK}\n+${"x".repeat(filler)}"`;
-}
-
 describe("serialized state budget", () => {
-  test("prunes optional call-flow context instead of routing the hunk to a human", async () => {
-    const flow = oversizedFlow();
-    expect(flow.join("").length).toBeGreaterThan(MAX_STATE_CHARS);
-    const unit = makeUnit({ id: "flow", diff: CODE_HUNK, callFlow: flow });
-    const host = scriptedFetch({ "src/app.ts": { risk: 1, bug: 0.2, category: "refactor" } });
+  test("drops a node that cannot fit whole and still judges the hunk", async () => {
+    const detail = "d".repeat(9_000);
+    const nodes = [contextNode("after:a", detail), contextNode("after:b", detail), contextNode("after:c", detail)];
+    const unit = makeUnit({ id: "nodes", file: "src/nodes.ts", diff: CODE_HUNK, nodes });
+    const host = scriptedFetch({ "src/nodes.ts": { outcome: "internal", evidenceScope: "direct-callers" } });
 
     const result = await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
 
-    // A call flow that cannot fit whole is optional context: the hunk is judged live.
-    expect(host.log).toHaveLength(JUDGMENT_RUNS);
-    const item = result.items[0];
-    expect(item.judgment?.category).toBe("refactor");
-    expect(item.status).toBe("low");
-    expect(item.routing).toBeUndefined();
-    // The item still carries the full context the extraction side supplied, for the report.
-    expect(item.callFlow).toEqual(flow);
-
+    expect(host.log).toHaveLength(1);
     const state = host.log[0].request.state;
-    expect(state.file).toBe("src/app.ts");
-    expect(state.hunk).toBe(unit.header);
-    expect(state.diff).toBe(CODE_HUNK);
+    const sent = state.contextNodes ?? [];
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.length).toBeLessThan(nodes.length);
     expect(JSON.stringify(state).length).toBeLessThanOrEqual(MAX_STATE_CHARS);
+    // Whole nodes in the supplied priority order, never reordered or shortened.
+    expect(sent.map((node) => node.key)).toEqual(nodes.slice(0, sent.length).map((node) => node.key));
+    for (const node of sent) {
+      expect(node.detail).toBe(nodes.find((supplied) => supplied.key === node.key)?.detail);
+    }
+    expect(state.contextNote).toMatch(/Context nodes omitted/u);
 
-    const sent = state.callFlow ?? [];
-    const keptEntries = flow.filter((entry) => sent.includes(entry));
-    expect(keptEntries.length).toBeGreaterThan(0);
-    expect(keptEntries.length).toBeLessThan(flow.length);
-    // Whole entries, in the supplied priority order, never reordered or spliced.
-    expect(sent.slice(0, keptEntries.length)).toEqual(keptEntries);
-    // One trailing marker reports the count of dropped entries, excluding itself.
-    expect(sent).toHaveLength(keptEntries.length + 1);
-    expect(sent[keptEntries.length]).toMatch(
-      new RegExp(`omitted to fit the size limit: ${flow.length - keptEntries.length} of ${flow.length}\\b`, "u"),
-    );
-    // The note already states the omission for the whole state, whatever the marker says.
-    expect(state.contextNote).toMatch(/omitted/u);
-    expect(item.reasons.join(" ")).toMatch(/trimmed/u);
-    expect(item.reasons.join(" ")).toContain(`${keptEntries.length} of ${flow.length}`);
+    const item = result.items[0];
+    expect(item.routing).toBeUndefined();
+    expect(item.judgment?.evidenceScope).toBe("direct-callers");
+    // The item still carries every node the extraction side supplied, for the report.
+    expect(item.contextNodes).toEqual(nodes);
+    expect(item.reasons.join(" ")).toContain(`${sent.length} of ${nodes.length} definitions were sent`);
   });
 
-  test("marks every omitted entry even where the count marker cannot fit", async () => {
-    // Two entries fill the state to one character under the cap, so a third cannot
-    // fit beside them and the count marker has no room either.
-    const fitting = [callFlowBlock(0, 400), callFlowBlock(1, 400)];
-    const pruned = callFlowBlock(2, 400);
-    const filled = unitAtFullFlowChars(MAX_STATE_CHARS - 1, fitting);
-    const unit = makeUnit({ id: "filled", file: filled.file, diff: filled.diff, callFlow: [...fitting, pruned] });
-    const host = scriptedFetch({ [filled.file]: { risk: 1, bug: 0.2, category: "refactor" } });
+  test("carries at most the node limit and states the count omission", async () => {
+    const nodes = Array.from({ length: MAX_CONTEXT_NODES + 2 }, (_value, index) =>
+      contextNode(`after:n${index}`, "d".repeat(10)));
+    const unit = makeUnit({ id: "many", file: "src/many.ts", diff: CODE_HUNK, nodes });
+    const host = scriptedFetch({ "src/many.ts": { outcome: "internal" } });
 
-    const result = await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
+    await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
+
     const state = host.log[0].request.state;
-    const sent = state.callFlow ?? [];
-
-    expect(sent).toEqual(fitting);
-    expect(JSON.stringify(state)).toHaveLength(MAX_STATE_CHARS - 1);
-    // No room for the count, so the note alone carries the omission — and it does.
-    expect(sent.some((entry) => entry.includes("omitted to fit the size limit"))).toBe(false);
-    expect(state.contextNote).toMatch(/every call-flow entry not listed in this state is omitted/u);
-    expect(result.items[0].judgment).toBeDefined();
-    expect(result.items[0].routing).toBeUndefined();
-    expect(result.items[0].reasons.join(" ")).toContain(`2 of 3 entries were sent`);
-  });
-
-  test("judges with the hunk alone when no call-flow entry can fit at all", async () => {
-    // The essentials fit the cap under the short no-flow note, and only under that
-    // note: the enriched note is longer than the remaining room. With every entry
-    // too big to fit, the state must fall back to the smaller note and still be
-    // judged, so choosing that note never by itself forces a manual review.
-    const wide = unitAtEssentialChars(MAX_STATE_CHARS - 10);
-    const flow = [callFlowBlock(0, MAX_STATE_CHARS + 1_000)];
-    const unit = makeUnit({ id: "wide", file: wide.file, diff: wide.diff, callFlow: flow });
-    // The essentials are ten characters under the cap, so there is no room for any
-    // entry — nor for the enriched note that carrying one would select. Both must
-    // give way and leave a state that still fits and is still judged.
-    const small = buildJevState(
-      makeUnit({ id: "wide", file: wide.file, diff: wide.diff, callFlow: [callFlowBlock(1, 200)] }),
-    );
-    expect(small.contextNote).toBe(buildJevState(wide).contextNote);
-    expect(small.callFlow).toBeUndefined();
-    const host = scriptedFetch({ [wide.file]: { risk: 1, bug: 0.2, category: "refactor" } });
-
-    const result = await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
-
-    // One entry larger than the whole budget is dropped whole; the hunk is still
-    // judged on its diff rather than sent to a human for optional context.
-    expect(host.log).toHaveLength(JUDGMENT_RUNS);
-    const state = host.log[0].request.state;
-    expect(state.callFlow).toBeUndefined();
-    expect(state.contextNote).toBe(buildJevState(wide).contextNote);
-    expect(state.diff).toBe(wide.diff);
-    expect(JSON.stringify(state)).toHaveLength(MAX_STATE_CHARS - 10);
-    expect(result.items[0].judgment).toBeDefined();
-    expect(result.items[0].routing).toBeUndefined();
-    expect(result.items[0].callFlow).toEqual(flow);
-    expect(result.items[0].reasons.join(" ")).toContain(`0 of ${flow.length} entries were sent`);
-  });
-
-  test("uses remaining space after skipping a block that cannot fit at all", async () => {
-    const retained = callFlowBlock(1, 120);
-    const unit = makeUnit({ id: "caller", diff: CODE_HUNK, callFlow: [callFlowBlock(0, MAX_STATE_CHARS), retained] });
-    const host = scriptedFetch({ "src/app.ts": { risk: 1, bug: 0.2, category: "refactor" } });
-    const result = await reviewUnits([unit], { apiKey: "k", fetch: host.fetch });
-    expect(host.log[0].request.state.callFlow?.[0]).toBe(retained);
-    expect(JSON.stringify(host.log[0].request.state).length).toBeLessThanOrEqual(MAX_STATE_CHARS);
-    expect(result.items[0].routing).toBeUndefined();
-    expect(result.items[0].reasons.join(" ")).toContain("1 of 2 entries were sent");
+    expect(state.contextNodes).toHaveLength(MAX_CONTEXT_NODES);
+    expect(state.contextNote).toContain(`2 beyond the ${MAX_CONTEXT_NODES}-node limit`);
   });
 
   test("caps on the serialized JSON, so escaping counts, at an exact boundary", async () => {
-    const entry = callFlowBlock(0, 120);
-    const atCap = unitAtFullFlowChars(MAX_STATE_CHARS, [entry]);
-    const overCap = unitAtEssentialChars(MAX_STATE_CHARS + 1);
-    const host = installFetch(() => new Response(answerBody({ risk: 1, bug: 0.2, category: "refactor" })));
+    const host = installFetch(() => new Response(answerBody({ outcome: "internal" })));
 
+    const atCap = unitAtEssentialChars(MAX_STATE_CHARS);
     const inside = await reviewUnits([atCap], { apiKey: "k", fetch: host.fetch });
-    expect(host.log).toHaveLength(JUDGMENT_RUNS);
-    // Exactly at the cap every entry and the richer note survive: nothing is pruned.
+    expect(host.log).toHaveLength(1);
     expect(JSON.stringify(host.log[0].request.state)).toHaveLength(MAX_STATE_CHARS);
-    expect(host.log[0].request.state.callFlow).toEqual([entry]);
     expect(inside.items[0].judgment).toBeDefined();
     expect(inside.items[0].routing).toBeUndefined();
 
+    const overCap = unitAtEssentialChars(MAX_STATE_CHARS + 1);
     const beyond = await reviewUnits([overCap], { apiKey: "k", fetch: host.fetch });
-    expect(host.log).toHaveLength(JUDGMENT_RUNS);
+    // The cap reads the state the model would receive, which carries the note.
+    const measured = stateCharsOf(overCap);
+    expect(measured).toBe(MAX_STATE_CHARS + 1);
     expect(beyond.modelCalls).toBe(0);
     expect(beyond.items[0].judgment).toBeUndefined();
-    // One character more than the cap is over the cap, and the item says by how much.
     expect(beyond.items[0].routing).toEqual({
       evaluation: "not_evaluated",
       reasonCode: "context_limit_exceeded",
-      requiredChars: MAX_STATE_CHARS + 1,
+      requiredChars: measured,
       limitChars: MAX_STATE_CHARS,
     });
 
@@ -718,38 +712,34 @@ describe("serialized state budget", () => {
     expect(stateCharsOf(quotes)).toBeGreaterThan(MAX_STATE_CHARS);
 
     const rejected = await reviewUnits([quotes], { apiKey: "k", fetch: host.fetch });
-    expect(host.log).toHaveLength(JUDGMENT_RUNS);
     expect(rejected.items[0].routing?.requiredChars).toBe(stateCharsOf(quotes));
   });
 
-  test("measures an essential overflow as the no-flow state, not the supplied context", async () => {
-    const withoutFlow = unitAtEssentialChars(MAX_STATE_CHARS + 2_000);
-    const withFlow = makeUnit({
+  test("measures an essential overflow with every optional node left out", async () => {
+    const withoutNodes = unitAtEssentialChars(MAX_STATE_CHARS + 2_000);
+    const withNodes = makeUnit({
       id: "boundary",
       file: "src/boundary.ts",
-      diff: withoutFlow.diff,
-      callFlow: oversizedFlow(),
+      diff: withoutNodes.diff,
+      nodes: Array.from({ length: 4 }, (_value, index) => contextNode(`after:n${index}`, "d".repeat(9_000))),
     });
     const host = installFetch(() => {
       throw new Error("the model must not be called for this hunk");
     });
 
-    const result = await reviewUnits([withFlow], { apiKey: "k", fetch: host.fetch });
+    const result = await reviewUnits([withNodes], { apiKey: "k", fetch: host.fetch });
 
     expect(host.log).toHaveLength(0);
-    // Every optional entry is omitted before the state is measured, so neither the
-    // extra context nor the longer enriched note inflates the reported size.
-    expect(stateCharsOf(withFlow)).toBe(MAX_STATE_CHARS + 2_000);
-    expect(stateCharsOf(withFlow)).toBe(stateCharsOf(withoutFlow));
-    const state = buildJevState(withFlow);
-    expect(state.callFlow).toBeUndefined();
+    // Every optional node is left out before the state is measured, so neither the
+    // extra context nor the longer note inflates the reported size.
+    expect(stateCharsOf(withNodes)).toBe(stateCharsOf(withoutNodes));
     expect(result.items[0].routing).toEqual({
       evaluation: "not_evaluated",
       reasonCode: "context_limit_exceeded",
-      requiredChars: stateCharsOf(withoutFlow),
+      requiredChars: stateCharsOf(withoutNodes),
       limitChars: MAX_STATE_CHARS,
     });
-    expect(result.items[0].reasons.join(" ")).toMatch(/every optional call-flow entry was omitted/u);
+    expect(result.items[0].reasons.join(" ")).toMatch(/every optional context node was left out/u);
   });
 
   test("sends an essential overflow to exactly one human item, with no key and no model fields", async () => {
@@ -780,187 +770,137 @@ describe("serialized state budget", () => {
       const item = routed[0];
       expect(item.status).toBe("uncertain");
       // Not evaluated means no judgment at all: nothing is invented for a hunk the
-      // model never saw, and no confidence or needs-human field appears.
+      // model never saw, and no confidence or observation field appears.
       expect(Object.hasOwn(item, "judgment")).toBe(false);
-      expect(JSON.stringify(item)).not.toMatch(/"judgment"|"confidence"|"needsHuman"/u);
-      expect(item.routing).toEqual({
-        evaluation: "not_evaluated",
-        reasonCode: "context_limit_exceeded",
-        requiredChars: stateCharsOf(oversized),
-        limitChars: MAX_STATE_CHARS,
-      });
-      expect(item.routing?.requiredChars).toBe(MAX_STATE_CHARS + 1);
+      expect(JSON.stringify(item)).not.toMatch(/"judgment"|"confidence"|"outcome"/u);
+      expect(item.routing?.requiredChars).toBe(stateCharsOf(oversized));
       expect(item.reasons.join(" ")).toContain(String(MAX_STATE_CHARS));
-      expect(item.reasons.join(" ")).not.toMatch(/needs human|confidence/iu);
     } finally {
       restore();
     }
   });
 });
 
-describe("uncertainty gates", () => {
-  test("uncertain context cannot be auto-passed despite a low bug score", async () => {
-    const host = installFetch(() => new Response(answerBody({ risk: 0, bug: 0.05, category: "refactor", needsHuman: 0.5 })));
-    const result = await reviewUnits([makeUnit({ id: "context", diff: CODE_HUNK })], { apiKey: "test-key", fetch: host.fetch });
-    expect(result.items[0].status).toBe("uncertain");
-  });
-  test("uses raw probability floors, gray bands, and insufficient context rather than vendor confidence", async () => {
-    const units = [
-      makeUnit({ id: "conf", file: "src/conf.ts", diff: CODE_HUNK, added: 1 }),
-      makeUnit({ id: "gray", file: "src/gray.ts", diff: CODE_HUNK, added: 1 }),
-      makeUnit({ id: "split", file: "src/split.ts", diff: CODE_HUNK, added: 1 }),
-      makeUnit({ id: "human", file: "src/human.ts", diff: CODE_HUNK, added: 1 }),
-      makeUnit({ id: "attn", file: "src/attn.ts", diff: CODE_HUNK, added: 1 }),
-    ];
-    const host = scriptedFetch({
-      "src/conf.ts": {
-        risk: 3, bug: 0.8, category: "security", confidence: 0.4,
-        categoryProbability: TOP_CATEGORY_PROBABILITY_FLOOR,
-        topLevelProbability: TOP_LEVEL_PROBABILITY_FLOOR,
-      },
-      "src/gray.ts": { risk: 2, bug: 0.5, category: "bug-risk" },
-      "src/split.ts": { risk: 2, bug: 0.8, category: "bug-risk", topLevelProbability: 0.35 },
-      "src/human.ts": { risk: 3, bug: 0.8, category: "api-change", needsHuman: 0.8 },
-      "src/attn.ts": { risk: 3, bug: 0.8, category: "security" },
-    });
-
-    const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
-
-    expect(itemById(result.items, "conf").status).toBe("attention");
-    expect(itemById(result.items, "gray").status).toBe("uncertain");
-    expect(itemById(result.items, "split").status).toBe("uncertain");
-    expect(itemById(result.items, "human").status).toBe("uncertain");
-    expect(itemById(result.items, "attn").status).toBe("attention");
-    expect(result.items[0].id).toBe("attn");
-    expect(result.items.map((item) => item.status)).toEqual([
-      "attention",
-      "attention",
-      "uncertain",
-      "uncertain",
-      "uncertain",
-    ]);
-  });
-
-  test("a category vote with no clear winner escalates instead of ranking as attention", async () => {
-    const base = answersOf({ risk: 3, bug: 0.9, category: "security" });
-    // Same answers, but the category distribution is spread across the options:
-    // none of them stands out, so the routing decision is not this run's to make.
-    const flatCategory = {
-      ...base,
-      category: {
-        type: "choice",
-        choice: "security",
-        probabilities: Object.fromEntries(REVIEW_CATEGORIES.map((option) => [option, 0.1])),
-        confidence: 0.9,
-      },
-    };
-    const host = bodyFetch({ "src/mixed.ts": JSON.stringify({ model: JEV_MODEL, answers: flatCategory }) });
-
-    const result = await reviewUnits(
-      [makeUnit({ id: "mixed", file: "src/mixed.ts", diff: CODE_HUNK, added: 1 })],
-      { apiKey: "k", fetch: host.fetch },
-    );
-
-    const item = itemById(result.items, "mixed");
-    expect(item.status).toBe("uncertain");
-    // The judgment is still reported: escalation changes the route, not the answers.
-    expect(item.judgment?.bug).toBeCloseTo(0.9);
-  });
-});
-
 describe("failing closed", () => {
-  test("fails closed per hunk on HTTP errors and never echoes the response body", async () => {
+  test("fails closed per hunk on HTTP errors, with one attempt each and no body echo", async () => {
     const units = [
-      makeUnit({ id: "server-error", file: "src/server.ts", diff: CODE_HUNK, added: 1 }),
-      makeUnit({ id: "unauthorized", file: "src/auth.ts", diff: CODE_HUNK, added: 1 }),
-      makeUnit({ id: "network", file: "src/net.ts", diff: CODE_HUNK, added: 1 }),
+      makeUnit({ id: "server-error", file: "src/server.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "unauthorized", file: "src/auth.ts", diff: CODE_HUNK }),
+      makeUnit({ id: "network", file: "src/net.ts", diff: CODE_HUNK }),
     ];
     const host = installFetch((request) => {
-      if (request.state.file === "src/server.ts") {
-        return new Response(SECRET_BODY, { status: 500 });
-      }
-      if (request.state.file === "src/auth.ts") {
-        return new Response(SECRET_BODY, { status: 401 });
-      }
+      if (request.state.file === "src/server.ts") return new Response(SECRET_BODY, { status: 500 });
+      if (request.state.file === "src/auth.ts") return new Response(SECRET_BODY, { status: 401 });
       return Promise.reject(new Error(SECRET_BODY));
     });
 
     const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
-    const output = [
-      ...result.warnings,
-      ...result.items.flatMap((item) => item.reasons),
-    ].join(" | ");
+    const output = [...result.warnings, ...result.items.flatMap((item) => item.reasons)].join(" | ");
 
-    expect(result.modelCalls).toBe(7);
-    expect(result.warnings).toHaveLength(3);
+    // Exactly one request per hunk, failures included: nothing is sent again.
+    expect(host.log).toHaveLength(units.length);
+    expect(result.modelCalls).toBe(units.length);
+    expect(failureWarnings(result.warnings)).toHaveLength(units.length);
     expect(output).not.toContain(SECRET_BODY);
     for (const item of result.items) {
       expect(item.status).toBe("uncertain");
+      expect(item.priority).toBe(80);
       expect(item.judgment).toBeUndefined();
     }
     expect(output).toContain("HTTP 500");
     expect(output).toContain("HTTP 401");
     expect(output).toContain(JEV_API_KEY_ENV);
+    expect(output).toMatch(/fails closed/u);
   });
 
-  test("fails closed per hunk on malformed answers", async () => {
-    const base = answersOf({ risk: 2, bug: 0.4, category: "bug-risk" });
+  test.each([
+    [429, "rate limited"],
+    [503, "HTTP 503"],
+    [408, "request timeout"],
+  ] as const)("never retries a transient status (%i)", async (status, expected) => {
+    const host = installFetch(() => new Response(SECRET_BODY, {
+      status,
+      headers: { "retry-after": "0" },
+    }));
+    const result = await reviewUnits([makeUnit({ id: "transient", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+
+    expect(host.log).toHaveLength(1);
+    expect(result.modelCalls).toBe(1);
+    expect(result.items[0].judgment).toBeUndefined();
+    expect(result.items[0].reasons.join(" ")).toContain(expected);
+  });
+
+  test("reports a timeout as a failed call instead of waiting for a second attempt", async () => {
+    const host = installFetch(() => Promise.reject(new DOMException("The operation was aborted.", "TimeoutError")));
+    const result = await reviewUnits([makeUnit({ id: "slow", diff: CODE_HUNK })], {
+      apiKey: "k", fetch: host.fetch,
+    });
+    expect(host.log).toHaveLength(1);
+    expect(result.modelCalls).toBe(1);
+    expect(result.items[0].status).toBe("uncertain");
+    expect(result.items[0].reasons.join(" ")).toContain(`${JEV_TIMEOUT_MS} ms deadline`);
+  });
+
+  test("fails closed per hunk on malformed answers, with one request each", async () => {
+    const base = answersOf({ outcome: "internal" });
     const cases = {
       "src/missing.ts": JSON.stringify({
         model: JEV_MODEL,
         answers: {
-          impact_risk: base["impact_risk"],
-          likely_bug: base["likely_bug"],
-          needs_human: base["needs_human"],
+          outcome: base["outcome"],
+          boundary: base["boundary"],
+          failure_handling: base["failure_handling"],
         },
       }),
       "src/wrong-type.ts": JSON.stringify({
         model: JEV_MODEL,
-        answers: { ...base, impact_risk: { type: "noul", noul: 0.5 } },
+        answers: { ...base, outcome: { type: "choice", noul: 0.5 } },
       }),
       "src/out-of-range.ts": JSON.stringify({
         model: JEV_MODEL,
-        answers: { ...base, likely_bug: { type: "noul", noul: 1.4 } },
+        answers: {
+          ...base,
+          boundary: { type: "choice", choice: "none", probabilities: { none: 1.4 }, confidence: 0.9 },
+        },
       }),
       "src/bad-sum.ts": JSON.stringify({
         model: JEV_MODEL,
         answers: {
           ...base,
-          impact_risk: {
-            type: "score",
-            score: 2,
-            probabilities: { "0": 0.2, "1": 0.2 },
+          outcome: { type: "score", score: 1.5, probabilities: { "0": 0.5, "1": 0.5, "2": 0.5 }, confidence: 0.9 },
+        },
+      }),
+      "src/unknown-key.ts": JSON.stringify({
+        model: JEV_MODEL,
+        answers: {
+          ...base,
+          failure_handling: {
+            type: "choice",
+            choice: "swallowed",
+            probabilities: { swallowed: 0.5, discarded: 0.5 },
             confidence: 0.9,
           },
         },
       }),
-      "src/bad-category.ts": JSON.stringify({
+      "src/bad-option.ts": JSON.stringify({
         model: JEV_MODEL,
         answers: {
           ...base,
-          category: {
-            type: "choice",
-            choice: "nonsense",
-            probabilities: { nonsense: 1 },
-            confidence: 0.9,
-          },
+          evidence_scope: { type: "choice", choice: "everywhere", probabilities: { everywhere: 1 }, confidence: 0.9 },
         },
       }),
       "src/text-field.ts": JSON.stringify({
         model: JEV_MODEL,
-        answers: { ...base, impact_risk: { type: "score", score: SECRET_ANSWER_TEXT, confidence: 0.9 } },
+        answers: { ...base, outcome: { type: "score", score: SECRET_ANSWER_TEXT, confidence: 0.9 } },
       }),
       // The score has to be the probability-weighted mean of its own levels.
       "src/score-disagrees.ts": JSON.stringify({
         model: JEV_MODEL,
         answers: {
           ...base,
-          impact_risk: {
-            type: "score",
-            score: 3,
-            probabilities: { "0": 0.2, "1": 0.8 },
-            confidence: 0.9,
-          },
+          outcome: { type: "score", score: 3, probabilities: { "0": 0.2, "1": 0.8 }, confidence: 0.9 },
         },
       }),
       // The chosen option has to be the distribution's highest-probability option.
@@ -968,30 +908,35 @@ describe("failing closed", () => {
         model: JEV_MODEL,
         answers: {
           ...base,
-          category: {
+          boundary: {
             type: "choice",
-            choice: "style",
-            probabilities: { style: 0.1, security: 0.9 },
+            choice: "none",
+            probabilities: { none: 0.1, limit: 0.9 },
             confidence: 0.9,
           },
         },
       }),
+      "src/no-confidence.ts": JSON.stringify({
+        model: JEV_MODEL,
+        answers: {
+          ...base,
+          evidence_scope: { type: "choice", choice: "changed-code", probabilities: { "changed-code": 0.9, contracts: 0.1 } },
+        },
+      }),
     };
     const units = Object.keys(cases).map((file, index) =>
-      makeUnit({ id: `bad-${index}`, file, diff: CODE_HUNK, added: 1 }),
+      makeUnit({ id: `bad-${index}`, file, diff: CODE_HUNK }),
     );
     const host = bodyFetch(cases);
 
     const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
-    const output = [
-      ...result.warnings,
-      ...result.items.flatMap((item) => item.reasons),
-    ].join(" | ");
+    const output = [...result.warnings, ...result.items.flatMap((item) => item.reasons)].join(" | ");
 
-    expect(result.modelCalls).toBe(units.length);
     expect(host.log).toHaveLength(units.length);
-    expect(result.warnings).toHaveLength(units.length);
+    expect(result.modelCalls).toBe(units.length);
+    expect(failureWarnings(result.warnings)).toHaveLength(units.length);
     expect(output).not.toContain(SECRET_ANSWER_TEXT);
+    expect(output).toMatch(/the live answer was malformed/u);
     for (const item of result.items) {
       expect(item.status).toBe("uncertain");
       expect(item.judgment).toBeUndefined();
@@ -1009,8 +954,10 @@ describe("mock mode", () => {
         added: 3,
         removed: 1,
       }),
-      makeUnit({ id: "large", file: "src/big.ts", diff: largeHunk(), added: 10 }),
+      makeUnit({ id: "large", file: "src/big.ts", diff: fillerHunk(10), added: 10 }),
       makeUnit({ id: "deletion", file: "src/old.ts", diff: deletionHunk(), added: 0, removed: 3 }),
+      makeUnit({ id: "bounded", file: "src/bound.ts", diff: "@@ -1 +1,2 @@\n+if (count >= limit) return;", added: 1 }),
+      makeUnit({ id: "ambiguous", file: "src/ambig.ts", diff: "@@ -1 +1,2 @@\n+const n = items.length;", added: 1 }),
       makeUnit({ id: "medium", file: "src/mid.ts", diff: fillerHunk(5), added: 5 }),
       makeUnit({ id: "tiny", file: "src/tiny.ts", diff: fillerHunk(2), added: 2 }),
       makeUnit({ id: "blank", file: "notes.txt", diff: "@@ -1 +1,2 @@\n text\n+", added: 1 }),
@@ -1025,24 +972,17 @@ describe("mock mode", () => {
     expect(host.log).toHaveLength(0);
     expect(first.modelCalls).toBe(0);
     expect(first.warnings).toEqual([MOCK_MODE_WARNING]);
-    expect(first.items.map((item) => item.id)).toEqual([
-      "risky",
-      "large",
-      "deletion",
-      "medium",
-      "tiny",
-      "blank",
-    ]);
-    expect(first.items.map((item) => item.status)).toEqual([
-      "attention",
-      "attention",
-      "uncertain",
-      "low",
-      "low",
-      "passed",
-    ]);
-    expect(itemById(first.items, "risky").judgment?.category).toBe("security");
+    expect(itemById(first.items, "risky").judgment?.outcome).toBe("contract");
+    expect(itemById(first.items, "bounded").judgment?.boundary).toBe("limit");
+    // The fixture answers unknown where it cannot classify, and that escalates
+    // rather than ranking as clean.
+    const ambiguous = itemById(first.items, "ambiguous");
+    expect(ambiguous.judgment?.boundary).toBe("unknown");
+    expect(ambiguous.status).toBe("uncertain");
+    expect(ambiguous.reasons.join(" ")).toContain("boundary answer was unknown");
     expect(itemById(first.items, "tiny").reasons.join(" ")).toContain("mock mode");
+    expect(itemById(first.items, "blank").status).toBe("passed");
+    // Mock fixtures are a pure function of the hunk: two runs are identical.
     expect(second.items).toEqual(first.items);
   });
 });
@@ -1052,14 +992,14 @@ describe("api key handling", () => {
     const restore = withMissingApiKeyEnv();
     try {
       process.env[JEV_API_KEY_ENV] = "env-key-value";
-      const fromEnvironment = scriptedFetch({ "src/a.ts": { risk: 1, bug: 0.2, category: "refactor" } });
-      await reviewUnits([makeUnit({ id: "a", file: "src/a.ts", diff: CODE_HUNK, added: 1 })], {
+      const fromEnvironment = scriptedFetch({ "src/a.ts": { outcome: "internal" } });
+      await reviewUnits([makeUnit({ id: "a", file: "src/a.ts", diff: CODE_HUNK })], {
         fetch: fromEnvironment.fetch,
       });
       expect(fromEnvironment.log[0].authorization).toBe("Bearer env-key-value");
 
-      const explicit = scriptedFetch({ "src/a.ts": { risk: 1, bug: 0.2, category: "refactor" } });
-      await reviewUnits([makeUnit({ id: "a", file: "src/a.ts", diff: CODE_HUNK, added: 1 })], {
+      const explicit = scriptedFetch({ "src/a.ts": { outcome: "internal" } });
+      await reviewUnits([makeUnit({ id: "a", file: "src/a.ts", diff: CODE_HUNK })], {
         apiKey: "option-key-value",
         fetch: explicit.fetch,
       });
@@ -1072,26 +1012,22 @@ describe("api key handling", () => {
   test("refuses a live run with no key only when a hunk needs the model", async () => {
     const restore = withMissingApiKeyEnv();
     try {
-      const needed = installFetch(() => new Response(answerBody({ risk: 1, bug: 0.2, category: "refactor" })));
+      const needed = installFetch(() => new Response(answerBody({ outcome: "none" })));
       await expect(
-        reviewUnits([makeUnit({ id: "a", file: "src/a.ts", diff: CODE_HUNK, added: 1 })], {
-          fetch: needed.fetch,
-        }),
+        reviewUnits([makeUnit({ id: "a", file: "src/a.ts", diff: CODE_HUNK })], { fetch: needed.fetch }),
       ).rejects.toThrow(/TYPESAFE_API_KEY/u);
       expect(needed.log).toHaveLength(0);
 
       const skipped = installFetch(() => {
         throw new Error("no hunk here needs the model");
       });
-      const result = await reviewUnits(
-        [
-          makeUnit({ id: "no-op", diff: "@@ -1,2 +1,2 @@\n const a = 1;" }),
-          makeUnit({ id: "binary", file: "a.png", diff: "Binary files differ", special: "binary" }),
-        ],
-        { fetch: skipped.fetch },
-      );
+      const result = await reviewUnits([
+        makeUnit({ id: "no-op", diff: "@@ -1,2 +1,2 @@\n const a = 1;" }),
+        makeUnit({ id: "binary", file: "a.png", diff: "Binary files differ", special: "binary" }),
+      ], { fetch: skipped.fetch });
       expect(skipped.log).toHaveLength(0);
       expect(result.modelCalls).toBe(0);
+      expect(result.warnings).toEqual([]);
       expect(result.items.map((item) => item.status)).toEqual(["uncertain", "passed"]);
     } finally {
       restore();
@@ -1102,10 +1038,7 @@ describe("api key handling", () => {
 describe("live request bounds", () => {
   test("keeps at most the configured number of requests in flight", async () => {
     const files = ["a", "b", "c", "d", "e", "f"].map((name) => `src/${name}.ts`);
-    const units = files.map((file) => makeUnit({ id: file, file, diff: CODE_HUNK, added: 1 }));
-    // The pool starts its workers synchronously, so every worker reaches its first
-    // request before any response can resolve. Counting in-flight calls therefore
-    // measures the pool exactly, with no timers and no guessed durations.
+    const units = files.map((file) => makeUnit({ id: file, file, diff: CODE_HUNK }));
     let inFlight = 0;
     let peak = 0;
     const host = installFetch(async () => {
@@ -1113,167 +1046,37 @@ describe("live request bounds", () => {
       peak = Math.max(peak, inFlight);
       await Promise.resolve();
       inFlight -= 1;
-      return new Response(answerBody({ risk: 1, bug: 0.2, category: "refactor" }), { status: 200 });
+      return new Response(answerBody({ outcome: "internal" }), { status: 200 });
     });
 
     const result = await reviewUnits(units, { apiKey: "k", fetch: host.fetch });
 
-    expect(result.modelCalls).toBe(files.length * JUDGMENT_RUNS);
+    expect(result.modelCalls).toBe(files.length);
     expect(result.items).toHaveLength(files.length);
     expect(peak).toBe(MAX_CONCURRENT_REQUESTS);
   });
 });
 
-describe("transient failures", () => {
-  const KEY = "retry-key-9f2";
-
-  /**
-   * A retryable status with a zero retry-after, so the retry path runs with no
-   * wall-clock wait and the test measures the policy, not the clock.
-   */
-  function transientFetch(...statuses: number[]): FetchHost {
-    let next = 0;
-    return installFetch(() => {
-      const status = statuses[next] ?? 200;
-      next += 1;
-      return status === 200
-        ? new Response(answerBody({ risk: 3, bug: 0.8, category: "security" }), { status })
-        : new Response(SECRET_BODY, { status, headers: { "retry-after": "0" } });
+describe("direct client use", () => {
+  test("refuses an oversized state before spending a request", async () => {
+    let calls = 0;
+    const client = new JevClient("k", async () => {
+      calls += 1;
+      return new Response(answerBody({ outcome: "none" }));
     });
-  }
-
-  test("retries a rate-limited hunk while counting retries and independent runs", async () => {
-    const host = transientFetch(429, 200);
-    const units = [makeUnit({ id: "limited", file: "src/limited.ts", diff: CODE_HUNK, added: 1 })];
-
-    const result = await reviewUnits(units, { apiKey: KEY, fetch: host.fetch });
-
-    expect(host.log).toHaveLength(JUDGMENT_RUNS + 1);
-    expect(result.modelCalls).toBe(JUDGMENT_RUNS + 1);
-    expect(result.warnings).toEqual([]);
-    expect(itemById(result.items, "limited").status).toBe("attention");
-    // Every attempt keeps the key in the header, never in the body.
-    for (const entry of host.log) {
-      expect(entry.authorization).toBe(`Bearer ${KEY}`);
-      expect(JSON.stringify(entry.request)).not.toContain(KEY);
-    }
-  });
-
-  test("gives up after the documented attempt count and still fails closed", async () => {
-    const host = transientFetch(500, 503, 529);
-    const units = [makeUnit({ id: "down", file: "src/down.ts", diff: CODE_HUNK, added: 1 })];
-
-    const result = await reviewUnits(units, { apiKey: KEY, fetch: host.fetch });
-    const output = [...result.warnings, ...result.items[0].reasons].join(" | ");
-
-    expect(host.log).toHaveLength(JEV_RETRY.maxAttempts);
-    expect(result.modelCalls).toBe(3);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.items[0].status).toBe("uncertain");
-    expect(result.items[0].judgment).toBeUndefined();
-    expect(output).not.toContain(SECRET_BODY);
-    expect(output).not.toContain(KEY);
-  });
-
-  test("never retries a definitive rejection", async () => {
-    const host = transientFetch(401);
-    const units = [makeUnit({ id: "denied", file: "src/denied.ts", diff: CODE_HUNK, added: 1 })];
-
-    const result = await reviewUnits(units, { apiKey: KEY, fetch: host.fetch });
-
-    expect(host.log).toHaveLength(1);
-    expect(result.items[0].status).toBe("uncertain");
-    expect(result.items[0].reasons.join(" ")).toContain("HTTP 401");
-  });
-
-  test("backs off exponentially with bounded jitter before exhausting retries", async () => {
-    const waits: number[] = [];
-    const host = installFetch(() => new Response(SECRET_BODY, { status: 503 }));
-    const client = new JevClient(KEY, host.fetch, (ms) => {
-      waits.push(ms);
-      return Promise.resolve();
-    });
-
-    await expect(
-      client.judge(buildJevState(makeUnit({ id: "retry", file: "src/retry.ts", diff: CODE_HUNK }))),
-    ).rejects.toBeInstanceOf(JevRequestError);
-
-    expect(host.log).toHaveLength(JEV_RETRY.maxAttempts);
-    expect(waits).toHaveLength(JEV_RETRY.maxAttempts - 1);
-    for (const [index, delay] of waits.entries()) {
-      const ceiling = JEV_RETRY.backoffInitialMs * 2 ** index;
-      expect(delay).toBeGreaterThanOrEqual(ceiling * (1 - JEV_RETRY.jitterFraction) - 1);
-      expect(delay).toBeLessThanOrEqual(ceiling);
-    }
-  });
-
-  test("honors HTTP-date and millisecond retry delays without retrying early", async () => {
-    let now = Date.parse("2026-09-18T12:00:00Z");
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const waits: number[] = [];
-    let attempt = 0;
-    const host = installFetch(() => {
-      attempt += 1;
-      if (attempt === 1) return new Response("", {
-        status: 429, headers: { "retry-after": new Date(now + 8_000).toUTCString() },
-      });
-      if (attempt === 2) return new Response("", {
-        status: 529, headers: { "retry-after-ms": "250", "retry-after": "20" },
-      });
-      return new Response(answerBody({ risk: 1, bug: 0.1, category: "refactor" }));
-    });
-    const client = new JevClient(KEY, host.fetch, async (ms) => {
-      waits.push(ms);
-      now += ms;
-    });
-    try {
-      const result = await client.judge(buildJevState(makeUnit({ id: "dates", diff: CODE_HUNK })));
-      expect(result.judgment.category).toBe("refactor");
-      expect(waits).toEqual([8_000, 250]);
-      expect(client.requestCount).toBe(JUDGMENT_RUNS + 2);
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
-  test("fails closed rather than shortening a server delay beyond the total budget", async () => {
-    const host = installFetch(() => new Response(SECRET_BODY, {
-      status: 429, headers: { "retry-after": "120" },
-    }));
-    const result = await reviewUnits(
-      [makeUnit({ id: "long-delay", diff: CODE_HUNK })], { apiKey: KEY, fetch: host.fetch },
+    const state = buildJevState(
+      makeUnit({ id: "huge", diff: `@@ -1 +1 @@\n+${"x".repeat(MAX_STATE_CHARS + 1)}` }),
     );
-    expect(host.log).toHaveLength(1);
-    expect(result.modelCalls).toBe(1);
-    expect(result.items[0].status).toBe("uncertain");
-    expect(result.items[0].judgment).toBeUndefined();
-    expect(JSON.stringify(result)).not.toContain(SECRET_BODY);
-    expect(JSON.stringify(result)).not.toContain(KEY);
-  });
 
-  test("does not start another request after its total deadline", async () => {
-    let now = 0;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const host = transientFetch(503, 200);
-    const client = new JevClient(KEY, host.fetch, async () => { now += JEV_RETRY.totalTimeoutMs; });
-    try {
-      await expect(client.judge(buildJevState(makeUnit({ id: "expired", diff: CODE_HUNK }))))
-        .rejects.toBeInstanceOf(JevRequestError);
-      expect(host.log).toHaveLength(1);
-      expect(client.requestCount).toBe(1);
-    } finally {
-      clock.mockRestore();
-    }
+    await expect(client.judge(state)).rejects.toBeInstanceOf(JevRequestError);
+    expect(calls).toBe(0);
+    expect(client.requestCount).toBe(0);
   });
 });
 
 function fillerHunk(lines: number): string {
   const body = Array.from({ length: lines }, (_value, index) => `+const value${index} = ${index};`);
   return ["@@ -1 +1 @@", ...body].join("\n");
-}
-
-function largeHunk(): string {
-  return fillerHunk(10);
 }
 
 function deletionHunk(): string {

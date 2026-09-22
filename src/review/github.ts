@@ -75,6 +75,8 @@ export interface ConnectedSnapshot {
   baseSha: string;
   headSha: string;
   state: string;
+  title?: string;
+  body?: string;
   lines: SnapshotLine[];
   /** Set when the pull request exists but cannot be reviewed; `lines` may still be empty. */
   unavailableReason?: string;
@@ -471,6 +473,8 @@ interface PrMetadata {
   repo: string;
   number: number;
   state: string;
+  title: string;
+  body: string;
   baseSha: string;
   headSha: string;
   baseRefName: string;
@@ -712,7 +716,7 @@ function validateCanonicalDiff(rawDiff: string, listing: GhJson): ParsedDiff {
 /* ------------------------------------------------------------------ session */
 
 const VIEW_FIELDS = [
-  "url", "id", "number", "state", "baseRefOid", "headRefOid", "isCrossRepository",
+  "url", "id", "number", "state", "title", "body", "baseRefOid", "headRefOid", "isCrossRepository",
   "headRepository", "headRepositoryOwner", "baseRefName", "headRefName",
 ].join(",");
 
@@ -727,7 +731,7 @@ const CONTROL_CHARACTERS = /[^\P{Cc}\t]/u;
 /** Binds host, repository, number, base, head, state, and the exact diff bytes. */
 function snapshotId(meta: PrMetadata, rawDiff: string): string {
   const diffHash = createHash("sha256").update(rawDiff).digest("hex");
-  return createHash("sha256").update(`${meta.owner}/${meta.repo}#${meta.number}|${meta.baseSha}|${meta.headSha}|${meta.state}|${diffHash}`).digest("hex");
+  return createHash("sha256").update(JSON.stringify([meta.owner, meta.repo, meta.number, meta.baseSha, meta.headSha, meta.state, meta.title, meta.body, diffHash])).digest("hex");
 }
 
 interface PullCoordinates {
@@ -890,6 +894,8 @@ export class ConnectedReview {
       repo: canonical.repo,
       number: canonical.number,
       state,
+      title: textField(payload, "title") ?? "",
+      body: textField(payload, "body") ?? "",
       baseSha,
       headSha,
       baseRefName,
@@ -943,7 +949,7 @@ export class ConnectedReview {
     const rawDiff = await this.readCanonicalDiff(meta);
     const listing = await this.readChangedFiles(meta);
     const after = await this.readMetadata(target);
-    if (after.baseSha !== meta.baseSha || after.headSha !== meta.headSha || after.state !== meta.state) {
+    if (after.baseSha !== meta.baseSha || after.headSha !== meta.headSha || after.state !== meta.state || after.title !== meta.title || after.body !== meta.body) {
       throw new Error("The pull request changed while diffninja was reading it. Load it again.");
     }
     const canonical = validateCanonicalDiff(rawDiff, listing);
@@ -956,6 +962,8 @@ export class ConnectedReview {
       baseSha: meta.baseSha,
       headSha: meta.headSha,
       state: meta.state,
+      title: meta.title,
+      body: meta.body,
       lines: canonical.lines,
     };
     const reason = canonical.problem ?? reviewabilityProblem(meta);

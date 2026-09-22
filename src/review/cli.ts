@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +10,7 @@ import { serveConnected, type ConnectedSession } from "./connected.js";
 import { ConnectedReview } from "./github.js";
 import { detectPullRequest } from "./pr-input.js";
 import { runSetup, setupHelp } from "./setup.js";
+import type { PullRequestIntent } from "./evidence-types.js";
 
 const help = `diffninja. Focused local PR review.
 
@@ -43,6 +44,10 @@ Options:
   --to REF       Head commit. Compares endpoints, not merge base.
   --repo PATH    Repository for git range. Defaults to current directory.
   --out PATH     HTML output. JSON is written next to it. Default: review.html
+  --pr-title TEXT        Expected outcome for a local diff or range.
+  --pr-description TEXT  Exact description for a local diff or range.
+  --reference-project PATH  Opt in to the trusted installed TypeScript checker
+                            for this repository-relative tsconfig, before/after.
   --mock         Explicit offline demo, for exported reports. Connected review
                  always reads the pull request from GitHub.
   --open         Open the HTML report, or the connected review page, in the browser.
@@ -123,6 +128,7 @@ async function main(): Promise<void> {
     diff: { type: "string" }, stdin: { type: "boolean" }, from: { type: "string" }, to: { type: "string" },
     repo: { type: "string" }, out: { type: "string" }, mock: { type: "boolean" }, open: { type: "boolean" }, help: { type: "boolean" },
     pr: { type: "string" }, "pull-request": { type: "string" }, static: { type: "boolean" }, export: { type: "boolean" }, connected: { type: "boolean" },
+    "pr-title": { type: "string" }, "pr-description": { type: "string" }, "reference-project": { type: "string" },
   }, strict: true, allowPositionals: true });
   if (values.help) { console.log(help); return; }
   const connected = values.connected === true;
@@ -130,9 +136,17 @@ async function main(): Promise<void> {
   // Connected review serves a page from GitHub and writes nothing, so the two
   // intents cannot both be honored; refusing beats silently dropping one.
   if (connected && wantsExport) throw new Error("--connected serves a connected review and conflicts with --static and --export; keep --connected to serve, or keep --static to export a report.");
-  const prUrl = pullRequestFrom(args, [values.pr, values["pull-request"]], positionals, connected);
+  // Expected-outcome text is evidence, even when it cites another pull request.
+  const targetArgs = args.filter((arg, index) =>
+    !/^--pr-(?:title|description)(?:=|$)/u.test(arg) &&
+    args[index - 1] !== "--pr-title" && args[index - 1] !== "--pr-description");
+  const prUrl = pullRequestFrom(targetArgs, [values.pr, values["pull-request"]], positionals, connected);
   let input: Parameters<typeof reviewDiff>[0];
+  let pr: PullRequestIntent | undefined;
   if (prUrl !== undefined && !wantsExport) {
+    if (values["pr-title"] !== undefined || values["pr-description"] !== undefined || values["reference-project"] !== undefined) {
+      throw new Error("Intent overrides and reference checking require a static report; add --static or use a local diff/range.");
+    }
     // The pull request wins over --diff, --stdin, and --from/--to, and no report
     // is written, so an --out that would stay empty is refused rather than ignored.
     if (values.out !== undefined) throw new Error("Connected review writes no report; add --static to export one with --out.");
@@ -141,13 +155,23 @@ async function main(): Promise<void> {
     return;
   }
   if (prUrl !== undefined) {
-    // The export runs on GitHub's canonical diff, never on mock text and never
-    // on a locally read patch, so an exported report and the served review see
-    // exactly the same bytes.
+    if (values["pr-title"] !== undefined || values["pr-description"] !== undefined) throw new Error("A PR URL supplies its own title and description; do not override them.");
+    // Keep GitHub's canonical patch. Optional local snapshots add evidence,
+    // but never replace the diff the reviewer asked to inspect.
     const review = new ConnectedReview();
     await review.load(prUrl);
+    const snapshot = review.getState().snapshot!;
+    pr = { title: snapshot.title ?? "", body: snapshot.body ?? "", url: snapshot.url, baseRef: snapshot.baseSha, headRef: snapshot.headSha };
     input = { diff: review.getDiff(), source: prUrl };
+    if (values.repo !== undefined) {
+      const repo = resolve(values.repo);
+      const base = execFileSync("git", ["--no-replace-objects", "merge-base", snapshot.baseSha, snapshot.headSha], { cwd: repo, encoding: "utf8" }).trim();
+      input = { ...input, repo, from: base, to: snapshot.headSha };
+    }
   } else {
+    if (values["pr-title"] !== undefined || values["pr-description"] !== undefined) {
+      pr = { title: values["pr-title"] ?? "", body: values["pr-description"] ?? "" };
+    }
     const range = values.from !== undefined || values.to !== undefined;
     if (Number(values.diff !== undefined) + Number(!!values.stdin) + Number(range) !== 1) throw new Error("Choose exactly one input: --diff, --stdin, or --from with --to. Use --help.");
     if (range && (!values.from || !values.to)) throw new Error("Git range requires both --from and --to.");
@@ -166,7 +190,7 @@ async function main(): Promise<void> {
       input = { diff: text, source: values.stdin ? "Standard input" : values.diff! };
     }
   }
-  const report = await reviewDiff(input, { mock: values.mock });
+  const report = await reviewDiff(input, { mock: values.mock, pr, referenceProject: values["reference-project"] });
   const output = resolve(values.out ?? "review.html");
   const jsonOutput = output + ".json";
   if (values.diff && [output, jsonOutput].includes(resolve(values.diff))) throw new Error("Output must not overwrite the input diff.");

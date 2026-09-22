@@ -258,6 +258,19 @@ export interface DiffNode {
 }
 
 export interface FunctionInfo {
+  /** Review-only syntax evidence; declarations here are never callable targets. */
+  review?: {
+    kind?: "interface" | "type" | "enum";
+    references?: { name: string; module?: string; imported?: string }[];
+    dispatches?: {
+      kind: "event" | "queue";
+      direction: "emit" | "handle";
+      key: string;
+      channel?: string;
+      line: number;
+      evidence: string;
+    }[];
+  };
   /** Stable key: "foo" or "ClassName.method" or "ClassName.constructor" */
   key: string;
   label: string;

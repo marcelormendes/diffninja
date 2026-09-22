@@ -1,3 +1,6 @@
+import type { PullRequestIntent, ReviewEvidence } from "./evidence-types.js";
+import type { OutcomeLevel, BoundaryObservation, FailureObservation, EvidenceScope } from "./jev.js";
+
 export type ReviewStatus = "attention" | "uncertain" | "low" | "passed";
 /**
  * Structural status for a call-flow node. The engine only knows `same`,
@@ -61,6 +64,29 @@ export interface CallFlowFile {
  * the analysis threw.
  */
 export type CallFlowAvailability = "available" | "needs-git-range" | "no-changes" | "failed";
+/**
+ * One keyed piece of structured review context for a hunk: a changed, caller, or
+ * callee definition with its snapshot-bound source and the call/binding evidence
+ * extracted for it. Nodes are selected deterministically before the single
+ * judgment and remain available to the human even when the model budget omits them.
+ */
+export interface ReviewContextNode {
+  /** Addressable identity inside one hunk, unique across snapshots, e.g. `after:checkout`. */
+  key: string;
+  /** Extractor label of the definition, e.g. `checkout(order, user)`. */
+  label: string;
+  file: string;
+  /** 1-based definition line, the location half of the node's identity. */
+  line: number;
+  /**
+   * Whole node text: the definition source as the snapshot has it, plus the
+   * selected call sites and bindings already extracted for it. Never a preview
+ * and never truncated; a state that cannot carry it omits the whole node
+ * and explicitly records that the available context is incomplete.
+   */
+  detail: string;
+}
+
 /** One parsed piece of the input: a text hunk, or a file's metadata-only change. */
 export interface ReviewUnit {
   id: string;
@@ -76,15 +102,25 @@ export interface ReviewUnit {
    * symbolic link, submodule). A unit that carries one never reaches the model.
    */
   special?: string;
+  /**
+   * Report blocks for this hunk, in the order the report shows them: both
+   * snapshots, the call on a changed line first. They stay the readable report
+   * text; the model receives {@link ReviewUnit.contextNodes} instead.
+   */
   callFlow?: string[];
+  /**
+   * Structured context for this hunk, highest retention priority first.
+   * The model receives whole nodes that fit its fixed state budget.
+   * An empty array is never set in place of "no context".
+   */
+  contextNodes?: ReviewContextNode[];
 }
 export interface Judgment {
-  risk: number; // 0..3, probability-weighted rubric index
-  bug: number; // 0..1, validated end to end
-  needsHuman: number; // 0..1, validated end to end
-  /** One of `REVIEW_CATEGORIES`; the closed set is checked before the answer is believed. */
-  category: string;
-  /** Mean of each run's lower risk/category confidence, 0..1; informational only. */
+  outcome: OutcomeLevel;
+  boundary: BoundaryObservation;
+  failureHandling: FailureObservation;
+  evidenceScope: EvidenceScope;
+  /** Lowest returned confidence; informational, never an outcome verdict. */
   confidence: number;
 }
 /**
@@ -115,6 +151,8 @@ export interface ReviewReport {
   source: string;
   mode: "live" | "mock";
   createdAt: string;
+  pr?: PullRequestIntent;
+  evidence?: ReviewEvidence;
   items: ReviewItem[];
   callFlow: string[];
   /**
@@ -125,12 +163,16 @@ export interface ReviewReport {
   callFlows: CallFlowFile[];
   callFlowAvailability: CallFlowAvailability;
   warnings: string[];
-  /** Counts attempted HTTP requests, retries and failures included; always zero in mock mode. */
+  /** Attempted HTTP requests: at most one per judged hunk, zero in mock mode. */
   modelCalls: number;
 }
 export interface ReviewOptions {
   /** Deterministic local fixtures, not an assessment of the code; no request is made. */
   mock?: boolean;
+  /** Exact PR metadata, treated as untrusted evidence rather than instructions. */
+  pr?: PullRequestIntent;
+  /** Opt in to the locally installed project TypeScript checker; never a PR script. */
+  referenceProject?: string;
   /** Takes precedence over the `TYPESAFE_API_KEY` environment variable. */
   apiKey?: string;
   /** Test seam; defaults to `globalThis.fetch`. */
