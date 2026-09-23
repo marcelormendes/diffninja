@@ -133,6 +133,18 @@ export interface AgentOrder {
   /** diffninja's own order of the same items, kept so the page can still offer it. */
   diffninjaIds: string[];
 }
+/** One line comment the reviewing agent suggests; the human adds it to their review or not. */
+export interface SuggestedComment {
+  path: string;
+  line: number;
+  side: "LEFT" | "RIGHT";
+  body: string;
+}
+export interface AgentComments {
+  comments: SuggestedComment[];
+  suggestedBy: string;
+  suggestedAt: string;
+}
 export interface ReviewReport {
   title: string;
   source: string;
@@ -153,6 +165,8 @@ export interface ReviewReport {
   questions: ReviewQuestion[];
   /** The reading order the reviewing agent recorded; once present, `items` follow it. */
   agentOrder?: AgentOrder;
+  /** Line comments the reviewing agent suggested; nothing is posted until the human submits them. */
+  agentComments?: AgentComments;
   /**
    * Local repository context for a git-range review: prior reverts, contributor
    * guidelines, and sibling-file conventions. Absent for a patch.

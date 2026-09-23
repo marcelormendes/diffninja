@@ -1,3 +1,4 @@
+import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
 import { escapeHtml } from "./escape-html.js";
 
 /**
@@ -32,7 +33,7 @@ export function renderConnectedPage(csrf: string): string {
     "<body>",
     '<div class="wrap">',
     '<header class="masthead">',
-    '<p class="brand"><span class="brand-mark" aria-hidden="true"></span>diffninja</p>',
+    `<p class="brand">${BRAND_MARK}diffninja</p>`,
     '<h1 id="page-title">Pull request review</h1>',
     '<p id="page-meta" class="page-meta" hidden></p>',
     '<p id="lede" class="lede">Load a GitHub pull request, read its diff in a recommended order, and post your own review through the <span class="mono">gh</span> CLI. Nothing is posted until you press Submit.</p>',
@@ -82,7 +83,7 @@ export function renderConnectedPage(csrf: string): string {
     '<div class="field">',
     '<label for="review-body">Review body</label>',
     '<textarea id="review-body" rows="5" aria-describedby="review-body-help"></textarea>',
-    '<p class="hint" id="review-body-help">Written by you; diffninja never generates review text. The body may be empty when line comments are present.</p>',
+    '<p class="hint" id="review-body-help">Written by you; diffninja never writes review text. Comments your agent suggests join your draft only when you add them. The body may be empty when line comments are present.</p>',
     "</div>",
     '<p id="event-note" class="status" role="status" aria-live="polite" hidden></p>',
     '<div id="revalidate-section" class="revalidate-section" hidden>',
@@ -160,6 +161,10 @@ function script(csrf: string): string {
   var analysis = null;
   var showLoad = false;
   var closedFiles = Object.create(null);
+  var settled = Object.create(null);
+  var busyAction = '';
+  var placeAnchor = null;
+  var revealReceipt = false;
   var analysisFor = '';
   var analysisLoading = false;
   var analysisTimer = null;
@@ -279,7 +284,8 @@ function script(csrf: string): string {
         headSha: snap.headSha,
         event: event,
         body: body,
-        comments: comments
+        comments: comments,
+        settled: Object.keys(settled)
       }));
     } catch (error) {
       /* Storage disabled or full: the draft simply stays in memory. */
@@ -346,6 +352,7 @@ function script(csrf: string): string {
         event = 'COMMENT';
         reattachIndex = -1;
         anchorNotice = '';
+        settled = Object.create(null);
         draftOwner = owner;
         return;
       }
@@ -362,6 +369,11 @@ function script(csrf: string): string {
     event = 'COMMENT';
     reattachIndex = -1;
     draftOwner = owner;
+    settled = Object.create(null);
+    var storedSettled = Array.isArray(record.settled) ? record.settled : [];
+    for (var k = 0; k < storedSettled.length; k += 1) {
+      if (typeof storedSettled[k] === 'string') settled[storedSettled[k]] = true;
+    }
     var storedComments = Array.isArray(record.comments) ? record.comments : [];
     for (var i = 0; i < storedComments.length; i += 1) {
       var c = storedComments[i];
@@ -378,7 +390,8 @@ function script(csrf: string): string {
         side: c.side,
         body: c.body,
         snapshotId: typeof c.snapshotId === 'string' ? c.snapshotId : '',
-        needsRevalidation: c.needsRevalidation === true
+        needsRevalidation: c.needsRevalidation === true,
+        suggestedBy: typeof c.suggestedBy === 'string' ? c.suggestedBy : ''
       });
     }
     if (typeof record.body === 'string') body = record.body;
@@ -458,6 +471,7 @@ function script(csrf: string): string {
       if (error && error.state) setState(error.state);
     }).then(function () {
       busy = false;
+      busyAction = '';
       render();
     });
   }
@@ -480,6 +494,7 @@ function script(csrf: string): string {
   function previewReview() {
     if (!snapshot() || composeDisabled() || unvalidatedCount() > 0) return;
     var payload = draftInput();
+    busyAction = 'preview';
     run(function () {
       return api('POST', '/api/preview', payload).then(function (data) {
         previewPayload = data;
@@ -492,6 +507,7 @@ function script(csrf: string): string {
     if (busy || submitting || validationHint() !== '') return;
     var payload = draftInput();
     submitting = true;
+    busyAction = 'submit';
     // The backend drops its previewed payload after any submission that did not
     // confirm, and github.ts refuses a submit without a fresh preview. Mirror
     // that here so the button cannot offer a submission GitHub will refuse.
@@ -504,6 +520,7 @@ function script(csrf: string): string {
         // Only a confirmed review clears the draft. An unknown or refused
         // outcome keeps it, because the review may never have been posted.
         if (data && data.status === 'submitted') {
+          revealReceipt = true;
           comments = [];
           body = '';
           event = 'COMMENT';
@@ -838,7 +855,9 @@ function script(csrf: string): string {
     field.appendChild(remove);
     wrap.appendChild(label);
     wrap.appendChild(field);
-    var help = make('p', 'hint', 'One line of plain text, written by you. Kept in this browser tab for this pull request until it is submitted.');
+    var help = make('p', 'hint', comment.suggestedBy
+      ? 'Suggested by ' + comment.suggestedBy + ' and added by you: it is your comment now, so edit it as you like. Kept in this browser tab until it is submitted.'
+      : 'One line of plain text, written by you. Kept in this browser tab for this pull request until it is submitted.');
     help.id = inputId + '-help';
     wrap.appendChild(help);
     return wrap;
@@ -891,7 +910,8 @@ function script(csrf: string): string {
       if (analysis && analysis.available === true && analysis.snapshotId !== current.id) { scheduleAnalysis(1000); return; }
       var pendingAnswers = analysis && analysis.available === true && analysis.questions && analysis.questions.answered < analysis.questions.total;
       var pendingOrder = analysis && analysis.available === true && !(analysis.order && analysis.order.source === 'agent');
-      if (pendingAnswers || pendingOrder) scheduleAnalysis(10000);
+      var pendingSuggestions = analysis && analysis.available === true && !analysis.suggestions;
+      if (pendingAnswers || pendingOrder || pendingSuggestions) scheduleAnalysis(10000);
     });
   }
 
@@ -1159,6 +1179,150 @@ function script(csrf: string): string {
   /* ---------------------------------------------------------------- diff -- */
 
   /** Files in the reading order: the first hunk each file has in the analysis, then any file it does not list. */
+  /* --------------------------------------------------------- suggestions -- */
+
+  function anchorKeyOf(anchor) { return anchor.path + '|' + anchor.side + ':' + anchor.line; }
+
+  function suggestionKey(snapId, suggestion) { return snapId + '|' + anchorKeyOf(suggestion) + '|' + suggestion.body; }
+
+  function suggestedBy() {
+    var current = currentAnalysis();
+    return current && current.suggestions && typeof current.suggestions.suggestedBy === 'string' ? current.suggestions.suggestedBy : 'your agent';
+  }
+
+  /**
+   * The agent's suggested comments on the loaded revision that the reviewer has
+   * neither added nor dismissed. A suggestion is never part of the review until
+   * a human adds it; one naming a line this revision lacks is not offered.
+   */
+  function openSuggestions() {
+    var current = currentAnalysis();
+    if (!current || !current.suggestions || !Array.isArray(current.suggestions.comments)) return [];
+    var out = [];
+    var list = current.suggestions.comments;
+    for (var i = 0; i < list.length; i += 1) {
+      var s = list[i];
+      var shaped = s && typeof s === 'object' && typeof s.path === 'string' && typeof s.line === 'number'
+        && (s.side === 'LEFT' || s.side === 'RIGHT') && typeof s.body === 'string' && s.body !== '';
+      if (!shaped || !currentLine(s) || settled[suggestionKey(current.snapshotId, s)]) continue;
+      out.push(s);
+    }
+    return out;
+  }
+
+  function suggestionAt(node) {
+    var key = (node.getAttribute('data-path') || '') + '|' + node.getAttribute('data-side') + ':' + node.getAttribute('data-line');
+    var open = openSuggestions();
+    for (var i = 0; i < open.length; i += 1) {
+      if (anchorKeyOf(open[i]) === key) return open[i];
+    }
+    return null;
+  }
+
+  /** Put a suggestion into the reviewer's draft: a new comment on its line, or appended to the comment already there. */
+  function adoptSuggestion(suggestion) {
+    var snap = snapshot();
+    var current = currentAnalysis();
+    if (!snap || !current) return;
+    settled[suggestionKey(current.snapshotId, suggestion)] = true;
+    var at = commentIndexAt(suggestion);
+    if (at >= 0) {
+      var existing = comments[at].body.trim();
+      comments[at].body = existing === '' ? suggestion.body : existing + ' ' + suggestion.body;
+      return;
+    }
+    commentSeq += 1;
+    comments.push({
+      id: 'c' + commentSeq,
+      path: suggestion.path,
+      line: suggestion.line,
+      side: suggestion.side,
+      body: suggestion.body,
+      snapshotId: snap.id,
+      needsRevalidation: false,
+      suggestedBy: suggestedBy()
+    });
+  }
+
+  function addSuggestion(node) {
+    if (composeDisabled()) return;
+    var suggestion = suggestionAt(node);
+    if (!suggestion) return;
+    adoptSuggestion(suggestion);
+    saveDraft();
+    render();
+  }
+
+  function addAllSuggestions() {
+    if (composeDisabled()) return;
+    var open = openSuggestions();
+    for (var i = 0; i < open.length; i += 1) adoptSuggestion(open[i]);
+    saveDraft();
+    render();
+  }
+
+  function dismissSuggestion(node) {
+    var suggestion = suggestionAt(node);
+    var current = currentAnalysis();
+    if (!suggestion || !current) return;
+    settled[suggestionKey(current.snapshotId, suggestion)] = true;
+    saveDraft();
+    render();
+  }
+
+  function suggestionRow(suggestion, disabled) {
+    var wrap = make('div', 'suggestion');
+    var head = make('p', 'suggestion-by', 'Suggested by ' + suggestedBy());
+    wrap.appendChild(head);
+    wrap.appendChild(make('p', 'suggestion-body', suggestion.body));
+    var actions = make('div', 'suggestion-actions');
+    var add = make('button', 'suggestion-add', 'Add to my review');
+    add.type = 'button';
+    add.dataset.action = 'add-suggestion';
+    add.dataset.path = suggestion.path;
+    add.dataset.line = String(suggestion.line);
+    add.dataset.side = suggestion.side;
+    add.disabled = disabled;
+    add.setAttribute('aria-label', 'Add the suggested comment on line ' + suggestion.line + ' of ' + suggestion.path + ' to your review');
+    var dismiss = make('button', 'link-button', 'Dismiss');
+    dismiss.type = 'button';
+    dismiss.dataset.action = 'dismiss-suggestion';
+    dismiss.dataset.path = suggestion.path;
+    dismiss.dataset.line = String(suggestion.line);
+    dismiss.dataset.side = suggestion.side;
+    dismiss.setAttribute('aria-label', 'Dismiss the suggested comment on line ' + suggestion.line + ' of ' + suggestion.path);
+    actions.appendChild(add);
+    actions.appendChild(dismiss);
+    wrap.appendChild(actions);
+    return wrap;
+  }
+
+  /** The bar above the diff: add every open suggestion at once, or where the added ones went. */
+  function suggestionBar(open, disabled) {
+    var adopted = 0;
+    for (var i = 0; i < comments.length; i += 1) {
+      if (comments[i].suggestedBy && !comments[i].needsRevalidation) adopted += 1;
+    }
+    if (open.length === 0 && adopted === 0) return null;
+    var bar = make('div', 'suggest-bar');
+    if (open.length > 0) {
+      bar.appendChild(make('p', '', suggestedBy() + ' suggested ' + open.length + (open.length === 1 ? ' comment' : ' comments')
+        + ' under the lines below. Nothing is posted until you submit.'));
+      var all = make('button', 'suggestion-add', open.length === 1 ? 'Add it to my review' : 'Add all ' + open.length + ' to my review');
+      all.type = 'button';
+      all.dataset.action = 'add-all-suggestions';
+      all.disabled = disabled;
+      bar.appendChild(all);
+    } else {
+      bar.appendChild(make('p', '', adopted + (adopted === 1 ? ' suggested comment is' : ' suggested comments are')
+        + ' in your draft. Read them over, then preview and submit under Your review.'));
+      var go = make('a', '', 'Go to Your review');
+      go.href = '#compose-heading';
+      bar.appendChild(go);
+    }
+    return bar;
+  }
+
   function readingRank() {
     var rank = Object.create(null);
     var current = currentAnalysis();
@@ -1198,10 +1362,15 @@ function script(csrf: string): string {
       return ra === rb ? a.order - b.order : ra - rb;
     });
     var disabled = composeDisabled();
-    for (var g = 0; g < groups.length; g += 1) el.diffBody.appendChild(renderFileBlock(groups[g], disabled));
+    var open = openSuggestions();
+    var bar = suggestionBar(open, disabled);
+    if (bar) el.diffBody.appendChild(bar);
+    var suggestions = Object.create(null);
+    for (var o = 0; o < open.length; o += 1) suggestions[anchorKeyOf(open[o])] = open[o];
+    for (var g = 0; g < groups.length; g += 1) el.diffBody.appendChild(renderFileBlock(groups[g], disabled, suggestions));
   }
 
-  function renderFileBlock(group, disabled) {
+  function renderFileBlock(group, disabled, suggestions) {
     var block = make('details', 'file-block');
     block.dataset.path = group.path;
     block.open = closedFiles[group.path] !== true;
@@ -1251,6 +1420,8 @@ function script(csrf: string): string {
       row.appendChild(codeNode(line.text, language, state));
       rows.appendChild(row);
       if (attached >= 0) rows.appendChild(editorRow(attached));
+      var suggestion = suggestions[anchorKeyOf(line)];
+      if (suggestion) rows.appendChild(suggestionRow(suggestion, disabled));
     }
     block.appendChild(rows);
     return block;
@@ -1416,8 +1587,23 @@ function script(csrf: string): string {
 
   function updateActionState() {
     var hint = validationHint();
-    el.submitButton.disabled = hint !== '';
-    setText(el.submitHint, hint === '' ? 'Previewed payload matches the current draft. Submit posts this review to GitHub and cannot be undone from this page.' : hint);
+    var previewing = busyAction === 'preview';
+    var posting = busyAction === 'submit' && submitting;
+    el.submitButton.disabled = hint !== '' || posting;
+    setText(el.submitButton, posting ? 'Submitting to GitHub\u2026' : 'Submit review to GitHub');
+    el.submitButton.classList.toggle('is-loading', posting);
+    el.submitButton.setAttribute('aria-busy', posting ? 'true' : 'false');
+    setText(el.previewButton, previewing ? 'Preparing preview\u2026' : 'Preview payload');
+    el.previewButton.classList.toggle('is-loading', previewing);
+    el.previewButton.setAttribute('aria-busy', previewing ? 'true' : 'false');
+    if (previewing) el.previewButton.disabled = true;
+    var failed = lastError !== '' && !busy && !submitting;
+    setText(el.submitHint, posting
+      ? 'Posting your review to GitHub. This takes a few seconds; keep this tab open.'
+      : failed && placeAnchor === el.submitButton
+        ? 'Not submitted: ' + lastError
+        : hint === '' ? 'Previewed payload matches the current draft. Submit posts this review to GitHub and cannot be undone from this page.' : hint);
+    el.submitHint.classList.toggle('is-error', failed && placeAnchor === el.submitButton);
     var stale = previewPayload !== null && previewSignature !== JSON.stringify(draftInput());
     setText(el.previewState, previewPayload === null
       ? 'No payload has been previewed yet.'
@@ -1425,6 +1611,11 @@ function script(csrf: string): string {
         ? 'The draft changed since this preview. Preview again before submitting.'
         : 'This payload matches the current draft exactly.');
     el.previewState.className = stale ? 'status is-stale' : 'status';
+    if (previewing) setText(el.previewState, 'Checking the draft against the pull request\u2026');
+    else if (failed && placeAnchor === el.previewButton) {
+      setText(el.previewState, 'Preview failed: ' + lastError);
+      el.previewState.className = 'status is-error';
+    }
   }
 
   function renderPreview() {
@@ -1462,7 +1653,26 @@ function script(csrf: string): string {
     setText(el.messageNote, informational ? message : '');
   }
 
+  /**
+   * Re-render without moving what the reviewer is looking at: the control they
+   * last pressed stays where it was on screen, even when a status line or an
+   * error box appears above it.
+   */
   function render() {
+    var anchor = placeAnchor && placeAnchor.isConnected && placeAnchor.offsetParent !== null ? placeAnchor : null;
+    var before = anchor ? anchor.getBoundingClientRect().top : 0;
+    renderAll();
+    if (revealReceipt && !el.receiptSection.hidden) {
+      revealReceipt = false;
+      el.receiptSection.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    if (!anchor || !anchor.isConnected || anchor.offsetParent === null) return;
+    var drift = anchor.getBoundingClientRect().top - before;
+    if (drift !== 0) window.scrollBy(0, drift);
+  }
+
+  function renderAll() {
     var snap = snapshot();
     var status = state ? state.status : '';
     var blocked = status === 'unknown' || status === 'submitting';
@@ -1523,7 +1733,11 @@ function script(csrf: string): string {
     var node = target.closest('[data-action]');
     if (!node) return;
     var action = node.getAttribute('data-action');
+    placeAnchor = action === 'preview' || action === 'submit' || action === 'refresh' ? node : null;
     if (action === 'comment') { event_.preventDefault(); addComment(node); return; }
+    if (action === 'add-suggestion') { event_.preventDefault(); addSuggestion(node); return; }
+    if (action === 'add-all-suggestions') { event_.preventDefault(); addAllSuggestions(); return; }
+    if (action === 'dismiss-suggestion') { event_.preventDefault(); dismissSuggestion(node); return; }
     if (action === 'remove-comment') { event_.preventDefault(); removeComment(node); return; }
     if (action === 'edit-comment') { event_.preventDefault(); editComment(node); return; }
     if (action === 'confirm-comment') { event_.preventDefault(); confirmComment(node); return; }
@@ -1759,11 +1973,7 @@ a { color: var(--teal); overflow-wrap: anywhere; }
   display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 700;
   letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-soft);
 }
-.brand-mark {
-  width: 15px; height: 15px; flex: 0 0 auto;
-  background: linear-gradient(90deg, var(--ink-soft) 0 50%, var(--teal) 50% 100%);
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-}
+${BRAND_MARK_STYLES}
 .panel {
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
   padding: 16px; margin: 0 0 16px;
@@ -1854,6 +2064,22 @@ form { display: flex; flex-direction: column; gap: 12px; align-items: flex-start
 }
 .editor-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .editor-input { flex: 1 1 240px; min-width: 0; }
+.suggest-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px;
+  border: 1px solid var(--teal); border-radius: 8px; padding: 10px 14px; margin: 0 0 14px;
+  font-size: 13.5px;
+}
+.suggest-bar p { flex: 1 1 260px; }
+.suggestion {
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  border-left: 4px solid var(--teal); background: var(--panel);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+.suggestion-by { font-size: 12px; color: var(--ink-soft); }
+.suggestion-body { font-size: 14px; overflow-wrap: anywhere; }
+.suggestion-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.suggestion-add { background: var(--teal); border-color: var(--teal); color: var(--panel); font-weight: 600; }
+.suggestion-add:hover:not(:disabled) { filter: brightness(1.08); }
 .link-button {
   border: 0; background: none; color: var(--teal);
   padding: 2px 4px; text-decoration: underline; font-size: 12.5px; cursor: pointer;
@@ -1901,6 +2127,15 @@ form { display: flex; flex-direction: column; gap: 12px; align-items: flex-start
 .event-option { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
 .foot { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 6px; }
 body.is-busy button { cursor: progress; }
+button.is-loading { display: inline-flex; align-items: center; gap: 8px; }
+button.is-loading::before {
+  content: ""; width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%;
+  border: 2px solid currentColor; border-right-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { button.is-loading::before { animation-duration: 2.4s; } }
+.is-error { color: var(--alarm); }
 @media (max-width: 700px) {
   .wrap { padding: 18px 12px 48px; }
   .panel { padding: 12px; }

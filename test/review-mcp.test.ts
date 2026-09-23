@@ -101,7 +101,7 @@ describe("review_diff discovery", () => {
     const client = await connectReview();
     const listed = await client.listTools();
 
-    expect(listed.tools.map(tool => tool.name)).toEqual(["review_diff", "record_answers", "record_order"]);
+    expect(listed.tools.map(tool => tool.name)).toEqual(["review_diff", "record_answers", "record_order", "suggest_comments"]);
     const tool = listed.tools[0];
     expect(tool.annotations?.readOnlyHint).toBe(false);
     expect(tool.annotations?.destructiveHint).toBe(false);
@@ -615,6 +615,69 @@ describe("record_order", () => {
   });
 });
 
+describe("suggest_comments", () => {
+  async function reviewed(client: Client) {
+    const result = await review(client, { diff: patch });
+    expect(result.isError).toBeFalsy();
+    return reportOf(result);
+  }
+
+  async function suggest(client: Client, args: NonNullable<CallToolRequest["params"]["arguments"]>) {
+    return CallToolResultSchema.parse(await client.callTool({ name: "suggest_comments", arguments: args }));
+  }
+
+  /** The first added line of the review's first hunk, as a comment anchor. */
+  function addedLine(report: ReturnType<typeof reportOf>) {
+    const item = report.items[0];
+    let line = item.newStart;
+    for (const text of item.diff.split("\n").slice(1)) {
+      if (text.startsWith("+")) return { path: item.file, line, side: "RIGHT" as const };
+      if (!text.startsWith("-")) line += 1;
+    }
+    throw new Error("the fixture's first hunk adds no line");
+  }
+
+  test("keeps short comments on lines of the diff, attributed, and a later call replaces them", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const anchor = addedLine(report);
+    const first = await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, body: "  Should this handle a missing value?  " }] });
+    expect(first.isError).toBeFalsy();
+    expect(first.structuredContent).toEqual({ reviewId: report.reviewId, suggested: 1, reportUrl: report.reportUrl });
+    expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, body: "nit: could this reuse the helper above?" }] })).isError).toBeFalsy();
+    expect((await suggest(client, { reviewId: report.reviewId, comments: [] })).structuredContent).toMatchObject({ suggested: 0 });
+  });
+
+  test("refuses the whole call for a line outside the diff, a repeated line, or report-style text", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const anchor = addedLine(report);
+    const cases: Array<{ comments: unknown[]; expected: RegExp }> = [
+      { comments: [{ ...anchor, line: 9999, body: "Is this right?" }], expected: /not a line of this review's diff/ },
+      { comments: [{ ...anchor, side: "LEFT", path: "nowhere.ts", body: "Is this right?" }], expected: /not a line of this review's diff/ },
+      { comments: [{ ...anchor, body: "Is this right?" }, { ...anchor, body: "And this?" }], expected: /second comment on the same line/ },
+      { comments: [{ ...anchor, body: "Finding 1: the total ignores tax" }], expected: /reads like a report/ },
+      { comments: [{ ...anchor, body: "Attention - missing null check" }], expected: /reads like a report/ },
+      { comments: [{ ...anchor, body: "Error 2: wrong type" }], expected: /reads like a report/ },
+      { comments: [{ ...anchor, body: "**Bug**: wrong type" }], expected: /reads like a report/ },
+      { comments: [{ ...anchor, body: "## Summary" }], expected: /reads like a report/ },
+      { comments: [{ ...anchor, body: "- missing test" }], expected: /reads like a report/ },
+      { comments: [{ ...anchor, body: "Two lines\nof text" }], expected: /one line of text/ },
+      { comments: [{ ...anchor, body: "x".repeat(281) }], expected: /longer than 280 characters/ },
+      { comments: [{ ...anchor, body: "   " }], expected: /is empty/ },
+    ];
+    for (const { comments, expected } of cases) {
+      const result = await suggest(client, { reviewId: report.reviewId, comments });
+      expect(result.isError, JSON.stringify(comments)).toBe(true);
+      expect(textOf(result)).toMatch(expected);
+    }
+    // Plain reviewer phrasing, including a lowercase nit, is accepted.
+    for (const body of ["Error handling here swallows the cause; can we keep it?", "nit: rename to totalWithTax?", "Low risk, but is this covered by a test?"]) {
+      expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, body }] })).isError, body).toBeFalsy();
+    }
+  });
+});
+
 describe("record_answers", () => {
   async function reviewed(client: Client) {
     const result = await review(client, { diff: patch });
@@ -723,7 +786,7 @@ describe("review_diff connected pull request mode", () => {
   });
 
   test("the pull request page carries the local analysis of exactly the loaded revision", async () => {
-    await withFakeGh(async () => {
+    await withFakeGh(async ({ log }) => {
       blockNetwork();
       const client = await connectReview();
 
@@ -762,6 +825,18 @@ describe("review_diff connected pull request mode", () => {
       expect(ordered.isError).toBeFalsy();
       expect((await connectedAnalysis(payload.url))?.order).toEqual({ source: "agent", orderedBy: "diffninja-mcp-test 0.1.0" });
       expect((await loopback(payload.url))?.status).toBe(200);
+
+      // Comments the agent suggests reach the page for the human to add, never GitHub.
+      expect((await connectedAnalysis(payload.url))?.suggestions).toBeUndefined();
+      const suggested = await client.callTool({ name: "suggest_comments", arguments: {
+        reviewId: payload.reviewId, comments: [{ path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?" }],
+      } });
+      expect(suggested.isError).toBeFalsy();
+      expect((await connectedAnalysis(payload.url))?.suggestions).toEqual({
+        suggestedBy: "diffninja-mcp-test 0.1.0",
+        comments: [{ path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?" }],
+      });
+      expect(ghCalls(log).some(line => /reviews|comments/.test(line))).toBe(false);
 
       // A repeated call for the same pull request reuses the same analysis.
       const again = connectedOf(await review(client, { pr: GH_URL }));

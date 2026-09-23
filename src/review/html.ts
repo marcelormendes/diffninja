@@ -3,6 +3,7 @@ import { verdictOf, type ReviewQuestion } from "./questions.js";
 import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
+import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
 import { escapeHtml } from "./escape-html.js";
 import { testLikeFile } from "./file-role.js";
 
@@ -128,7 +129,7 @@ function renderHeader(report: ReviewReport): string {
 
   return [
     '<header class="masthead">',
-    '<p class="brand"><span class="brand-mark" aria-hidden="true"></span>diffninja</p>',
+    `<p class="brand">${BRAND_MARK}diffninja</p>`,
     `<h1>${escapeHtml(report.title || "Untitled diff")}</h1>`,
     `<p class="meta">Files changed · <span class="mono">${escapeHtml(report.source)}</span></p>`,
     scope === "" ? "" : `<p class="meta">${escapeHtml(scope)}</p>`,
@@ -894,12 +895,7 @@ a { color: var(--teal); }
   text-transform: uppercase;
   color: var(--accent);
 }
-.brand-mark {
-  width: 15px;
-  height: 15px;
-  background: linear-gradient(90deg, var(--accent) 0 50%, var(--teal) 50% 100%);
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-}
+${BRAND_MARK_STYLES}
 h1 { font-size: clamp(1.35rem, 1.05rem + 1.3vw, 1.9rem); overflow-wrap: anywhere; }
 .meta { font-size: 13.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
 .mode-note { font-size: 12.5px; color: var(--ink-soft); }

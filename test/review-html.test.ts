@@ -496,10 +496,10 @@ describe("review HTML", () => {
   test("absence never fabricates a tree or mislabels a completed git-range analysis", () => {
     const patch = visible(renderReview(report([item()])));
     expect(patch).toMatch(/git.range/i);
-    expect(patch).not.toMatch(/<svg\b/);
+    expect(patch).not.toMatch(/<svg class="cf-svg"/);
     for (const availability of ["no-changes", "failed"] as const) {
       const html = visible(renderReview(report([item()], { callFlowAvailability: availability })));
-      expect(html).not.toMatch(/<svg\b/);
+      expect(html).not.toMatch(/<svg class="cf-svg"/);
       expect(html).not.toMatch(/needs a git.range|requires a git.range/i);
     }
   });

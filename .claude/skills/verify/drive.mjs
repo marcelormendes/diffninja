@@ -4,7 +4,7 @@
 // returns, and write every request, result, and page to an evidence directory.
 //
 //   node .claude/skills/verify/drive.mjs doctor
-//   node .claude/skills/verify/drive.mjs review --args '<review_diff JSON>' [--answer cannot-tell|first] [--order reverse] [--hold SECONDS] [--out DIR]
+//   node .claude/skills/verify/drive.mjs review --args '<review_diff JSON>' [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]
 //
 // The server lives only as long as this process: closing the client closes the
 // server's stdin, which ends the session and its pages. Evidence stays on disk.
@@ -27,7 +27,7 @@ const { StdioClientTransport } = await import(require.resolve("@modelcontextprot
 const [command, ...rest] = process.argv.slice(2);
 const { values } = parseArgs({
   args: rest,
-  options: { args: { type: "string" }, answer: { type: "string" }, order: { type: "string" }, hold: { type: "string" }, out: { type: "string" } },
+  options: { args: { type: "string" }, answer: { type: "string" }, order: { type: "string" }, suggest: { type: "boolean" }, hold: { type: "string" }, out: { type: "string" } },
 });
 
 const checks = [];
@@ -77,7 +77,7 @@ async function doctor() {
   check("server refuses arguments", bad.status === 1 && bad.stderr.includes("accepts no arguments") && bad.stdout === "", `exit ${bad.status}`);
   const { client } = await connect();
   const tools = (await client.listTools()).tools.map(tool => tool.name).sort();
-  check("tools are review_diff, record_answers, record_order", tools.join(",") === "record_answers,record_order,review_diff", tools.join(","));
+  check("tools are review_diff, record_answers, record_order, suggest_comments", tools.join(",") === "record_answers,record_order,review_diff,suggest_comments", tools.join(","));
   await client.close();
   let gh = "not installed";
   try { execFileSync("gh", ["auth", "status"], { stdio: "pipe", timeout: 20_000 }); gh = "authenticated"; } catch (error) { gh = error.code === "ENOENT" ? gh : "not authenticated"; }
@@ -155,6 +155,27 @@ async function review() {
           && analysis.hunks.map(h => h.id).join(",") === ids.join(","), JSON.stringify(analysis.order));
       }
     }
+    if (values.suggest && items.length > 0) {
+      // One comment on the first added line of each of the first three hunks, in a reviewer's voice.
+      const comments = [];
+      for (const item of items.slice(0, 3)) {
+        let line = item.newStart;
+        for (const text of item.diff.split("\n").slice(1)) {
+          if (text.startsWith("+")) { comments.push({ path: item.file, line, side: "RIGHT", body: `Could we cover ${item.file.split("/").pop()} line ${line} with a test?` }); break; }
+          if (!text.startsWith("-")) line += 1;
+        }
+      }
+      const suggested = await client.callTool({ name: "suggest_comments", arguments: { reviewId: report.reviewId, comments } });
+      save("suggest_comments.json", suggested);
+      check("suggest_comments accepted every comment", !suggested.isError && suggested.structuredContent?.suggested === comments.length, suggested.isError ? suggested.content[0].text : "");
+      const labelled = await client.callTool({ name: "suggest_comments", arguments: { reviewId: report.reviewId, comments: [{ ...comments[0], body: "Finding 1: missing test" }] } });
+      save("suggest_comments.refused.json", labelled);
+      check("suggest_comments refuses report-style text", labelled.isError === true);
+      if (report.url) {
+        const view = JSON.parse((await get(new URL("api/analysis", report.url).href)).body);
+        check("pull request page carries the suggestions, attributed to this client", view.suggestions?.suggestedBy?.startsWith(CLIENT.name) && view.suggestions.comments.length === comments.length);
+      }
+    }
     if (values.hold) {
       console.log(`HOLD ${values.hold}s — open now: ${Object.values(pages).filter(Boolean).join(" ")}`);
       await new Promise(done => setTimeout(done, Number(values.hold) * 1000));
@@ -173,7 +194,7 @@ async function review() {
 try {
   if (command === "doctor") await doctor();
   else if (command === "review") await review();
-  else throw new Error("usage: drive.mjs doctor | drive.mjs review --args '<json>' [--answer cannot-tell|first] [--order reverse] [--hold SECONDS] [--out DIR]");
+  else throw new Error("usage: drive.mjs doctor | drive.mjs review --args '<json>' [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]");
 } catch (error) {
   console.error(`drive.mjs: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 2;
