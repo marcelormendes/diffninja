@@ -39,6 +39,72 @@ export const QUESTION_OPTIONS = {
 
 export type QuestionKind = keyof typeof QUESTION_OPTIONS;
 
+/** How a recorded answer reads to the human: `watch` asks for a closer look, `unsure` means the agent could not tell. */
+export type VerdictTone = "ok" | "watch" | "unsure" | "quiet";
+
+export interface Verdict {
+  readonly label: string;
+  readonly tone: VerdictTone;
+}
+
+/** The short label a page shows for each answer, so the question's full wording stays with the agent. */
+export const ANSWER_VERDICTS = {
+  behaviorChange: {
+    "changes-behavior": { label: "Changes behavior", tone: "quiet" },
+    "no-behavior-change": { label: "No behavior change", tone: "quiet" },
+    "cannot-tell": { label: "Behavior change unclear", tone: "unsure" },
+  },
+  testCoverage: {
+    exercised: { label: "Tested in this PR", tone: "ok" },
+    "not-exercised": { label: "No test in this PR", tone: "watch" },
+    "cannot-tell": { label: "Test coverage unclear", tone: "unsure" },
+  },
+  testWeakened: {
+    weakens: { label: "Weakens a test", tone: "watch" },
+    "does-not-weaken": { label: "Test not weakened", tone: "ok" },
+    "cannot-tell": { label: "Test change unclear", tone: "unsure" },
+  },
+  docMatchesCode: {
+    matches: { label: "Docs match the code", tone: "ok" },
+    contradicts: { label: "Docs contradict the code", tone: "watch" },
+    "cannot-tell": { label: "Docs unclear", tone: "unsure" },
+  },
+  intentFit: {
+    serves: { label: "Serves the PR goal", tone: "ok" },
+    supports: { label: "Supports the PR goal", tone: "quiet" },
+    unrelated: { label: "Unrelated to the PR goal", tone: "watch" },
+    contradicts: { label: "Works against the PR goal", tone: "watch" },
+    "cannot-tell": { label: "Fit with the goal unclear", tone: "unsure" },
+  },
+  undoesFix: {
+    "keeps-its-purpose": { label: "Keeps an earlier fix", tone: "ok" },
+    "undoes-it": { label: "Undoes an earlier fix", tone: "watch" },
+    "cannot-tell": { label: "Earlier fix unclear", tone: "unsure" },
+  },
+  repeatsRevert: {
+    "reintroduces-it": { label: "Repeats a reverted change", tone: "watch" },
+    "different-change": { label: "Not a reverted change", tone: "ok" },
+    "cannot-tell": { label: "Revert history unclear", tone: "unsure" },
+  },
+  followsGuidelines: {
+    follows: { label: "Follows project guidelines", tone: "ok" },
+    "breaks-a-rule": { label: "Breaks a project guideline", tone: "watch" },
+    "not-covered": { label: "No guideline applies", tone: "quiet" },
+    "cannot-tell": { label: "Guidelines unclear", tone: "unsure" },
+  },
+  followsConvention: {
+    "should-follow": { label: "Should match its sibling files", tone: "watch" },
+    "differs-for-a-reason": { label: "Differs from siblings on purpose", tone: "quiet" },
+    "cannot-tell": { label: "Convention unclear", tone: "unsure" },
+  },
+} satisfies { readonly [K in QuestionKind]: { readonly [C in (typeof QUESTION_OPTIONS)[K][number]]: Verdict } };
+
+/** The verdict for a recorded answer, or undefined for an answer the question does not list. */
+export function verdictOf(kind: QuestionKind, choice: string): Verdict | undefined {
+  const table: Readonly<Record<string, Verdict>> = ANSWER_VERDICTS[kind];
+  return Object.hasOwn(table, choice) ? table[choice] : undefined;
+}
+
 export interface QuestionAnswer {
   readonly choice: string;
   /** The MCP client that recorded it, as it named itself; never a model identity claim. */

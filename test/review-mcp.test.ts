@@ -635,7 +635,7 @@ describe("record_answers", () => {
     const report = await reviewed(client);
     const [first] = report.questions;
     const before = await loopback(report.reportUrl);
-    expect(before?.body).toContain("not answered");
+    expect(before?.body).toContain("not answered yet");
 
     const result = await answer(client, {
       reviewId: report.reviewId,
@@ -648,8 +648,8 @@ describe("record_answers", () => {
     expect(result.structuredContent).toEqual(JSON.parse(textOf(result)));
     const after = await loopback(report.reportUrl);
     expect(after?.status).toBe(200);
-    expect(after?.body).toContain("cannot-tell");
-    expect(after?.body).toContain("answered by diffninja-mcp-test 0.1.0");
+    expect(after?.body).toContain('<span class="verdicts-by">diffninja-mcp-test 0.1.0:</span>');
+    expect(after?.body).toContain("unclear</span>");
     // Answers never move a hunk: the order on the page is the report's order.
     const order = (body: string) => [...body.matchAll(/<span class="path mono">([^<]*)<\/span>/g)].map(match => match[1]);
     expect(order(after!.body)).toEqual(order(before!.body));

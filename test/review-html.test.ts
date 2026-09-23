@@ -449,7 +449,7 @@ describe("review HTML", () => {
     expect(html).toContain("+const total = price + tax;");
   });
 
-  test("questions render beside their hunk, escaped, with only in-set answers shown", () => {
+  test("answers render beside their hunk as short labels, escaped, with only in-set answers labeled", () => {
     const html = visible(renderReview(report([item({ id: "h1" }), item({ id: "h2", file: "src/other.ts" })], {
       questions: [
         { id: "q1", kind: "behaviorChange", unitIds: ["h1"], text: `Does ${ATTACK} change behavior?`,
@@ -464,12 +464,16 @@ describe("review HTML", () => {
     })));
     expect(html).not.toContain(ATTACK);
     const [first, second] = cards(html);
-    expect(first.html).toContain("Questions for your agent (2/2 answered)");
-    expect(first.html).toContain('changes-behavior <span class="obs-line">answered by claude-code 2.1</span>');
-    expect(first.html).toContain("unrecognized answer");
+    // One labeled answer, attributed once; the out-of-set answer gets no label.
+    expect(first.html).toContain('<span class="verdicts-by">claude-code 2.1:</span><span class="verdict verdict-quiet"');
+    expect([...first.html.matchAll(/class="verdict verdict-/g)]).toHaveLength(1);
+    expect(first.html).toContain(">Changes behavior</span>");
+    expect(first.html).toContain("<dd>unrecognized answer</dd>");
+    expect(first.html).toContain("What the agent was asked");
     expect(first.html).not.toContain("Other hunk?");
-    expect(second.html).toContain("Questions for your agent (0/1 answered)");
-    expect(second.html).toContain("not answered");
+    expect(second.html).not.toContain('class="verdicts"');
+    expect(second.html).toContain("Questions for your agent (1 not answered yet)");
+    expect(second.html).toContain("<dd>not answered yet</dd>");
   });
 
   test("one mode note says the analysis stayed local", () => {

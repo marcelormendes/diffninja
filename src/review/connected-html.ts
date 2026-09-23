@@ -33,10 +33,12 @@ export function renderConnectedPage(csrf: string): string {
     '<div class="wrap">',
     '<header class="masthead">',
     '<p class="brand"><span class="brand-mark" aria-hidden="true"></span>diffninja</p>',
-    "<h1>Connected pull request review</h1>",
-    '<p class="lede">Load a GitHub pull request, read its canonical diff, and post a human-authored review through the <span class="mono">gh</span> CLI. Loading contacts GitHub; review text stays in this browser and local server until you press Submit.</p>',
+    '<h1 id="page-title">Pull request review</h1>',
+    '<p id="page-meta" class="page-meta" hidden></p>',
+    '<p id="lede" class="lede">Load a GitHub pull request, read its diff in a recommended order, and post your own review through the <span class="mono">gh</span> CLI. Nothing is posted until you press Submit.</p>',
+    '<p id="message-note" class="note" role="status" aria-live="polite" hidden></p>',
     "</header>",
-    '<section class="panel" aria-labelledby="load-heading">',
+    '<section id="load-section" class="panel" aria-labelledby="load-heading">',
     '<h2 id="load-heading">Load a pull request</h2>',
     '<form id="load-form">',
     '<div class="field">',
@@ -46,7 +48,7 @@ export function renderConnectedPage(csrf: string): string {
     "</div>",
     '<button type="submit" id="load-button">Load pull request</button>',
     "</form>",
-    '<p class="note">Authentication is delegated to the <span class="mono">gh</span> CLI running diffninja. When <span class="mono">GH_TOKEN</span> or <span class="mono">GITHUB_TOKEN</span> is set it overrides the gh login; otherwise gh uses its own signed-in account. This page never reads, displays, or stores a token, and static reports never probe a local server.</p>',
+    '<p class="note">diffninja reads the pull request and posts reviews through your <span class="mono">gh</span> login. This page never sees a token.</p>',
     "</section>",
     '<p id="status-line" class="status" role="status" aria-live="polite"></p>',
     '<p id="empty-note" class="empty">No pull request loaded. Paste a pull request URL above to begin.</p>',
@@ -56,27 +58,17 @@ export function renderConnectedPage(csrf: string): string {
     '<p class="hint">Your draft is kept. Check GitHub state to re-read the pull request and the account before deciding what to do next.</p>',
     '<button type="button" id="refresh-button" data-action="refresh">Check GitHub state</button>',
     "</div>",
-    '<section id="identity-section" class="panel" aria-labelledby="identity-heading" hidden>',
-    '<h2 id="identity-heading">Review identity</h2>',
-    '<div id="identity-body"></div>',
-    "</section>",
-    '<section id="snapshot-section" class="panel" aria-labelledby="snapshot-heading" hidden>',
-    '<h2 id="snapshot-heading">Pull request revision</h2>',
-    '<div id="snapshot-body"></div>',
-    '<p id="message-note" class="note" role="status" aria-live="polite" hidden></p>',
-    "</section>",
     '<section id="analysis-section" class="panel" aria-labelledby="analysis-heading" hidden>',
-    '<h2 id="analysis-heading">Reading order</h2>',
-    '<p class="hint">Local analysis of this revision: nothing left your machine and no model ran here. Facts point at what to read; they are not a verdict. Answers to the questions come from your coding agent and name the client that gave them.</p>',
+    '<h2 id="analysis-heading">Read in this order</h2>',
     '<div id="analysis-body"></div>',
     "</section>",
     '<section id="diff-section" class="panel" aria-labelledby="diff-heading" hidden>',
-    '<h2 id="diff-heading">Canonical diff</h2>',
-    '<p class="hint">Comments attach only to the lines below, from the revision that was loaded. Line comments are a single line of plain text, written by you.</p>',
+    '<h2 id="diff-heading">Diff</h2>',
+    '<p class="hint">The diff GitHub has for the commit shown above. Add a line comment on any line; comments stay in this tab until you submit.</p>',
     '<div id="diff-body"></div>',
     "</section>",
     '<section id="compose-section" class="panel" aria-labelledby="compose-heading" hidden>',
-    '<h2 id="compose-heading">Review draft <span id="draft-count" class="count"></span></h2>',
+    '<h2 id="compose-heading">Your review <span id="draft-count" class="count"></span></h2>',
     '<p id="anchor-notice" class="status" role="status" aria-live="polite" hidden></p>',
     '<fieldset class="event-fieldset">',
     "<legend>Review action</legend>",
@@ -114,6 +106,19 @@ export function renderConnectedPage(csrf: string): string {
     '<h2 id="receipt-heading">Receipt</h2>',
     '<div id="receipt-body"></div>',
     "</section>",
+    '<details id="details-section" class="panel details-panel" hidden>',
+    '<summary>Pull request and review details</summary>',
+    '<div id="details-analysis"></div>',
+    '<section id="snapshot-section" aria-labelledby="snapshot-heading">',
+    '<h3 id="snapshot-heading" class="subhead">This revision</h3>',
+    '<div id="snapshot-body"></div>',
+    "</section>",
+    '<section id="identity-section" aria-labelledby="identity-heading" hidden>',
+    '<h3 id="identity-heading" class="subhead">Reviewing as</h3>',
+    '<div id="identity-body"></div>',
+    "</section>",
+    '<p><button type="button" class="link-button" data-action="show-load">Load a different pull request</button></p>',
+    "</details>",
     '<footer class="foot">',
     '<p class="note">Reports and this page contain source code. Keep them private. Diffninja gives no automatic approval.</p>',
     "</footer>",
@@ -153,6 +158,7 @@ function script(csrf: string): string {
   var reattachIndex = -1;
   var draftOwner = '';
   var analysis = null;
+  var showLoad = false;
   var analysisFor = '';
   var analysisLoading = false;
   var analysisTimer = null;
@@ -758,35 +764,49 @@ function script(csrf: string): string {
     el.identityBody.textContent = '';
     if (!identity) return;
     var dl = make('dl', 'facts');
-    addFact(dl, 'Signed in as', typeof identity.login === 'string' && identity.login !== '' ? identity.login : 'unknown');
+    addFact(dl, 'GitHub account', typeof identity.login === 'string' && identity.login !== '' ? identity.login : 'unknown');
     addFact(dl, 'Account id', typeof identity.id === 'number' ? String(identity.id) : 'unknown');
     el.identityBody.appendChild(dl);
-    el.identityBody.appendChild(make('p', 'note', 'Reviews are posted as the gh account above. GH_TOKEN or GITHUB_TOKEN in the server environment overrides the stored gh login; otherwise gh uses its signed-in account. This page never reads or stores a token.'));
+    el.identityBody.appendChild(make('p', 'note', 'A submitted review is posted as this account, through gh. GH_TOKEN or GITHUB_TOKEN in the server environment takes precedence over the gh login.'));
+  }
+
+  function reviewerLogin() {
+    var identity = state && state.identity && typeof state.identity === 'object' ? state.identity : null;
+    return identity && typeof identity.login === 'string' && identity.login !== '' ? identity.login : '';
   }
 
   function renderSnapshot() {
     var snap = snapshot();
-    show(el.snapshotSection, Boolean(snap));
+    show(el.detailsSection, Boolean(snap));
+    show(el.lede, !snap);
+    show(el.loadSection, !snap || showLoad);
+    show(el.pageMeta, Boolean(snap));
+    el.pageMeta.textContent = '';
     el.snapshotBody.textContent = '';
-    if (!snap) return;
-    el.snapshotBody.appendChild(make('h3', '', 'Expected outcome'));
-    el.snapshotBody.appendChild(make('p', '', typeof snap.title === 'string' && snap.title ? snap.title : 'No PR title supplied.'));
+    if (!snap) {
+      setText(el.pageTitle, 'Pull request review');
+      return;
+    }
+    setText(el.pageTitle, typeof snap.title === 'string' && snap.title ? snap.title : 'Untitled pull request');
+    var ref = (typeof snap.owner === 'string' ? snap.owner : 'unknown') + '/' + (typeof snap.repo === 'string' ? snap.repo : 'unknown') + '#' + String(snap.number);
+    el.pageMeta.appendChild(githubLink(snap.url, ref));
+    el.pageMeta.appendChild(make('span', 'meta-item', typeof snap.state === 'string' ? snap.state.toLowerCase() : 'state unknown'));
+    el.pageMeta.appendChild(make('span', 'meta-item mono', 'commit ' + shortSha(snap.headSha)));
+    var login = reviewerLogin();
+    if (login !== '') el.pageMeta.appendChild(make('span', 'meta-item', 'reviewing as ' + login));
     var description = make('details', '');
-    description.appendChild(make('summary', '', 'PR description (claims, not proof)'));
-    description.appendChild(make('pre', '', typeof snap.body === 'string' && snap.body ? snap.body : 'No PR description supplied.'));
+    description.appendChild(make('summary', '', 'Description (the author\u2019s claims)'));
+    description.appendChild(make('pre', '', typeof snap.body === 'string' && snap.body ? snap.body : 'No description.'));
     el.snapshotBody.appendChild(description);
-    el.snapshotBody.appendChild(make('p', 'note', 'Outcome not established by this page. Compare the title and description with the changed behavior; the reading order below points at what to read first, and no model evaluation runs in this page.'));
     var dl = make('dl', 'facts');
-    addFact(dl, 'Repository', (typeof snap.owner === 'string' ? snap.owner : 'unknown') + '/' + (typeof snap.repo === 'string' ? snap.repo : 'unknown'), true);
-    addLinkFact(dl, 'Pull request', snap.url, '#' + String(snap.number));
-    addLinkFact(dl, 'URL', snap.url, typeof snap.url === 'string' ? snap.url : 'unknown');
+    addLinkFact(dl, 'Pull request', snap.url, typeof snap.url === 'string' ? snap.url : 'unknown');
     addFact(dl, 'GitHub state', typeof snap.state === 'string' ? snap.state : 'unknown');
     addFact(dl, 'Base commit', typeof snap.baseSha === 'string' ? snap.baseSha : 'unknown', true);
     addFact(dl, 'Head commit', typeof snap.headSha === 'string' ? snap.headSha : 'unknown', true);
     addFact(dl, 'Snapshot id', typeof snap.id === 'string' ? snap.id : 'unknown', true);
     addFact(dl, 'Diff lines', String(lines().length));
     el.snapshotBody.appendChild(dl);
-    el.snapshotBody.appendChild(make('p', 'note', 'The snapshot binds host, repository, PR number, title/description, base/head commits and the exact diff hash. Detected changes block submission and require refresh plus explicit anchor revalidation. A branch change after the final check remains possible; commit_id binds the review to this reviewed commit, not necessarily the latest head.'));
+    el.snapshotBody.appendChild(make('p', 'note', 'This page reviews exactly this revision. If the pull request changes, submitting is blocked until you refresh and recheck your line comments; your review is pinned to the head commit above.'));
     if (typeof snap.unavailableReason === 'string' && snap.unavailableReason !== '') {
       el.snapshotBody.appendChild(make('p', 'note', snap.unavailableReason));
     }
@@ -883,100 +903,118 @@ function script(csrf: string): string {
     return link;
   }
 
-  function renderHunkEntry(hunk, index) {
-    var entry = make('details', 'hunk-entry');
-    if (hunk.status === 'attention' && index < 8) entry.open = true;
-    var summary = make('summary', '');
-    summary.appendChild(make('span', 'chip status-' + (STATUS_ORDER.indexOf(hunk.status) >= 0 ? hunk.status : 'uncertain'), String(hunk.status)));
-    summary.appendChild(make('span', 'mono hunk-where', String(hunk.file) + ':' + String(hunk.line)));
-    var factCount = Array.isArray(hunk.facts) ? hunk.facts.length : 0;
-    if (factCount > 0) summary.appendChild(make('span', 'count', factCount + (factCount === 1 ? ' fact' : ' facts')));
-    entry.appendChild(summary);
-    var go = make('button', 'link-button', 'Go to the diff');
+  function answeredVerdicts(hunk) {
+    var out = [];
+    var questions = Array.isArray(hunk.questions) ? hunk.questions : [];
+    for (var q = 0; q < questions.length; q += 1) {
+      var question = questions[q];
+      if (question && question.verdict && typeof question.verdict.label === 'string') out.push(question);
+    }
+    return out;
+  }
+
+  function renderHunkEntry(hunk) {
+    var entry = make('li', 'order-item');
+    var head = make('div', 'order-head');
+    head.appendChild(make('span', 'chip status-' + (STATUS_ORDER.indexOf(hunk.status) >= 0 ? hunk.status : 'uncertain'), String(hunk.status)));
+    head.appendChild(make('span', 'mono hunk-where', String(hunk.file) + ':' + String(hunk.line)));
+    var size = make('span', 'hunk-size mono');
+    size.appendChild(make('span', 'plus', '+' + String(hunk.added)));
+    size.appendChild(document.createTextNode(' '));
+    size.appendChild(make('span', 'minus', '\u2212' + String(hunk.removed)));
+    head.appendChild(size);
+    var go = make('button', 'link-button go-button', 'Go to the diff');
     go.type = 'button';
     go.dataset.action = 'goto';
     go.dataset.path = String(hunk.file);
     go.dataset.line = String(hunk.line);
     go.dataset.side = hunk.side === 'LEFT' ? 'LEFT' : 'RIGHT';
-    entry.appendChild(go);
+    head.appendChild(go);
+    entry.appendChild(head);
+    var verdicts = answeredVerdicts(hunk);
+    if (verdicts.length > 0) {
+      var chips = make('p', 'verdicts');
+      chips.appendChild(make('span', 'sr-only', 'Your agent says: '));
+      for (var v = 0; v < verdicts.length; v += 1) {
+        var chip = make('span', 'verdict verdict-' + String(verdicts[v].verdict.tone), String(verdicts[v].verdict.label));
+        chip.title = String(verdicts[v].text);
+        chips.appendChild(chip);
+      }
+      entry.appendChild(chips);
+    }
+    if (typeof hunk.note === 'string') entry.appendChild(make('p', 'note', hunk.note));
+    var factCount = Array.isArray(hunk.facts) ? hunk.facts.length : 0;
     if (factCount > 0) {
+      var more = make('details', 'fact-details');
+      more.appendChild(make('summary', '', factCount === 1 ? '1 thing diffninja noticed' : factCount + ' things diffninja noticed'));
       var facts = make('ul', 'fact-list');
       for (var f = 0; f < hunk.facts.length; f += 1) {
         var fact = hunk.facts[f];
         var item = make('li', '');
-        item.appendChild(make('span', 'fact-label', String(fact.label) + ' — ' + String(fact.side) + ' line: '));
+        item.appendChild(make('span', 'fact-label', String(fact.label) + ', ' + String(fact.side) + ' line: '));
         item.appendChild(make('code', '', String(fact.text)));
         facts.appendChild(item);
       }
-      entry.appendChild(facts);
-    }
-    if (typeof hunk.note === 'string') entry.appendChild(make('p', 'note', hunk.note));
-    if (Array.isArray(hunk.questions) && hunk.questions.length > 0) {
-      var questions = make('ul', 'question-list');
-      for (var q = 0; q < hunk.questions.length; q += 1) {
-        var question = hunk.questions[q];
-        var row = make('li', '');
-        row.appendChild(make('span', 'question-text', String(question.text)));
-        var options = Array.isArray(question.options) ? question.options : [];
-        var answered = typeof question.choice === 'string' && options.indexOf(question.choice) >= 0;
-        row.appendChild(make('span', answered ? 'answer' : 'answer pending',
-          answered ? 'Agent (' + String(question.answeredBy) + '): ' + question.choice : 'Not answered yet by the agent.'));
-        questions.appendChild(row);
-      }
-      entry.appendChild(questions);
+      more.appendChild(facts);
+      entry.appendChild(more);
     }
     return entry;
+  }
+
+  function renderAnalysisDetails(current) {
+    el.detailsAnalysis.textContent = '';
+    if (!current) return;
+    el.detailsAnalysis.appendChild(make('h3', 'subhead', 'Local analysis'));
+    var counts = current.counts || {};
+    var parts = [];
+    for (var c = 0; c < STATUS_ORDER.length; c += 1) parts.push(String(counts[STATUS_ORDER[c]] || 0) + ' ' + STATUS_ORDER[c]);
+    el.detailsAnalysis.appendChild(make('p', '', 'Hunks by status: ' + parts.join(', ') + '. Statuses come from lexical facts on this machine; no model ran in diffninja.'));
+    if (current.scope && typeof current.scope.note === 'string') el.detailsAnalysis.appendChild(make('p', 'note', current.scope.note));
+    var link = reportLink(current.reportUrl);
+    if (link) { var linkLine = make('p', ''); linkLine.appendChild(link); el.detailsAnalysis.appendChild(linkLine); }
+    if (Array.isArray(current.agenda) && current.agenda.length > 0) {
+      var agenda = make('ul', 'agenda-list');
+      for (var a = 0; a < current.agenda.length; a += 1) {
+        var li = make('li', '');
+        li.appendChild(make('strong', '', String(current.agenda[a].title)));
+        li.appendChild(make('span', 'note', ' ' + String(current.agenda[a].reason)));
+        agenda.appendChild(li);
+      }
+      el.detailsAnalysis.appendChild(agenda);
+    }
   }
 
   function renderAnalysis() {
     var snap = snapshot();
     show(el.analysisSection, Boolean(snap) && !(typeof snap.unavailableReason === 'string' && snap.unavailableReason !== ''));
     el.analysisBody.textContent = '';
+    renderAnalysisDetails(currentAnalysis());
     if (!snap) return;
     if (!analysis || analysisFor !== snap.id) {
-      el.analysisBody.appendChild(make('p', 'note', 'Reading the changes locally…'));
+      el.analysisBody.appendChild(make('p', 'note', 'Reading the changes\u2026'));
       if (!analysisLoading) loadAnalysis();
       return;
     }
     if (analysis.available !== true) {
-      el.analysisBody.appendChild(make('p', 'note', typeof analysis.reason === 'string' ? analysis.reason : 'No local analysis is available for this revision.'));
+      el.analysisBody.appendChild(make('p', 'note', typeof analysis.reason === 'string' ? analysis.reason : 'No analysis is available for this revision. Read the diff below.'));
       return;
     }
     if (analysis.snapshotId !== snap.id) {
-      el.analysisBody.appendChild(make('p', 'note', 'The pull request changed; reading the new revision…'));
+      el.analysisBody.appendChild(make('p', 'note', 'The pull request changed; reading the new revision\u2026'));
       return;
     }
-    var counts = analysis.counts || {};
-    var parts = [];
-    for (var c = 0; c < STATUS_ORDER.length; c += 1) parts.push(String(counts[STATUS_ORDER[c]] || 0) + ' ' + STATUS_ORDER[c]);
-    el.analysisBody.appendChild(make('p', 'summary-line', parts.join(' · ')));
-    if (analysis.scope && typeof analysis.scope.note === 'string') el.analysisBody.appendChild(make('p', 'note', analysis.scope.note));
-    var link = reportLink(analysis.reportUrl);
-    if (link) { var linkLine = make('p', ''); linkLine.appendChild(link); el.analysisBody.appendChild(linkLine); }
-    if (Array.isArray(analysis.agenda) && analysis.agenda.length > 0) {
-      el.analysisBody.appendChild(make('h3', 'subhead', 'Start here'));
-      var agenda = make('ol', 'agenda-list');
-      for (var a = 0; a < analysis.agenda.length; a += 1) {
-        var task = analysis.agenda[a];
-        var li = make('li', '');
-        li.appendChild(make('strong', '', String(task.title)));
-        li.appendChild(make('span', 'note', ' — ' + String(task.reason)));
-        agenda.appendChild(li);
-      }
-      el.analysisBody.appendChild(agenda);
-    }
-    if (analysis.questions && analysis.questions.total > 0) {
-      el.analysisBody.appendChild(make('p', 'note', 'Questions for your agent: ' + analysis.questions.answered + ' of ' + analysis.questions.total
-        + ' answered. Ask the agent that opened this page to answer them; they appear here as they arrive.'));
-    }
-    el.analysisBody.appendChild(make('h3', 'subhead', 'Hunks in reading order'));
     var byAgent = analysis.order && analysis.order.source === 'agent';
-    el.analysisBody.appendChild(make('p', 'note', byAgent
-      ? 'Ordered by ' + String(analysis.order.orderedBy) + ', the agent that opened this page. Statuses come from diffninja.'
-      : 'The order diffninja computed. Ask the agent that opened this page to send its recommended order; it replaces this list as soon as it arrives.'));
-    var list = make('div', 'hunk-list');
+    el.analysisBody.appendChild(make('p', 'order-source', byAgent
+      ? 'Order recommended by ' + String(analysis.order.orderedBy) + ', the agent that opened this page. Labels are its answers; statuses come from diffninja.'
+      : 'Waiting for your agent\u2019s recommended order. Until it arrives, this is the order diffninja computed.'));
+    var total = analysis.questions ? analysis.questions.total : 0;
+    var answered = analysis.questions ? analysis.questions.answered : 0;
+    if (total > 0 && answered < total) {
+      el.analysisBody.appendChild(make('p', 'note', 'Your agent has answered ' + answered + ' of ' + total + ' questions about these hunks; the rest appear as they arrive.'));
+    }
+    var list = make('ol', 'order-list');
     var hunks = Array.isArray(analysis.hunks) ? analysis.hunks : [];
-    for (var h = 0; h < hunks.length; h += 1) list.appendChild(renderHunkEntry(hunks[h], h));
+    for (var h = 0; h < hunks.length; h += 1) list.appendChild(renderHunkEntry(hunks[h]));
     el.analysisBody.appendChild(list);
   }
 
@@ -1294,6 +1332,7 @@ function script(csrf: string): string {
     var status = state ? state.status : '';
     var blocked = status === 'unknown' || status === 'submitting';
     setText(el.statusLine, statusMessage());
+    show(el.statusLine, !(snap && status === 'ready' && !busy && !submitting && lastError === '' && !submitUncertain));
     document.body.classList.toggle('is-busy', busy || submitting);
     if (submitUncertain) {
       // The write's fate is unknown, so this box says only what is true and
@@ -1326,6 +1365,7 @@ function script(csrf: string): string {
   function onLoad(event_) {
     event_.preventDefault();
     if (busy) return;
+    showLoad = false;
     var url = el.prUrl.value.trim();
     if (url === '') {
       lastError = 'Enter the pull request URL first.';
@@ -1358,6 +1398,7 @@ function script(csrf: string): string {
     if (action === 'submit') { event_.preventDefault(); submitReview(); return; }
     if (action === 'refresh') { event_.preventDefault(); refreshState(); return; }
     if (action === 'goto') { event_.preventDefault(); gotoLine(node); return; }
+    if (action === 'show-load') { event_.preventDefault(); showLoad = true; render(); el.prUrl.focus(); return; }
   }
 
   function onChange(event_) {
@@ -1394,6 +1435,12 @@ function script(csrf: string): string {
     el.errorBox = byId('error-box');
     el.errorText = byId('error-text');
     el.refreshButton = byId('refresh-button');
+    el.pageTitle = byId('page-title');
+    el.pageMeta = byId('page-meta');
+    el.lede = byId('lede');
+    el.loadSection = byId('load-section');
+    el.detailsSection = byId('details-section');
+    el.detailsAnalysis = byId('details-analysis');
     el.identitySection = byId('identity-section');
     el.identityBody = byId('identity-body');
     el.snapshotSection = byId('snapshot-section');
@@ -1502,6 +1549,28 @@ h2 { font-size: 1.02rem; }
 .chip.status-uncertain { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
 .chip.status-low { color: var(--teal); border-color: var(--teal); }
 .hunk-list { display: grid; gap: 6px; }
+.page-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 6px 0 0; font-size: 14px; color: var(--ink-soft); }
+.page-meta a { font-weight: 600; }
+.order-source { margin: 0 0 12px; color: var(--ink-soft); }
+.order-list { margin: 0; padding: 0 0 0 2.2em; display: grid; gap: 10px; }
+.order-list > li::marker { font-weight: 700; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.order-item { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; background: var(--sunken); }
+.order-head { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.order-head .chip { margin-left: 0; }
+.hunk-size { font-size: 12.5px; color: var(--ink-soft); }
+.hunk-size .plus { color: var(--add); }
+.hunk-size .minus { color: var(--del); }
+.go-button { margin-left: auto; }
+.verdicts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.verdict { font-size: 12.5px; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink); background: var(--panel); }
+.verdict-ok { border-color: var(--teal); color: var(--teal); }
+.verdict-watch { border-color: var(--warn); color: var(--warn); background: var(--warn-bg); font-weight: 600; }
+.verdict-unsure { border-style: dashed; color: var(--ink-soft); }
+.fact-details { margin-top: 6px; }
+.fact-details > summary { cursor: pointer; font-size: 13px; color: var(--ink-soft); }
+.details-panel > summary { cursor: pointer; font-weight: 600; }
+.details-panel[open] > summary { margin-bottom: 8px; }
+@media (max-width: 640px) { .go-button { margin-left: 0; } .order-list { padding-left: 1.6em; } }
 .hunk-entry { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; background: var(--sunken); }
 .hunk-entry summary { cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hunk-entry summary .chip { margin-left: 0; }
