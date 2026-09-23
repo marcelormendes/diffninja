@@ -68,6 +68,18 @@ export interface RecordedAnswers {
   readonly reportUrl: string;
 }
 
+interface ReviewedPage {
+  readonly token: string;
+  readonly page: ReportPage;
+  readonly report: ReviewReport;
+}
+
+export interface RecordedOrder {
+  readonly reviewId: string;
+  readonly ordered: number;
+  readonly reportUrl: string;
+}
+
 export class ReportPages {
   private readonly pages = new Map<string, ReportPage>();
   private readonly tokens = new Map<string, string>();
@@ -108,12 +120,8 @@ export class ReportPages {
    * with one bad answer changes nothing. A later answer replaces an earlier one.
    */
   record(reviewId: string, answers: readonly AnswerInput[], answeredBy: string): RecordedAnswers {
-    const token = this.tokens.get(reviewId);
-    const page = token === undefined ? undefined : this.pages.get(token);
-    if (token === undefined || page?.report === undefined) {
-      throw new Error("No review with that reviewId on this MCP connection. Reviews last as long as the connection, at most the latest 20.");
-    }
-    const questions = new Map(page.report.questions.map((question) => [question.id, question]));
+    const { token, page, report } = this.review(reviewId);
+    const questions = new Map(report.questions.map((question) => [question.id, question]));
     const seen = new Set<string>();
     answers.forEach((answer, index) => {
       const question = questions.get(answer.questionId);
@@ -126,16 +134,52 @@ export class ReportPages {
     });
     const answeredAt = new Date().toISOString();
     for (const answer of answers) questions.get(answer.questionId)!.answer = { choice: answer.choice, answeredBy, answeredAt };
-    page.html = this.render(page.report);
-    page.policy = reportPolicy(page.html);
-    const answered = page.report.questions.filter((question) => question.answer !== undefined).length;
+    this.rerender(page, report);
+    const answered = report.questions.filter((question) => question.answer !== undefined).length;
     return {
       reviewId,
       recorded: answers.length,
       answered,
-      unanswered: page.report.questions.length - answered,
+      unanswered: report.questions.length - answered,
       reportUrl: `${this.origin}/report/${token}`,
     };
+  }
+
+  /**
+   * Record the reading order the reviewing agent recommends and re-render the
+   * page. The order must name every hunk of the review exactly once; anything
+   * else refuses the whole call and keeps the previous order. The report's own
+   * order, statuses, and priorities never change. A later order replaces an
+   * earlier one.
+   */
+  recordOrder(reviewId: string, itemIds: readonly string[], orderedBy: string): RecordedOrder {
+    const { token, page, report } = this.review(reviewId);
+    const known = new Set(report.items.map((item) => item.id));
+    const seen = new Set<string>();
+    itemIds.forEach((id, index) => {
+      if (!known.has(id)) throw new Error(`order[${index}] names a hunk this review does not have.`);
+      if (seen.has(id)) throw new Error(`order[${index}] repeats a hunk; name each hunk once.`);
+      seen.add(id);
+    });
+    const missing = report.items.filter((item) => !seen.has(item.id)).map((item) => item.id);
+    if (missing.length > 0) throw new Error(`order leaves out ${missing.length} of ${known.size} hunks, starting with ${missing[0]}; name every hunk once.`);
+    report.agentOrder = { itemIds: [...itemIds], orderedBy, orderedAt: new Date().toISOString() };
+    this.rerender(page, report);
+    return { reviewId, ordered: itemIds.length, reportUrl: `${this.origin}/report/${token}` };
+  }
+
+  private review(reviewId: string): ReviewedPage {
+    const token = this.tokens.get(reviewId);
+    const page = token === undefined ? undefined : this.pages.get(token);
+    if (token === undefined || page?.report === undefined) {
+      throw new Error("No review with that reviewId on this MCP connection. Reviews last as long as the connection, at most the latest 20.");
+    }
+    return { token, page, report: page.report };
+  }
+
+  private rerender(page: ReportPage, report: ReviewReport): void {
+    page.html = this.render(report);
+    page.policy = reportPolicy(page.html);
   }
 
   private origin = "";

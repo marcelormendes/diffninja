@@ -58,6 +58,7 @@ export function renderReview(report: ReviewReport): string {
     `<body data-default-view="${report.evidence === undefined ? "call-flow" : "brief"}">`,
     '<div class="wrap">',
     renderHeader(report),
+    renderAgentOrder(report),
     '<nav class="view-switch" aria-label="Report view">',
     '<a href="#view-brief" data-view="brief">Outcome</a>',
     '<a href="#view-call-flow" data-view="call-flow">Call flow</a>',
@@ -174,6 +175,34 @@ function renderBreadcrumb(): string {
     '<span class="crumb-rank mono" id="focus-rank"></span>',
     '<span class="crumb-path mono" id="focus-path"></span>',
     "</nav>",
+  ].join("\n");
+}
+
+/** The reading order the reviewing agent recorded, linking each hunk under its rank in the report's own order. */
+function renderAgentOrder(report: ReviewReport): string {
+  const order = report.agentOrder;
+  if (order === undefined) return "";
+  const rankOf = new Map(report.items.map((item, index) => [item.id, index + 1]));
+  const links = order.itemIds
+    .map((id) => {
+      const rank = rankOf.get(id)!;
+      const item = report.items[rank - 1];
+      return [
+        "<li>",
+        `<a class="toc-link" data-open-hunk href="#item-${rank}">`,
+        `<span class="toc-rank mono">#${rank}</span>`,
+        `<span class="dot dot-${escapeHtml(item.status)}" aria-hidden="true"></span>`,
+        `<span class="toc-path mono">${escapeHtml(`${item.file}:${item.newStart}`)}</span>`,
+        "</a></li>",
+      ].join("");
+    })
+    .join("\n");
+  return [
+    '<details class="agent-order" open>',
+    `<summary>Reading order recommended by ${escapeHtml(order.orderedBy)}</summary>`,
+    '<p class="note">The agent that requested this review read the hunks and recommends this order. It is that agent&#39;s reading, not a verdict; diffninja&#39;s own order, statuses, and ranks (#) are unchanged.</p>',
+    `<ol class="agent-order-list">${links}</ol>`,
+    "</details>",
   ].join("\n");
 }
 
@@ -909,6 +938,10 @@ button:disabled { cursor: default; opacity: .65; }
 .toc { padding-top: 10px; }
 .toc-list { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; max-height: 22vh; overflow-y: auto; }
 .toc-list > li { min-width: 0; max-width: 100%; }
+.agent-order { margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; }
+.agent-order > summary { padding: 10px 14px; cursor: pointer; font-weight: 600; }
+.agent-order-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 14px 12px; padding: 0; list-style: none; }
+.agent-order-list > li { min-width: 0; max-width: 100%; }
 .toc-link {
   display: flex;
   align-items: center;

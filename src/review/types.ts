@@ -125,6 +125,12 @@ export interface ReviewItem extends ReviewUnit {
   /** Local change facts; absent for manual units and fact-free passes. */
   facts?: ChangeFacts;
 }
+export interface AgentOrder {
+  /** Every item id of the report exactly once, most important first. */
+  itemIds: string[];
+  orderedBy: string;
+  orderedAt: string;
+}
 export interface ReviewReport {
   title: string;
   source: string;
@@ -143,6 +149,8 @@ export interface ReviewReport {
   warnings: string[];
   /** Questions for the reviewing agent's model, bound to hunks; answers never reorder the report. */
   questions: ReviewQuestion[];
+  /** The reading order the reviewing agent recorded; shown beside the report's own order, never replacing it. */
+  agentOrder?: AgentOrder;
   /**
    * Local repository context for a git-range review: prior reverts, contributor
    * guidelines, and sibling-file conventions. Absent for a patch.

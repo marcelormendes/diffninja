@@ -4,7 +4,7 @@
 // returns, and write every request, result, and page to an evidence directory.
 //
 //   node .claude/skills/verify/drive.mjs doctor
-//   node .claude/skills/verify/drive.mjs review --args '<review_diff JSON>' [--answer cannot-tell|first] [--hold SECONDS] [--out DIR]
+//   node .claude/skills/verify/drive.mjs review --args '<review_diff JSON>' [--answer cannot-tell|first] [--order reverse] [--hold SECONDS] [--out DIR]
 //
 // The server lives only as long as this process: closing the client closes the
 // server's stdin, which ends the session and its pages. Evidence stays on disk.
@@ -27,7 +27,7 @@ const { StdioClientTransport } = await import(require.resolve("@modelcontextprot
 const [command, ...rest] = process.argv.slice(2);
 const { values } = parseArgs({
   args: rest,
-  options: { args: { type: "string" }, answer: { type: "string" }, hold: { type: "string" }, out: { type: "string" } },
+  options: { args: { type: "string" }, answer: { type: "string" }, order: { type: "string" }, hold: { type: "string" }, out: { type: "string" } },
 });
 
 const checks = [];
@@ -77,7 +77,7 @@ async function doctor() {
   check("server refuses arguments", bad.status === 1 && bad.stderr.includes("accepts no arguments") && bad.stdout === "", `exit ${bad.status}`);
   const { client } = await connect();
   const tools = (await client.listTools()).tools.map(tool => tool.name).sort();
-  check("tools are review_diff and record_answers", tools.join(",") === "record_answers,review_diff", tools.join(","));
+  check("tools are review_diff, record_answers, record_order", tools.join(",") === "record_answers,record_order,review_diff", tools.join(","));
   await client.close();
   let gh = "not installed";
   try { execFileSync("gh", ["auth", "status"], { stdio: "pipe", timeout: 20_000 }); gh = "authenticated"; } catch (error) { gh = error.code === "ENOENT" ? gh : "not authenticated"; }
@@ -129,6 +129,24 @@ async function review() {
       save("reportUrl.after-answers.html", after.body);
       check("page shows the answers attributed to this client", after.body.includes(CLIENT.name));
     }
+    const items = report.items ?? report.report?.items ?? [];
+    if (values.order === "reverse" && items.length > 1) {
+      const before = await get(report.reportUrl);
+      const ids = items.map(item => item.id).reverse();
+      const ordered = await client.callTool({ name: "record_order", arguments: { reviewId: report.reviewId, order: ids } });
+      save("record_order.json", ordered);
+      check("record_order accepted the full order", !ordered.isError && ordered.structuredContent?.ordered === ids.length, ordered.isError ? ordered.content[0].text : "");
+      const partial = await client.callTool({ name: "record_order", arguments: { reviewId: report.reviewId, order: ids.slice(1) } });
+      save("record_order.refused.json", partial);
+      check("record_order refuses an order that leaves a hunk out", partial.isError === true);
+      const after = await get(report.reportUrl);
+      save("reportUrl.after-order.html", after.body);
+      const list = /<ol class="agent-order-list">([\s\S]*?)<\/ol>/.exec(after.body)?.[1] ?? "";
+      const ranks = [...list.matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]));
+      check("page lists the agent's order, attributed to this client", after.body.includes(`Reading order recommended by ${CLIENT.name}`) && ranks.join(",") === items.map((_, k) => k + 1).reverse().join(","), ranks.join(","));
+      const cards = body => [...body.matchAll(/<span class="path mono">([^<]*)<\/span>/g)].map(match => match[1]).join("|");
+      check("diffninja's own card order is unchanged", cards(after.body) === cards(before.body));
+    }
     if (values.hold) {
       console.log(`HOLD ${values.hold}s — open now: ${Object.values(pages).filter(Boolean).join(" ")}`);
       await new Promise(done => setTimeout(done, Number(values.hold) * 1000));
@@ -147,7 +165,7 @@ async function review() {
 try {
   if (command === "doctor") await doctor();
   else if (command === "review") await review();
-  else throw new Error("usage: drive.mjs doctor | drive.mjs review --args '<json>' [--answer cannot-tell|first] [--hold SECONDS] [--out DIR]");
+  else throw new Error("usage: drive.mjs doctor | drive.mjs review --args '<json>' [--answer cannot-tell|first] [--order reverse] [--hold SECONDS] [--out DIR]");
 } catch (error) {
   console.error(`drive.mjs: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 2;

@@ -138,6 +138,13 @@ The tool writes no report files. Arguments and examples:
    the agent answers through `record_answers`, and the answers appear on the
    report page attributed to that agent, never reordering anything. diffninja
    itself still calls no model.
+   After reading the hunks, the agent can also send the reading order it
+   recommends through `record_order` (every hunk id once, most important
+   first). The page shows it at the top, attributed to that agent, beside
+   diffninja's own order, which does not change. On 159 held-out open-source
+   pull requests, weighted by the severity of maintainers' actual review
+   comments, a host model that read diffninja's report put the serious
+   comments earlier than diffninja's deterministic order did.
 5. **Project context (git ranges only).** What a diff does not show is often
    the project around it. From the local clone alone — nothing is fetched —
    the report names the commits that last changed each hunk's removed lines

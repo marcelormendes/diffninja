@@ -1,7 +1,7 @@
 # diffninja
 
 `diffninja` runs inside agent CLIs (Claude Code, Codex, OMP, pi, …) through
-`diffninja-mcp`, a stdio MCP server exposing `review_diff` and `record_answers`. The
+`diffninja-mcp`, a stdio MCP server exposing `review_diff`, `record_answers`, and `record_order`. The
 `diffninja` bin only registers that server (`diffninja setup`); there is no
 terminal review mode. PR links select a connected, human-authored GitHub review
 via `gh`, and the tool returns its loopback URL. Static diff/range analysis is
@@ -76,7 +76,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - `record_answers`: strict `{ reviewId, answers: [{ questionId, choice }] }`,
     no free text; any invalid answer refuses the whole call and keeps nothing;
     answers are attributed to the MCP client's own name/version, re-render the
-    page, and never change status, priority, or order. Reviews are reachable only
+    page, and never change status, priority, or order.
+  - `record_order`: strict `{ reviewId, order: string[] }` naming every
+    `items[].id` of that review exactly once; anything else refuses the whole
+    call and keeps the previous order. The agent's order is attributed to the MCP
+    client, shown at the top of the report page beside diffninja's own order,
+    and replaced by a later call; it never changes the report's order, status,
+    or priority. Reviews are reachable only
     from the connection that created them. Report pages are `GET /report/<256-bit token>` only, Host-checked,
     CSP-pinned by hash, no-store, at most 20 per connection, and close with it.
     Connected success returns `{ mode: "connected", url, pr, snapshot }` plus,

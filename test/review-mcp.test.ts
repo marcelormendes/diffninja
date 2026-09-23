@@ -101,7 +101,7 @@ describe("review_diff discovery", () => {
     const client = await connectReview();
     const listed = await client.listTools();
 
-    expect(listed.tools.map(tool => tool.name)).toEqual(["review_diff", "record_answers"]);
+    expect(listed.tools.map(tool => tool.name)).toEqual(["review_diff", "record_answers", "record_order"]);
     const tool = listed.tools[0];
     expect(tool.annotations?.readOnlyHint).toBe(false);
     expect(tool.annotations?.destructiveHint).toBe(false);
@@ -529,6 +529,87 @@ class StdioReviewPeer {
   }
 }
 
+describe("record_order", () => {
+  async function reviewed(client: Client) {
+    const result = await review(client, { diff: patch });
+    expect(result.isError).toBeFalsy();
+    const report = reportOf(result);
+    expect(report.items.length).toBeGreaterThan(1);
+    return report;
+  }
+
+  async function order(client: Client, args: NonNullable<CallToolRequest["params"]["arguments"]>) {
+    return CallToolResultSchema.parse(await client.callTool({ name: "record_order", arguments: args }));
+  }
+
+  const cardOrder = (body: string) => [...body.matchAll(/<span class="path mono">([^<]*)<\/span>/g)].map(match => match[1]);
+
+  test("shows the agent's order on the page, attributed, without moving diffninja's order", async () => {
+    blockNetwork();
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const before = await loopback(report.reportUrl);
+    expect(before?.body).not.toContain("Reading order recommended by");
+
+    const reversed = report.items.map(item => item.id).reverse();
+    const result = await order(client, { reviewId: report.reviewId, order: reversed });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({ reviewId: report.reviewId, ordered: reversed.length, reportUrl: report.reportUrl });
+    expect(result.structuredContent).toEqual(JSON.parse(textOf(result)));
+
+    const after = await loopback(report.reportUrl);
+    expect(after?.status).toBe(200);
+    expect(after?.body).toContain("Reading order recommended by diffninja-mcp-test 0.1.0");
+    const recommended = [...after!.body.matchAll(/<ol class="agent-order-list">([\s\S]*?)<\/ol>/g)][0][1];
+    const ranks = [...recommended.matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]));
+    expect(ranks).toEqual(report.items.map((_, index) => index + 1).reverse());
+    expect(cardOrder(after!.body)).toEqual(cardOrder(before!.body));
+    expect(fetchAttempts).toEqual([]);
+  });
+
+  test("a later order replaces an earlier one", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const ids = report.items.map(item => item.id);
+    expect((await order(client, { reviewId: report.reviewId, order: [...ids].reverse() })).isError).toBeFalsy();
+    expect((await order(client, { reviewId: report.reviewId, order: ids })).isError).toBeFalsy();
+    const page = await loopback(report.reportUrl);
+    const recommended = [...page!.body.matchAll(/<ol class="agent-order-list">([\s\S]*?)<\/ol>/g)];
+    expect(recommended).toHaveLength(1);
+    expect([...recommended[0][1].matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]))).toEqual(ids.map((_, index) => index + 1));
+  });
+
+  test("refuses the whole call, keeping the previous order, unless every hunk is named once", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const ids = report.items.map(item => item.id);
+    expect((await order(client, { reviewId: report.reviewId, order: ids })).isError).toBeFalsy();
+    const kept = (await loopback(report.reportUrl))!.body;
+    const cases: Array<{ args: NonNullable<CallToolRequest["params"]["arguments"]>; expected: RegExp }> = [
+      { args: { reviewId: "0".repeat(32), order: ids }, expected: /no review with that reviewId/i },
+      { args: { reviewId: report.reviewId, order: [...ids, "hunk-999"] }, expected: new RegExp(`order\\[${ids.length}\\] names a hunk`) },
+      { args: { reviewId: report.reviewId, order: [...ids, ids[0]] }, expected: /repeats a hunk/ },
+      { args: { reviewId: report.reviewId, order: ids.slice(1) }, expected: new RegExp(`leaves out 1 of ${ids.length} hunks, starting with ${ids[0]}`) },
+      { args: { reviewId: report.reviewId, order: ids, note: "free text" }, expected: /unrecognized key|invalid arguments/i },
+    ];
+    for (const { args, expected } of cases) {
+      const result = await order(client, args);
+      expect(result.isError, JSON.stringify(args)).toBe(true);
+      expect(textOf(result)).toMatch(expected);
+    }
+    expect((await loopback(report.reportUrl))!.body).toBe(kept);
+  });
+
+  test("a review from another connection is not reachable", async () => {
+    const owner = await connectReview();
+    const report = await reviewed(owner);
+    const other = await connectReview();
+    const result = await order(other, { reviewId: report.reviewId, order: report.items.map(item => item.id) });
+    expect(result.isError).toBe(true);
+    expect((await loopback(report.reportUrl))!.body).not.toContain("Reading order recommended by");
+  });
+});
+
 describe("record_answers", () => {
   async function reviewed(client: Client) {
     const result = await review(client, { diff: patch });
@@ -667,6 +748,13 @@ describe("review_diff connected pull request mode", () => {
       const answered = after?.hunks?.flatMap(hunk => hunk.questions).find(entry => entry.id === question.id);
       expect(answered?.choice).toBe("cannot-tell");
       expect(answered?.answeredBy).toBeTruthy();
+
+      // The agent's reading order lands on the analysis page of that snapshot.
+      const ordered = await client.callTool({ name: "record_order", arguments: {
+        reviewId: payload.reviewId, order: payload.report!.items.map(item => item.id),
+      } });
+      expect(ordered.isError).toBeFalsy();
+      expect((await loopback(payload.reportUrl!))?.body).toContain("Reading order recommended by diffninja-mcp-test 0.1.0");
 
       // A repeated call for the same pull request reuses the same analysis.
       const again = connectedOf(await review(client, { pr: GH_URL }));
