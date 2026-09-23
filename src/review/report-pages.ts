@@ -94,16 +94,21 @@ export interface RecordedComments {
   readonly reportUrl: string;
 }
 
+/** Map key of one commentable line. */
+function anchorKey(path: string, side: "LEFT" | "RIGHT", line: number): string {
+  return JSON.stringify([path, side, line]);
+}
+
 /** Every line a comment may anchor to in one hunk: added lines on the new side, removed on the old, context on both. */
 function anchorsOf(item: ReviewItem, into: Set<string>): void {
   let oldLine = item.oldStart;
   let newLine = item.newStart;
   for (const text of item.diff.split("\n").slice(1)) {
-    if (text.startsWith("+")) into.add(`${item.file}\u0000RIGHT:${newLine++}`);
-    else if (text.startsWith("-")) into.add(`${item.file}\u0000LEFT:${oldLine++}`);
+    if (text.startsWith("+")) into.add(anchorKey(item.file, "RIGHT", newLine++));
+    else if (text.startsWith("-")) into.add(anchorKey(item.file, "LEFT", oldLine++));
     else if (text.startsWith(" ")) {
-      into.add(`${item.file}\u0000RIGHT:${newLine++}`);
-      into.add(`${item.file}\u0000LEFT:${oldLine++}`);
+      into.add(anchorKey(item.file, "RIGHT", newLine++));
+      into.add(anchorKey(item.file, "LEFT", oldLine++));
     }
   }
 }
@@ -224,7 +229,7 @@ export class ReportPages {
     for (const item of report.items) anchorsOf(item, anchors);
     const seen = new Set<string>();
     comments.forEach((comment, index) => {
-      const key = `${comment.path}\u0000${comment.side}:${comment.line}`;
+      const key = anchorKey(comment.path, comment.side, comment.line);
       if (!anchors.has(key)) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
       if (seen.has(key)) throw new Error(`comments[${index}] is a second comment on the same line; combine them into one.`);
       const problem = commentProblem(comment.body);
