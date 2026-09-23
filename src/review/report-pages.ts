@@ -14,10 +14,18 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { z } from "zod";
-import type { ReviewReport } from "./types.js";
+import type { ReviewItem, ReviewReport, SuggestedComment } from "./types.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
 export const MAX_REPORT_PAGES = 20;
+/** Most comments one review may carry from the agent: a reviewer's handful, not a lint dump. */
+export const MAX_SUGGESTED_COMMENTS = 30;
+/** Longest suggested comment: a sentence or two, the way a reviewer writes one. */
+export const MAX_SUGGESTED_CHARS = 280;
+
+const CONTROL_CHARACTERS = /[^\P{Cc}]/u;
+/** Report scaffolding a person would not write in a review comment: "Finding 1:", "Attention -", "**Error**", "## Bug". */
+const REPORT_LABEL = /^\s*(?:#|>|[-*+]\s|\d+[.)]\s|\*\*|\[)|^\s*(?:findings?|issues?|attention|errors?|warnings?|bugs?|problems?|severity|critical|major|minor|high|medium|low|concerns?|risks?|suggestions?|observations?|summary)\b\s*#?\d*\s*[:\-\u2013\u2014.]|\*\*/i;
 
 const INLINE_BLOCK = /<(script|style)>([\s\S]*?)<\/\1>/g;
 
@@ -78,6 +86,41 @@ export interface RecordedOrder {
   readonly reviewId: string;
   readonly ordered: number;
   readonly reportUrl: string;
+}
+
+export interface RecordedComments {
+  readonly reviewId: string;
+  readonly suggested: number;
+  readonly reportUrl: string;
+}
+
+/** Map key of one commentable line. */
+function anchorKey(path: string, side: "LEFT" | "RIGHT", line: number): string {
+  return JSON.stringify([path, side, line]);
+}
+
+/** Every line a comment may anchor to in one hunk: added lines on the new side, removed on the old, context on both. */
+function anchorsOf(item: ReviewItem, into: Set<string>): void {
+  let oldLine = item.oldStart;
+  let newLine = item.newStart;
+  for (const text of item.diff.split("\n").slice(1)) {
+    if (text.startsWith("+")) into.add(anchorKey(item.file, "RIGHT", newLine++));
+    else if (text.startsWith("-")) into.add(anchorKey(item.file, "LEFT", oldLine++));
+    else if (text.startsWith(" ")) {
+      into.add(anchorKey(item.file, "RIGHT", newLine++));
+      into.add(anchorKey(item.file, "LEFT", oldLine++));
+    }
+  }
+}
+
+/** Why a suggested comment cannot be offered as the reviewer's own words, or undefined when it can. */
+function commentProblem(body: string): string | undefined {
+  if (body.trim() === "") return "is empty";
+  if (/[\r\n]/.test(body)) return "must be one line of text";
+  if (CONTROL_CHARACTERS.test(body)) return "contains control characters";
+  if (body.length > MAX_SUGGESTED_CHARS) return `is longer than ${MAX_SUGGESTED_CHARS} characters; say it the way a reviewer would, in a sentence or two`;
+  if (REPORT_LABEL.test(body)) return "reads like a report (a heading, list marker, bold, or a label such as \"Finding 1:\"); write it the way the reviewer would say it";
+  return undefined;
 }
 
 export class ReportPages {
@@ -170,6 +213,36 @@ export class ReportPages {
     report.agentOrder = { itemIds: [...itemIds], orderedBy, orderedAt: new Date().toISOString(), diffninjaIds };
     this.rerender(page, report);
     return { reviewId, ordered: itemIds.length, reportUrl: `${this.origin}/report/${token}` };
+  }
+
+  /**
+   * Record the line comments the reviewing agent suggests. The human sees them
+   * under their lines on the pull request page and adds each to their own review,
+   * or not; nothing here posts anything. Every comment must name a line of this
+   * review's diff, at most one per line, and read like a reviewer's own short
+   * comment. Any bad comment refuses the whole call and keeps the previous set;
+   * a later call replaces it, and an empty list clears it.
+   */
+  suggestComments(reviewId: string, comments: readonly SuggestedComment[], suggestedBy: string): RecordedComments {
+    const { token, page, report } = this.review(reviewId);
+    const anchors = new Set<string>();
+    for (const item of report.items) anchorsOf(item, anchors);
+    const seen = new Set<string>();
+    comments.forEach((comment, index) => {
+      const key = anchorKey(comment.path, comment.side, comment.line);
+      if (!anchors.has(key)) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
+      if (seen.has(key)) throw new Error(`comments[${index}] is a second comment on the same line; combine them into one.`);
+      const problem = commentProblem(comment.body);
+      if (problem !== undefined) throw new Error(`comments[${index}] ${problem}.`);
+      seen.add(key);
+    });
+    report.agentComments = {
+      comments: comments.map(({ path, line, side, body }) => ({ path, line, side, body: body.trim() })),
+      suggestedBy,
+      suggestedAt: new Date().toISOString(),
+    };
+    this.rerender(page, report);
+    return { reviewId, suggested: comments.length, reportUrl: `${this.origin}/report/${token}` };
   }
 
   private review(reviewId: string): ReviewedPage {

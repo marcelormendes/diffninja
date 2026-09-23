@@ -13,7 +13,7 @@
 
 import { CHANGE_FACT_QUESTIONS, type ChangeFactQuestion } from "./change-facts.js";
 import { verdictOf, type QuestionKind, type Verdict } from "./questions.js";
-import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
+import type { ReviewItem, ReviewReport, ReviewStatus, SuggestedComment } from "./types.js";
 
 /** Most agenda entries the page lists; the full report has the rest. */
 export const CONNECTED_AGENDA_LIMIT = 5;
@@ -87,6 +87,8 @@ export interface ConnectedAnalysis {
   /** Every hunk, in report order. */
   readonly hunks: readonly ConnectedHunk[];
   readonly questions: { readonly total: number; readonly answered: number };
+  /** Line comments the reviewing agent suggested, for the human to add to their review or not. */
+  suggestions?: { readonly suggestedBy: string; readonly comments: readonly SuggestedComment[] };
 }
 
 export type ConnectedOrder = { readonly source: "agent"; readonly orderedBy: string } | { readonly source: "diffninja" };
@@ -179,7 +181,7 @@ export function connectedAnalysisOf(
     return hunk;
   });
   const answered = report.questions.filter((question) => question.answer !== undefined).length;
-  return {
+  const analysis: ConnectedAnalysis = {
     available: true,
     scope,
     snapshotId,
@@ -195,4 +197,8 @@ export function connectedAnalysisOf(
     hunks,
     questions: { total: report.questions.length, answered },
   };
+  if (report.agentComments !== undefined) {
+    analysis.suggestions = { suggestedBy: report.agentComments.suggestedBy, comments: report.agentComments.comments };
+  }
+  return analysis;
 }

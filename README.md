@@ -57,8 +57,9 @@ Ask your agent to review `https://github.com/OWNER/REPO/pull/123`. It calls
 `review_diff` with the link and gives you a loopback review page, loaded from
 the canonical GitHub patch through your `gh` authentication. Select diff lines,
 write single-line inline comments and a review body, pick Comment, Approve, or
-Request changes, preview the exact payload, and submit. Every word is yours;
-diffninja only carries it to GitHub. It never approves, blocks, or merges
+Request changes, preview the exact payload, and submit. Comments your agent
+suggests wait under their lines until you add them; every word you submit is one
+you chose, and diffninja only carries it to GitHub. It never approves, blocks, or merges
 anything on its own. The page belongs to the agent's MCP connection and closes
 when the agent exits.
 
@@ -146,6 +147,11 @@ The tool writes no report files. Arguments and examples:
    pull requests, weighted by the severity of maintainers' actual review
    comments, a host model that read diffninja's report put the serious
    comments earlier than diffninja's deterministic order did.
+   On a pull request, the agent can also suggest the line comments it would
+   leave, through `suggest_comments`: short, in the reviewer's own voice, no
+   "Finding 1:" scaffolding. The page shows each under its line; you add one
+   or all of them to your draft with a click, edit or dismiss them, and submit
+   the review yourself. Nothing is posted without you.
 5. **Project context (git ranges only).** What a diff does not show is often
    the project around it. From the local clone alone — nothing is fetched —
    the report names the commits that last changed each hunk's removed lines

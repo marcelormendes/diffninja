@@ -1,7 +1,8 @@
 # diffninja
 
 `diffninja` runs inside agent CLIs (Claude Code, Codex, OMP, pi, …) through
-`diffninja-mcp`, a stdio MCP server exposing `review_diff`, `record_answers`, and `record_order`. The
+`diffninja-mcp`, a stdio MCP server exposing `review_diff`, `record_answers`, `record_order`, and
+`suggest_comments`. The
 `diffninja` bin only registers that server (`diffninja setup`); there is no
 terminal review mode. PR links select a connected, human-authored GitHub review
 via `gh`, and the tool returns its loopback URL. Static diff/range analysis is
@@ -77,6 +78,16 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     no free text; any invalid answer refuses the whole call and keeps nothing;
     answers are attributed to the MCP client's own name/version, re-render the
     page, and never change status, priority, or order.
+  - `suggest_comments`: strict `{ reviewId, comments: [{ path, line, side, body }] }`,
+    at most 30. Each names a commentable line of that review's diff (added
+    RIGHT, removed LEFT, context either), at most one per line, and reads like
+    the reviewer's own comment: one line, at most 280 characters, no control
+    characters, no report scaffolding (headings, bold, list markers, labels
+    such as "Finding 1:"). Any bad comment refuses the whole call and keeps the
+    previous set; a later call replaces it, an empty list clears it. They reach
+    the connected page (`/api/analysis` `suggestions`, attributed to the MCP
+    client) as suggestions under their lines; a suggestion joins the human's
+    draft only when they add it, and nothing is posted until they submit.
   - `record_order`: strict `{ reviewId, order: string[] }` naming every
     `items[].id` of that review exactly once; anything else refuses the whole
     call and keeps the previous order. The host agent's order is the product's
