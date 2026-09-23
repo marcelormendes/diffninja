@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { renderReview } from "../src/review/html.js";
+import { renderCallFlowPage, renderReview } from "../src/review/html.js";
 import type { ReviewItem, ReviewReport } from "../src/review/types.js";
 import type { ChangeFacts } from "../src/review/change-facts.js";
 import type {
@@ -522,6 +522,28 @@ describe("review HTML", () => {
     expect(headers[0][2]).toContain('href="#item-3"');
     expect(headers[1][2]).toContain("b.ts");
     expect(headers[1][2]).toContain('href="#item-2"');
+  });
+
+  test("the call-flow page shows one file's diagram on its own, with the report's modes and no link into a diff it lacks", () => {
+    const flows = report([item({ file: "a.ts" }), item({ file: "b.ts" })], {
+      callFlowAvailability: "available",
+      callFlows: ["a.ts", "b.ts"].map(file => ({
+        file, truncated: false,
+        trees: [{ key: "run", label: `run_${file.charAt(0)}()`, file, line: 1, status: "changed", children: [] }],
+      })),
+    });
+    const one = renderCallFlowPage(flows, "b.ts");
+    expect(one).toContain('id="view-call-flow"');
+    expect(one).toContain("run_b()");
+    expect(one).not.toContain("run_a()");
+    expect(one).toContain('class="flow-embed flow-single"');
+    expect(one).toMatch(/\.cf-diff-link \{ display: none !important; \}/);
+    expect(one.match(/<script\b/g)).toHaveLength(1);
+    expect(one).not.toMatch(/<script[^>]+src=|<link\b|@import|url\(["']?https?:/i);
+    const all = renderCallFlowPage(flows);
+    expect(all).toContain("run_a()");
+    expect(all).toContain("run_b()");
+    expect(all).toContain('class="flow-embed"');
   });
 
   test("call diagrams remain readable without scripts and expose no external resources", () => {

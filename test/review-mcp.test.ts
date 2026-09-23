@@ -352,6 +352,8 @@ interface AnalysisView {
   order?: { source: string; orderedBy?: string };
   hunks?: Array<{ file: string; line: number; side: string; status: string; facts: unknown[]; questions: Array<{ id: string; choice?: string; answeredBy?: string }> }>;
   questions?: { total: number; answered: number };
+  callFlowFiles?: string[];
+  suggestions?: { suggestedBy: string; comments: unknown[] };
 }
 
 async function connectedAnalysis(url: string): Promise<AnalysisView | null> {
@@ -803,6 +805,9 @@ describe("review_diff connected pull request mode", () => {
       const view = await connectedAnalysis(payload.url);
       expect(view).toMatchObject({ available: true, snapshotId: payload.snapshot.id, reviewId: payload.reviewId, reportUrl: payload.reportUrl });
       expect(view?.hunks?.[0]).toMatchObject({ file: "app.ts", status: "attention", line: 2, side: "LEFT" });
+      // A patch-only analysis has no call flows to show, and says why.
+      expect(view?.callFlowFiles).toEqual([]);
+      expect((await loopback(`${payload.url}flow?snapshot=${payload.snapshot.id}`))?.status).toBe(404);
 
       // Answers the agent records appear on the pull request page.
       const question = payload.report!.questions[0];

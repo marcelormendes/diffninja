@@ -88,6 +88,8 @@ export interface ConnectedAnalysis {
   readonly hunks: readonly ConnectedHunk[];
   readonly questions: { readonly total: number; readonly answered: number };
   /** Line comments the reviewing agent suggested, for the human to add to their review or not. */
+  /** Changed files that have call-flow diagrams, for the page's "Call flow" buttons; empty for a patch-only analysis. */
+  readonly callFlowFiles: readonly string[];
   suggestions?: { readonly suggestedBy: string; readonly comments: readonly SuggestedComment[] };
 }
 
@@ -129,6 +131,12 @@ function noteOf(item: ReviewItem): string | undefined {
   if (item.facts?.inert === true) return "Formatting or comments only.";
   if (item.facts?.importsOnly === true) return "Imports only: read where the imported names are used.";
   return undefined;
+}
+
+/** Changed files with at least one call-flow tree, in report order. */
+export function callFlowFilesOf(report: ReviewReport): string[] {
+  const changed = new Set(report.items.map((item) => item.file));
+  return report.callFlows.filter((entry) => entry.trees.length > 0 && changed.has(entry.file)).map((entry) => entry.file);
 }
 
 export function connectedAnalysisOf(
@@ -196,6 +204,7 @@ export function connectedAnalysisOf(
     order: report.agentOrder === undefined ? { source: "diffninja" } : { source: "agent", orderedBy: report.agentOrder.orderedBy },
     hunks,
     questions: { total: report.questions.length, answered },
+    callFlowFiles: callFlowFilesOf(report),
   };
   if (report.agentComments !== undefined) {
     analysis.suggestions = { suggestedBy: report.agentComments.suggestedBy, comments: report.agentComments.comments };
