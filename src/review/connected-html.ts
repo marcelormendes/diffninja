@@ -1,4 +1,5 @@
 import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
+import { PALETTE_STYLES } from "./palette.js";
 import { escapeHtml } from "./escape-html.js";
 
 /**
@@ -33,7 +34,7 @@ export function renderConnectedPage(csrf: string): string {
     "<body>",
     '<div class="wrap">',
     '<header class="masthead">',
-    `<p class="brand">${BRAND_MARK}diffninja</p>`,
+    `<p class="brand">${BRAND_MARK}<span>diffninja</span></p>`,
     '<h1 id="page-title">Pull request review</h1>',
     '<p id="page-meta" class="page-meta" hidden></p>',
     '<p id="lede" class="lede">Load a GitHub pull request, read its diff in a recommended order, and post your own review through the <span class="mono">gh</span> CLI. Nothing is posted until you press Submit.</p>',
@@ -59,32 +60,43 @@ export function renderConnectedPage(csrf: string): string {
     '<p class="hint">Your draft is kept. Check GitHub state to re-read the pull request and the account before deciding what to do next.</p>',
     '<button type="button" id="refresh-button" data-action="refresh">Check GitHub state</button>',
     "</div>",
-    '<section id="analysis-section" class="panel" aria-labelledby="analysis-heading" hidden>',
-    '<h2 id="analysis-heading">Read in this order</h2>',
-    '<div id="analysis-body"></div>',
+    '<nav id="analysis-section" class="rail" aria-labelledby="analysis-heading" hidden>',
+    '<header class="rail-head">',
+    '<h2 id="analysis-heading">Reading order</h2>',
+    '<p id="analysis-sub" class="rail-sub"></p>',
+    '<div id="analysis-actions" class="rail-actions"></div>',
+    "</header>",
+    '<div id="analysis-body" class="rail-body"></div>',
+    '<footer class="rail-foot">',
+    '<p id="rail-draft" class="rail-draft">No comments yet</p>',
+    '<a class="btn btn-primary btn-sm" href="#compose-heading">Finish review</a>',
+    "</footer>",
+    "</nav>",
+    '<section id="diff-section" class="panel card" aria-labelledby="diff-heading" hidden>',
+    '<header class="card-head">',
+    '<div class="card-titles"><h2 id="diff-heading">Changes</h2><p id="diff-sub" class="card-sub">Hover a line and press + to comment. Comments stay in this tab until you submit.</p></div>',
+    "</header>",
+    '<div id="diff-body" class="card-body"></div>',
     "</section>",
-    '<section id="diff-section" class="panel" aria-labelledby="diff-heading" hidden>',
-    '<h2 id="diff-heading">Diff</h2>',
-    '<p class="hint">The diff GitHub has for the commit shown above. Add a line comment on any line; comments stay in this tab until you submit.</p>',
-    '<div id="diff-body"></div>',
-    "</section>",
-    '<section id="compose-section" class="panel" aria-labelledby="compose-heading" hidden>',
-    '<h2 id="compose-heading">Your review <span id="draft-count" class="count"></span></h2>',
+    '<section id="compose-section" class="panel card" aria-labelledby="compose-heading" hidden>',
+    '<header class="card-head">',
+    '<div class="card-titles"><h2 id="compose-heading">Your review</h2><p id="draft-count" class="card-sub"></p></div>',
+    "</header>",
+    '<div class="card-body stack">',
     '<p id="anchor-notice" class="status" role="status" aria-live="polite" hidden></p>',
-    '<fieldset class="event-fieldset">',
-    "<legend>Review action</legend>",
-    '<div class="event-options">',
-    '<label class="event-option"><input type="radio" name="event" value="COMMENT" checked><span>Comment</span></label>',
-    '<label class="event-option"><input type="radio" name="event" value="APPROVE"><span>Approve</span></label>',
-    '<label class="event-option"><input type="radio" name="event" value="REQUEST_CHANGES"><span>Request changes</span></label>',
-    "</div>",
-    '<p class="hint">Comment is the default. Approve and Request changes record a formal GitHub review state; nothing is preselected for you.</p>',
-    "</fieldset>",
     '<div class="field">',
-    '<label for="review-body">Review body</label>',
-    '<textarea id="review-body" rows="5" aria-describedby="review-body-help"></textarea>',
-    '<p class="hint" id="review-body-help">Written by you; diffninja never writes review text. Comments your agent suggests join your draft only when you add them. The body may be empty when line comments are present.</p>',
+    '<label for="review-body">Summary</label>',
+    '<textarea id="review-body" rows="4" placeholder="Leave an overall comment (optional when you have line comments)" aria-describedby="review-body-help"></textarea>',
+    '<p class="hint" id="review-body-help">Written by you. Comments your agent suggests join your draft only when you add them.</p>',
     "</div>",
+    '<fieldset class="event-fieldset">',
+    '<legend class="sr-only">Review action</legend>',
+    '<div class="event-options">',
+    '<label class="event-option"><input type="radio" name="event" value="COMMENT" checked><span class="event-name">Comment</span><span class="event-help">General feedback</span></label>',
+    '<label class="event-option"><input type="radio" name="event" value="APPROVE"><span class="event-name">Approve</span><span class="event-help">Approve merging these changes</span></label>',
+    '<label class="event-option"><input type="radio" name="event" value="REQUEST_CHANGES"><span class="event-name">Request changes</span><span class="event-help">Feedback that must be addressed</span></label>',
+    "</div>",
+    "</fieldset>",
     '<p id="event-note" class="status" role="status" aria-live="polite" hidden></p>',
     '<div id="revalidate-section" class="revalidate-section" hidden>',
     '<h3 class="subhead" id="revalidate-heading">Awaiting revalidation</h3>',
@@ -93,15 +105,25 @@ export function renderConnectedPage(csrf: string): string {
     "</div>",
     '<h3 class="subhead">Line comments</h3>',
     '<div id="draft-list"></div>',
+    "</div>",
     "</section>",
-    '<section id="preview-section" class="panel" aria-labelledby="preview-heading" hidden>',
-    '<h2 id="preview-heading">Preview and submit</h2>',
-    '<p class="hint">This is the exact JSON payload sent to GitHub. <span class="mono">commit_id</span> pins the review to the commit shown. We check for changes before submission, but GitHub offers no atomic “submit only if head is unchanged” operation: the branch can still move between the final check and the write. The receipt identifies the reviewed commit.</p>',
-    '<div class="actions"><button type="button" id="preview-button" data-action="preview">Preview payload</button></div>',
+    '<section id="preview-section" class="panel card" aria-labelledby="preview-heading" hidden>',
+    '<header class="card-head">',
+    '<div class="card-titles"><h2 id="preview-heading">Submit</h2><p class="card-sub">Check the exact request, then post it to GitHub from your <span class="mono">gh</span> login.</p></div>',
+    "</header>",
+    '<div class="card-body stack">',
+    '<div class="submit-row">',
+    '<button type="button" id="preview-button" class="btn" data-action="preview">Check the review</button>',
+    '<button type="button" id="submit-button" class="btn btn-primary" data-action="submit" disabled>Submit review</button>',
     '<p id="preview-state" class="status" role="status" aria-live="polite"></p>',
-    '<pre id="preview-json" class="payload" tabindex="0" aria-label="Previewed GitHub review payload">No payload has been previewed yet.</pre>',
-    '<div class="actions"><button type="button" id="submit-button" data-action="submit" disabled>Submit review to GitHub</button></div>',
+    "</div>",
     '<p id="submit-hint" class="hint" role="status" aria-live="polite"></p>',
+    '<details class="payload-details">',
+    '<summary>Request GitHub will receive</summary>',
+    '<pre id="preview-json" class="payload" tabindex="0" aria-label="Previewed GitHub review payload">Nothing checked yet.</pre>',
+    '<p class="hint">The review is pinned to the commit in <span class="mono">commit_id</span>. The pull request is checked again right before posting; GitHub has no atomic check-and-post, so a push in that instant can still land first. The receipt names the commit reviewed.</p>',
+    "</details>",
+    "</div>",
     "</section>",
     '<section id="receipt-section" class="panel" aria-labelledby="receipt-heading" hidden>',
     '<h2 id="receipt-heading">Receipt</h2>',
@@ -127,7 +149,7 @@ export function renderConnectedPage(csrf: string): string {
     '<aside id="flow-drawer" class="flow-drawer" aria-labelledby="flow-title" hidden>',
     '<div class="flow-bar">',
     '<h2 id="flow-title" class="flow-title">Call flow</h2>',
-    '<button type="button" id="flow-close" class="link-button" data-action="close-flow">Close</button>',
+    '<button type="button" id="flow-close" class="btn btn-quiet btn-sm" data-action="close-flow" aria-label="Close the call flow">Close</button>',
     "</div>",
     '<iframe id="flow-frame" class="flow-frame" title="Call flow"></iframe>',
     "</aside>",
@@ -411,7 +433,7 @@ function script(csrf: string): string {
     anchorNotice = '';
     if (!hasDraft) return;
     if (!moved) {
-      anchorNotice = 'Draft restored from this browser tab for ' + owner + '. Nothing is sent to GitHub until you preview and submit.';
+      anchorNotice = 'Draft restored from this browser tab for ' + owner + '. Nothing is sent to GitHub until you submit.';
       return;
     }
     anchorNotice = 'The pull request changed (' + shortSha(record.headSha) + ' to ' + shortSha(snap.headSha) + ') since this draft was saved. Comment text was kept, but every line comment must be attached or confirmed against the current revision before it can be submitted.';
@@ -740,15 +762,15 @@ function script(csrf: string): string {
     var pending = unvalidatedCount();
     if (pending > 0) {
       return pending === 1
-        ? 'One line comment is waiting to be attached to the current revision. Attach or confirm it before previewing or submitting.'
-        : pending + ' line comments are waiting to be attached to the current revision. Attach or confirm each one before previewing or submitting.';
+        ? 'One line comment is waiting to be attached to the current revision. Attach or confirm it before submitting.'
+        : pending + ' line comments are waiting to be attached to the current revision. Attach or confirm each one before submitting.';
     }
     for (var i = 0; i < comments.length; i += 1) {
       if (comments[i].body.trim() === '') return 'Every line comment needs text, or remove it.';
     }
-    if (body.trim() === '' && comments.length === 0) return 'Write a review body or add a line comment.';
-    if (previewPayload === null) return 'Preview the payload before submitting.';
-    if (previewSignature !== JSON.stringify(draftInput())) return 'The draft changed since the preview. Preview again.';
+    if (body.trim() === '' && comments.length === 0) return 'Write a summary or add a line comment to submit.';
+    if (previewPayload === null) return 'Check the review first; Submit unlocks once it is checked.';
+    if (previewSignature !== JSON.stringify(draftInput())) return 'The draft changed since it was checked. Check it again.';
     return '';
   }
 
@@ -817,10 +839,11 @@ function script(csrf: string): string {
     setText(el.pageTitle, typeof snap.title === 'string' && snap.title ? snap.title : 'Untitled pull request');
     var ref = (typeof snap.owner === 'string' ? snap.owner : 'unknown') + '/' + (typeof snap.repo === 'string' ? snap.repo : 'unknown') + '#' + String(snap.number);
     el.pageMeta.appendChild(githubLink(snap.url, ref));
-    el.pageMeta.appendChild(make('span', 'meta-item', typeof snap.state === 'string' ? snap.state.toLowerCase() : 'state unknown'));
-    el.pageMeta.appendChild(make('span', 'meta-item mono', 'commit ' + shortSha(snap.headSha)));
+    var stateWord = typeof snap.state === 'string' ? snap.state.toLowerCase() : 'unknown';
+    el.pageMeta.insertBefore(make('span', 'state-badge state-' + stateWord, stateWord.charAt(0).toUpperCase() + stateWord.slice(1)), el.pageMeta.firstChild);
+    el.pageMeta.appendChild(make('span', 'meta-item sha', shortSha(snap.headSha)));
     var login = reviewerLogin();
-    if (login !== '') el.pageMeta.appendChild(make('span', 'meta-item', 'reviewing as ' + login));
+    if (login !== '') el.pageMeta.appendChild(make('span', 'meta-item', 'Reviewing as ' + login));
     var description = make('details', '');
     description.appendChild(make('summary', '', 'Description (the author\u2019s claims)'));
     description.appendChild(make('pre', '', typeof snap.body === 'string' && snap.body ? snap.body : 'No description.'));
@@ -855,7 +878,7 @@ function script(csrf: string): string {
     input.dataset.index = String(index);
     input.value = comment.body;
     input.setAttribute('aria-describedby', inputId + '-help');
-    var remove = make('button', 'link-button', 'Remove');
+    var remove = make('button', 'btn btn-quiet btn-sm', 'Remove');
     remove.type = 'button';
     remove.dataset.action = 'remove-comment';
     remove.dataset.index = String(index);
@@ -914,6 +937,7 @@ function script(csrf: string): string {
       analysisLoading = false;
       renderAnalysis();
       renderDiff();
+      queueStationMark();
       var current = snapshot();
       if (!current) return;
       if (analysis && analysis.available === true && analysis.snapshotId !== current.id) { scheduleAnalysis(1000); return; }
@@ -943,52 +967,107 @@ function script(csrf: string): string {
     return out;
   }
 
-  function renderHunkEntry(hunk) {
-    var entry = make('li', 'order-item');
-    var head = make('div', 'order-head');
-    head.appendChild(make('span', 'chip status-' + (STATUS_ORDER.indexOf(hunk.status) >= 0 ? hunk.status : 'uncertain'), String(hunk.status)));
-    head.appendChild(make('span', 'mono hunk-where', String(hunk.file) + ':' + String(hunk.line)));
-    var size = make('span', 'hunk-size mono');
-    size.appendChild(make('span', 'plus', '+' + String(hunk.added)));
-    size.appendChild(document.createTextNode(' '));
-    size.appendChild(make('span', 'minus', '\u2212' + String(hunk.removed)));
-    head.appendChild(size);
-    var go = make('button', 'link-button go-button', 'Go to the diff');
+  var STATUS_LABEL = { attention: 'Attention', uncertain: 'Uncertain', low: 'Low', passed: 'Passed' };
+
+  /** A status as a small tinted label; the word is the text, the tint only repeats it. */
+  function statusTag(status) {
+    var known = STATUS_ORDER.indexOf(status) >= 0 ? status : 'uncertain';
+    return make('span', 'status-tag status-' + known, STATUS_LABEL[known]);
+  }
+
+  /** A path with its directory muted, so the file name reads first. */
+  function pathNode(path, className) {
+    var node = make('span', 'path ' + (className || ''));
+    var cut = String(path).lastIndexOf('/');
+    if (cut >= 0) node.appendChild(make('span', 'path-dir', String(path).slice(0, cut + 1)));
+    node.appendChild(make('span', 'path-base', cut >= 0 ? String(path).slice(cut + 1) : String(path)));
+    return node;
+  }
+
+  function sizeNode(added, removed) {
+    var size = make('span', 'size');
+    size.appendChild(make('span', 'plus', '+' + String(added)));
+    size.appendChild(make('span', 'minus', '−' + String(removed)));
+    return size;
+  }
+
+  function gotoButton(path, line, side, label, className) {
+    var go = make('button', className || 'btn btn-quiet', label);
     go.type = 'button';
     go.dataset.action = 'goto';
-    go.dataset.path = String(hunk.file);
-    go.dataset.line = String(hunk.line);
-    go.dataset.side = hunk.side === 'LEFT' ? 'LEFT' : 'RIGHT';
-    head.appendChild(go);
-    if (hasCallFlow(String(hunk.file))) head.appendChild(flowButton(String(hunk.file), 'Call flow'));
-    entry.appendChild(head);
+    go.dataset.path = String(path);
+    go.dataset.line = String(line);
+    go.dataset.side = side === 'LEFT' ? 'LEFT' : 'RIGHT';
+    return go;
+  }
+
+  function renderHunkEntry(hunk, rank) {
+    var entry = make('li', 'order-item');
+    // The whole station jumps to its hunk; the buttons inside keep their own actions.
+    entry.dataset.action = 'goto';
+    entry.dataset.path = String(hunk.file);
+    entry.dataset.line = String(hunk.line);
+    entry.dataset.side = hunk.side === 'LEFT' ? 'LEFT' : 'RIGHT';
+    entry.appendChild(make('span', 'order-rank', String(rank)));
+    var main = make('div', 'order-main');
+    var head = make('div', 'order-head');
+    // Only a status that asks for something is shown; low and passed stay quiet.
+    if (hunk.status === 'attention' || hunk.status === 'uncertain') head.appendChild(statusTag(hunk.status));
+    var where = pathNode(hunk.file, 'order-path');
+    where.appendChild(make('span', 'path-line', ':' + String(hunk.line)));
+    head.appendChild(where);
+    head.appendChild(sizeNode(hunk.added, hunk.removed));
+    main.appendChild(head);
     var verdicts = answeredVerdicts(hunk);
+    var facts = Array.isArray(hunk.facts) ? hunk.facts : [];
     if (verdicts.length > 0) {
-      var chips = make('p', 'verdicts');
-      chips.appendChild(make('span', 'sr-only', 'Your agent says: '));
+      var said = make('div', 'tag-row');
+      said.appendChild(make('span', 'sr-only', 'Your agent says: '));
       for (var v = 0; v < verdicts.length; v += 1) {
-        var chip = make('span', 'verdict verdict-' + String(verdicts[v].verdict.tone), String(verdicts[v].verdict.label));
-        chip.title = String(verdicts[v].text);
-        chips.appendChild(chip);
+        var tag = make('span', 'tag tone-' + String(verdicts[v].verdict.tone), String(verdicts[v].verdict.label));
+        tag.title = String(verdicts[v].text);
+        said.appendChild(tag);
       }
-      entry.appendChild(chips);
+      main.appendChild(said);
     }
-    if (typeof hunk.note === 'string') entry.appendChild(make('p', 'note', hunk.note));
-    var factCount = Array.isArray(hunk.facts) ? hunk.facts.length : 0;
-    if (factCount > 0) {
-      var more = make('details', 'fact-details');
-      more.appendChild(make('summary', '', factCount === 1 ? '1 thing diffninja noticed' : factCount + ' things diffninja noticed'));
-      var facts = make('ul', 'fact-list');
-      for (var f = 0; f < hunk.facts.length; f += 1) {
-        var fact = hunk.facts[f];
-        var item = make('li', '');
-        item.appendChild(make('span', 'fact-label', String(fact.label) + ', ' + String(fact.side) + ' line: '));
-        item.appendChild(make('code', '', String(fact.text)));
-        facts.appendChild(item);
+    if (facts.length > 0) {
+      var tags = make('div', 'tag-row');
+      tags.appendChild(make('span', 'tag-lead', 'Look at'));
+      for (var f = 0; f < facts.length; f += 1) {
+        var fact = facts[f];
+        var chip;
+        if (fact.at && typeof fact.at.line === 'number') {
+          chip = gotoButton(hunk.file, fact.at.line, fact.at.side, '', 'fact');
+          chip.appendChild(make('span', 'fact-name', String(fact.label)));
+          chip.appendChild(make('span', 'fact-line', 'L' + String(fact.at.line)));
+          chip.setAttribute('aria-label', String(fact.label) + ' on line ' + fact.at.line + ': ' + String(fact.text));
+        } else {
+          chip = make('span', 'fact');
+          chip.appendChild(make('span', 'fact-name', String(fact.label)));
+        }
+        chip.title = String(fact.text);
+        tags.appendChild(chip);
       }
-      more.appendChild(facts);
-      entry.appendChild(more);
+      main.appendChild(tags);
     }
+    if (typeof hunk.note === 'string') {
+      var note = make('p', 'order-note', hunk.note);
+      note.title = hunk.note;
+      main.appendChild(note);
+    }
+    entry.appendChild(main);
+    if (hasCallFlow(String(hunk.file))) {
+      var actions = make('div', 'order-actions');
+      actions.appendChild(flowButton(String(hunk.file), 'Call flow', 'btn btn-quiet btn-xs'));
+      main.appendChild(actions);
+    }
+    var jump = make('a', 'sr-only', 'Go to ' + hunk.file + ' line ' + hunk.line);
+    jump.href = '#diff-section';
+    jump.dataset.action = 'goto';
+    jump.dataset.path = entry.dataset.path;
+    jump.dataset.line = entry.dataset.line;
+    jump.dataset.side = entry.dataset.side;
+    main.appendChild(jump);
     return entry;
   }
 
@@ -1019,6 +1098,8 @@ function script(csrf: string): string {
     var snap = snapshot();
     show(el.analysisSection, Boolean(snap) && !(typeof snap.unavailableReason === 'string' && snap.unavailableReason !== ''));
     el.analysisBody.textContent = '';
+    el.analysisActions.textContent = '';
+    setText(el.analysisSub, '');
     renderAnalysisDetails(currentAnalysis());
     if (!snap) return;
     if (!analysis || analysisFor !== snap.id) {
@@ -1035,26 +1116,22 @@ function script(csrf: string): string {
       return;
     }
     var byAgent = analysis.order && analysis.order.source === 'agent';
-    el.analysisBody.appendChild(make('p', 'order-source', byAgent
-      ? 'Order recommended by ' + String(analysis.order.orderedBy) + ', the agent that opened this page. Labels are its answers; statuses come from diffninja.'
-      : 'Waiting for your agent\u2019s recommended order. Until it arrives, this is the order diffninja computed.'));
-    var flowFiles = Array.isArray(analysis.callFlowFiles) ? analysis.callFlowFiles : [];
-    if (flowFiles.length > 0) {
-      var flows = make('p', 'flow-line');
-      flows.appendChild(flowButton('', flowFiles.length === 1 ? 'See the call flow (1 file)' : 'See the call flows (' + flowFiles.length + ' files)'));
-      el.analysisBody.appendChild(flows);
-    } else if (analysis.scope && analysis.scope.source === 'patch' && typeof analysis.scope.note === 'string') {
-      el.analysisBody.appendChild(make('p', 'note flow-missing', 'No call-flow diagrams for this review. ' + analysis.scope.note));
-    }
-    if (!el.flowDrawer.hidden && flowSnapshot !== analysis.snapshotId) closeFlow();
     var total = analysis.questions ? analysis.questions.total : 0;
     var answered = analysis.questions ? analysis.questions.answered : 0;
-    if (total > 0 && answered < total) {
-      el.analysisBody.appendChild(make('p', 'note', 'Your agent has answered ' + answered + ' of ' + total + ' questions about these hunks; the rest appear as they arrive.'));
+    setText(el.analysisSub, (byAgent
+      ? 'Most important first, as ' + String(analysis.order.orderedBy) + ' recommends. Tags are its answers.'
+      : 'Waiting for your agent\u2019s order; this is diffninja\u2019s until it arrives.')
+      + (total > 0 && answered < total ? ' ' + answered + ' of ' + total + ' answers in.' : ''));
+    var flowFiles = Array.isArray(analysis.callFlowFiles) ? analysis.callFlowFiles : [];
+    if (flowFiles.length > 0) {
+      el.analysisActions.appendChild(flowButton('', flowFiles.length === 1 ? 'Call flow' : 'Call flows (' + flowFiles.length + ' files)', 'btn btn-sm'));
+    } else if (analysis.scope && analysis.scope.source === 'patch' && typeof analysis.scope.note === 'string') {
+      el.analysisBody.appendChild(make('p', 'inline-note', 'No call-flow diagrams: ' + analysis.scope.note.replace(/^Patch-only: /, '')));
     }
+    if (!el.flowDrawer.hidden && flowSnapshot !== analysis.snapshotId) closeFlow();
     var list = make('ol', 'order-list');
     var hunks = Array.isArray(analysis.hunks) ? analysis.hunks : [];
-    for (var h = 0; h < hunks.length; h += 1) list.appendChild(renderHunkEntry(hunks[h]));
+    for (var h = 0; h < hunks.length; h += 1) list.appendChild(renderHunkEntry(hunks[h], h + 1));
     el.analysisBody.appendChild(list);
   }
 
@@ -1073,11 +1150,60 @@ function script(csrf: string): string {
     if (target === null) return;
     var file = target.closest('details.file-block');
     if (file && !file.open) { file.open = true; closedFiles[path] = false; }
-    target.scrollIntoView({ block: 'center' });
+    // Land in the top quarter, above the line the reading-order spy measures from.
+    window.scrollTo({ top: target.getBoundingClientRect().top + window.scrollY - window.innerHeight * 0.25 });
     target.classList.add('is-target');
     setTimeout(function () { target.classList.remove('is-target'); }, 2000);
     var action = target.querySelector('button');
     if (action) action.focus({ preventScroll: true });
+  }
+
+  /* -------------------------------------------------------- you are here -- */
+
+  var spyQueued = false;
+
+  /** The diff row a station points at, or null when that line is not shown. */
+  function stationRow(station) {
+    var selector = '.diff-row[data-path="' + CSS.escape(station.dataset.path || '') + '"][data-line="' + CSS.escape(station.dataset.line || '') + '"][data-side="' + CSS.escape(station.dataset.side || '') + '"]';
+    return el.diffBody.querySelector(selector);
+  }
+
+  /**
+   * Mark the station whose hunk the reader is looking at: the last hunk whose
+   * first line has scrolled past the top third of the window. Stations are in
+   * reading order, not file order, so every one is measured.
+   */
+  function markCurrentStation() {
+    spyQueued = false;
+    var stations = el.analysisBody.querySelectorAll('.order-item');
+    var line = window.innerHeight * 0.33;
+    var best = null;
+    var bestTop = -Infinity;
+    for (var i = 0; i < stations.length; i += 1) {
+      var row = stationRow(stations[i]);
+      if (!row || row.offsetParent === null) continue;
+      var top = row.getBoundingClientRect().top;
+      if (top <= line && top > bestTop) { best = stations[i]; bestTop = top; }
+    }
+    for (var j = 0; j < stations.length; j += 1) {
+      var on = stations[j] === best;
+      stations[j].classList.toggle('is-current', on);
+      if (on) stations[j].setAttribute('aria-current', 'step');
+      else stations[j].removeAttribute('aria-current');
+    }
+    if (best) {
+      var rail = el.analysisBody;
+      var box = best.getBoundingClientRect();
+      var frame = rail.getBoundingClientRect();
+      if (box.top < frame.top) rail.scrollTop -= frame.top - box.top + 8;
+      else if (box.bottom > frame.bottom) rail.scrollTop += box.bottom - frame.bottom + 8;
+    }
+  }
+
+  function queueStationMark() {
+    if (spyQueued) return;
+    spyQueued = true;
+    window.requestAnimationFrame(markCurrentStation);
   }
 
   /* ----------------------------------------------------------- highlight -- */
@@ -1205,8 +1331,8 @@ function script(csrf: string): string {
     return Boolean(current && Array.isArray(current.callFlowFiles) && current.callFlowFiles.indexOf(path) >= 0);
   }
 
-  function flowButton(path, label) {
-    var button = make('button', 'flow-button', label);
+  function flowButton(path, label, className) {
+    var button = make('button', className || 'btn btn-quiet', label);
     button.type = 'button';
     button.dataset.action = 'open-flow';
     if (path !== '') button.dataset.path = path;
@@ -1341,11 +1467,14 @@ function script(csrf: string): string {
 
   function suggestionRow(suggestion, disabled) {
     var wrap = make('div', 'suggestion');
-    var head = make('p', 'suggestion-by', 'Suggested by ' + suggestedBy());
+    var head = make('p', 'suggestion-by');
+    head.appendChild(make('span', 'agent-dot', ''));
+    head.appendChild(make('strong', '', suggestedBy()));
+    head.appendChild(document.createTextNode(' suggests'));
     wrap.appendChild(head);
     wrap.appendChild(make('p', 'suggestion-body', suggestion.body));
     var actions = make('div', 'suggestion-actions');
-    var add = make('button', 'suggestion-add', 'Add to my review');
+    var add = make('button', 'btn btn-primary btn-sm', 'Add to review');
     add.type = 'button';
     add.dataset.action = 'add-suggestion';
     add.dataset.path = suggestion.path;
@@ -1353,7 +1482,7 @@ function script(csrf: string): string {
     add.dataset.side = suggestion.side;
     add.disabled = disabled;
     add.setAttribute('aria-label', 'Add the suggested comment on line ' + suggestion.line + ' of ' + suggestion.path + ' to your review');
-    var dismiss = make('button', 'link-button', 'Dismiss');
+    var dismiss = make('button', 'btn btn-quiet btn-sm', 'Dismiss');
     dismiss.type = 'button';
     dismiss.dataset.action = 'dismiss-suggestion';
     dismiss.dataset.path = suggestion.path;
@@ -1375,17 +1504,21 @@ function script(csrf: string): string {
     if (open.length === 0 && adopted === 0) return null;
     var bar = make('div', 'suggest-bar');
     if (open.length > 0) {
-      bar.appendChild(make('p', '', suggestedBy() + ' suggested ' + open.length + (open.length === 1 ? ' comment' : ' comments')
-        + ' under the lines below. Nothing is posted until you submit.'));
-      var all = make('button', 'suggestion-add', open.length === 1 ? 'Add it to my review' : 'Add all ' + open.length + ' to my review');
+      var said = make('p', '');
+      said.appendChild(make('span', 'agent-dot', ''));
+      said.appendChild(make('strong', '', suggestedBy()));
+      said.appendChild(document.createTextNode(' suggested ' + open.length + (open.length === 1 ? ' comment' : ' comments')
+        + ' on the lines below. Nothing is posted until you submit.'));
+      bar.appendChild(said);
+      var all = make('button', 'btn btn-primary btn-sm', open.length === 1 ? 'Add it to review' : 'Add all ' + open.length);
       all.type = 'button';
       all.dataset.action = 'add-all-suggestions';
       all.disabled = disabled;
       bar.appendChild(all);
     } else {
       bar.appendChild(make('p', '', adopted + (adopted === 1 ? ' suggested comment is' : ' suggested comments are')
-        + ' in your draft. Read them over, then preview and submit under Your review.'));
-      var go = make('a', '', 'Go to Your review');
+        + ' in your draft. Read them over, then check and submit below.'));
+      var go = make('a', 'bar-link', 'Review and submit \u2193');
       go.href = '#compose-heading';
       bar.appendChild(go);
     }
@@ -1445,27 +1578,41 @@ function script(csrf: string): string {
     block.open = closedFiles[group.path] !== true;
     block.addEventListener('toggle', function () { closedFiles[group.path] = !block.open; });
     var head = make('summary', 'file-head');
-    head.appendChild(make('span', 'file-path', group.path));
+    head.appendChild(pathNode(group.path, 'file-path'));
     var added = 0;
     var removed = 0;
     for (var c = 0; c < group.lines.length; c += 1) {
       if (group.lines[c].kind === 'add') added += 1;
       else if (group.lines[c].kind === 'delete') removed += 1;
     }
-    var size = make('span', 'file-size mono');
-    size.appendChild(make('span', 'plus', '+' + added));
-    size.appendChild(document.createTextNode(' '));
-    size.appendChild(make('span', 'minus', '−' + removed));
-    head.appendChild(size);
+    head.appendChild(sizeNode(added, removed));
     var worst = worstStatusFor(group.path);
-    if (worst !== '') head.appendChild(make('span', 'chip status-' + worst, worst));
-    if (hasCallFlow(group.path)) head.appendChild(flowButton(group.path, 'Call flow'));
+    if (worst === 'attention' || worst === 'uncertain') head.appendChild(statusTag(worst));
+    var tools = make('span', 'file-tools');
+    if (hasCallFlow(group.path)) tools.appendChild(flowButton(group.path, 'Call flow'));
+    head.appendChild(tools);
     block.appendChild(head);
     var rows = make('div', 'diff-rows');
     var language = languageOf(group.path);
     var state = { block: false, quote: '' };
+    var lastNew = 0;
     for (var i = 0; i < group.lines.length; i += 1) {
       var line = group.lines[i];
+      // A new-side line that does not follow the previous one starts another
+      // hunk; the separator goes above any removed lines that open it.
+      if (line.side === 'RIGHT') {
+        if (lastNew > 0 && line.line > lastNew + 1) {
+          var before = null;
+          for (var back = rows.lastElementChild; back && back.classList.contains('kind-delete'); back = back.previousElementSibling) before = back;
+          var gap = make('div', 'diff-gap');
+          gap.appendChild(make('span', 'diff-gap-mark', '⋯'));
+          gap.appendChild(make('span', 'diff-gap-text', (line.line - lastNew - 1) + ' unchanged ' + (line.line - lastNew - 1 === 1 ? 'line' : 'lines')));
+          if (before) rows.insertBefore(gap, before);
+          else rows.appendChild(gap);
+          state = { block: false, quote: '' };
+        }
+        lastNew = line.line;
+      }
       var row = make('div', 'diff-row kind-' + String(line.kind));
       row.dataset.path = line.path;
       row.dataset.line = String(line.line);
@@ -1503,10 +1650,11 @@ function script(csrf: string): string {
     for (var i = 0; i < comments.length; i += 1) {
       if (!comments[i].needsRevalidation) anchored.push(i);
     }
-    setText(el.draftCount, comments.length === 0 ? 'no line comments yet' : comments.length + ' line comment' + (comments.length === 1 ? '' : 's'));
+    setText(el.draftCount, comments.length === 0 ? 'No line comments yet.' : comments.length + ' line comment' + (comments.length === 1 ? '' : 's') + ' in your draft.');
+    setText(el.railDraft, comments.length === 0 ? 'No comments yet' : comments.length + (comments.length === 1 ? ' comment' : ' comments') + ' in your draft');
     if (anchored.length === 0) {
       el.draftList.appendChild(make('p', 'empty', comments.length === 0
-        ? 'No line comments yet. Hover a diff line and press + to add one.'
+        ? 'Hover a line in the diff and press + to comment on it.'
         : 'No line comment is attached to the current revision yet. Every comment above needs revalidation.'));
       return;
     }
@@ -1517,14 +1665,17 @@ function script(csrf: string): string {
       var item = make('li', 'draft-item');
       item.dataset.index = String(index);
       var head = make('div', 'draft-head');
-      head.appendChild(make('span', 'draft-where mono', comment.path + ':' + comment.line + ' (' + sideLabel(comment.side) + ' side)'));
-      var edit = make('button', 'link-button', 'Edit');
+      var where = pathNode(comment.path, 'draft-where');
+      where.appendChild(make('span', 'path-line', ':' + comment.line + (comment.side === 'LEFT' ? ' (old)' : '')));
+      head.appendChild(where);
+      if (comment.suggestedBy) head.appendChild(make('span', 'tag tone-quiet', 'from ' + comment.suggestedBy));
+      var edit = make('button', 'btn btn-quiet btn-sm', 'Edit');
       edit.type = 'button';
       edit.dataset.action = 'edit-comment';
       edit.dataset.index = String(index);
       edit.disabled = disabled;
       edit.setAttribute('aria-label', 'Edit the comment on ' + comment.path + ' line ' + comment.line);
-      var remove = make('button', 'link-button', 'Remove');
+      var remove = make('button', 'btn btn-quiet btn-sm', 'Remove');
       remove.type = 'button';
       remove.dataset.action = 'remove-comment';
       remove.dataset.index = String(index);
@@ -1533,7 +1684,7 @@ function script(csrf: string): string {
       head.appendChild(edit);
       head.appendChild(remove);
       item.appendChild(head);
-      var text = make('p', 'draft-body mono', comment.body === '' ? '(empty)' : comment.body);
+      var text = make('p', 'draft-body', comment.body === '' ? '(empty)' : comment.body);
       text.dataset.role = 'body';
       item.appendChild(text);
       list.appendChild(item);
@@ -1655,15 +1806,25 @@ function script(csrf: string): string {
     renderDraftList(disabled);
   }
 
+  var EVENT_NAMES = { COMMENT: 'Comment', APPROVE: 'Approve', REQUEST_CHANGES: 'Request changes' };
+
+  /** One line saying what the checked request will post. */
+  function checkedSummary(payload) {
+    var count = payload && Array.isArray(payload.comments) ? payload.comments.length : 0;
+    var name = payload && EVENT_NAMES[payload.event] ? EVENT_NAMES[payload.event] : 'Review';
+    return '\u2713 ' + name + (count > 0 ? ' with ' + count + (count === 1 ? ' line comment' : ' line comments') : '')
+      + (payload && typeof payload.commit_id === 'string' ? ' on ' + shortSha(payload.commit_id) : '') + '.';
+  }
+
   function updateActionState() {
     var hint = validationHint();
     var previewing = busyAction === 'preview';
     var posting = busyAction === 'submit' && submitting;
     el.submitButton.disabled = hint !== '' || posting;
-    setText(el.submitButton, posting ? 'Submitting to GitHub\u2026' : 'Submit review to GitHub');
+    setText(el.submitButton, posting ? 'Submitting\u2026' : 'Submit review');
     el.submitButton.classList.toggle('is-loading', posting);
     el.submitButton.setAttribute('aria-busy', posting ? 'true' : 'false');
-    setText(el.previewButton, previewing ? 'Preparing preview\u2026' : 'Preview payload');
+    setText(el.previewButton, previewing ? 'Checking\u2026' : 'Check the review');
     el.previewButton.classList.toggle('is-loading', previewing);
     el.previewButton.setAttribute('aria-busy', previewing ? 'true' : 'false');
     if (previewing) el.previewButton.disabled = true;
@@ -1672,18 +1833,18 @@ function script(csrf: string): string {
       ? 'Posting your review to GitHub. This takes a few seconds; keep this tab open.'
       : failed && placeAnchor === el.submitButton
         ? 'Not submitted: ' + lastError
-        : hint === '' ? 'Previewed payload matches the current draft. Submit posts this review to GitHub and cannot be undone from this page.' : hint);
+        : hint === '' ? 'Ready. Submit posts this review to GitHub; it cannot be undone from here.' : hint);
     el.submitHint.classList.toggle('is-error', failed && placeAnchor === el.submitButton);
     var stale = previewPayload !== null && previewSignature !== JSON.stringify(draftInput());
     setText(el.previewState, previewPayload === null
-      ? 'No payload has been previewed yet.'
+      ? ''
       : stale
-        ? 'The draft changed since this preview. Preview again before submitting.'
-        : 'This payload matches the current draft exactly.');
-    el.previewState.className = stale ? 'status is-stale' : 'status';
+        ? 'The draft changed since it was checked.'
+        : checkedSummary(previewPayload));
+    el.previewState.className = stale ? 'status is-stale' : previewPayload !== null ? 'status is-ok' : 'status';
     if (previewing) setText(el.previewState, 'Checking the draft against the pull request\u2026');
     else if (failed && placeAnchor === el.previewButton) {
-      setText(el.previewState, 'Preview failed: ' + lastError);
+      setText(el.previewState, 'Check failed: ' + lastError);
       el.previewState.className = 'status is-error';
     }
   }
@@ -1695,7 +1856,7 @@ function script(csrf: string): string {
     }
     show(el.previewSection, true);
     el.previewButton.disabled = composeDisabled() || unvalidatedCount() > 0;
-    setText(el.previewJson, previewPayload === null ? 'No payload has been previewed yet.' : JSON.stringify(previewPayload, null, 2));
+    setText(el.previewJson, previewPayload === null ? 'Nothing checked yet.' : JSON.stringify(previewPayload, null, 2));
   }
 
   function renderReceipt() {
@@ -1732,6 +1893,7 @@ function script(csrf: string): string {
     var anchor = placeAnchor && placeAnchor.isConnected && placeAnchor.offsetParent !== null ? placeAnchor : null;
     var before = anchor ? anchor.getBoundingClientRect().top : 0;
     renderAll();
+    queueStationMark();
     if (revealReceipt && !el.receiptSection.hidden) {
       revealReceipt = false;
       el.receiptSection.scrollIntoView({ block: 'nearest' });
@@ -1869,6 +2031,10 @@ function script(csrf: string): string {
     el.messageNote = byId('message-note');
     el.analysisSection = byId('analysis-section');
     el.analysisBody = byId('analysis-body');
+    el.analysisSub = byId('analysis-sub');
+    el.railDraft = byId('rail-draft');
+    el.analysisActions = byId('analysis-actions');
+    el.diffSub = byId('diff-sub');
     el.diffSection = byId('diff-section');
     el.diffBody = byId('diff-body');
     el.composeSection = byId('compose-section');
@@ -1899,6 +2065,8 @@ function script(csrf: string): string {
       try { el.flowFrame.contentDocument.addEventListener('keydown', onFlowKey); } catch (error) { /* not ours to reach */ }
     });
     document.addEventListener('keydown', onFlowKey);
+    window.addEventListener('scroll', queueStationMark, { passive: true });
+    window.addEventListener('resize', queueStationMark);
     document.addEventListener('click', onClick);
     document.addEventListener('change', onChange);
     document.addEventListener('input', onInput);
@@ -1914,243 +2082,263 @@ function script(csrf: string): string {
 }
 
 const STYLES = `
-:root {
-  color-scheme: light dark;
-  --bg: #ffffff;
-  --panel: #ffffff;
-  --sunken: #f6f8fa;
-  --ink: #1f2328;
-  --ink-soft: #59636e;
-  --line: #d1d9e0;
-  --line-strong: #afb8c1;
-  --teal: #4d8d86;
-  --warn: #a2701f;
-  --warn-bg: #fdf3e2;
-  --alarm: #c22e2e;
-  --alarm-bg: #fdecec;
-  --add: #116329;
-  --add-bg: #dafbe1;
-  --del: #82071e;
-  --del-bg: #ffebe9;
-  --cursor: #2f6fae;
-  --add-ink: #1a7f37;
-  --del-ink: #cf222e;
-  --add-gutter: #ccffd8;
-  --del-gutter: #ffd7d5;
-  --syn-keyword: #cf222e;
-  --syn-string: #0a3069;
-  --syn-comment: #6e7781;
-  --syn-number: #0550ae;
-  --syn-type: #953800;
-  --syn-func: #8250df;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1117;
-    --panel: #0d1117;
-    --sunken: #161b22;
-    --ink: #e6edf3;
-    --ink-soft: #9198a1;
-    --line: #30363d;
-    --line-strong: #6e7681;
-    --teal: #6cc5bd;
-    --warn: #e0b372;
-    --warn-bg: #2e2418;
-    --alarm: #ff8a8a;
-    --alarm-bg: #331f1e;
-    --add: #aff5b4;
-    --add-bg: #123821;
-    --del: #ffdcd7;
-    --del-bg: #3f1b22;
-    --cursor: #7aa7d8;
-    --add-ink: #3fb950;
-    --del-ink: #f85149;
-    --add-gutter: #1b4721;
-    --del-gutter: #5a1e25;
-    --syn-keyword: #ff7b72;
-    --syn-string: #a5d6ff;
-    --syn-comment: #8b949e;
-    --syn-number: #79c0ff;
-    --syn-type: #ffa657;
-    --syn-func: #d2a8ff;
-  }
-}
+${PALETTE_STYLES}
 *, *::before, *::after { box-sizing: border-box; }
 /* Class rules below set display, which would otherwise beat the UA's hidden
    rule and leave every collapsed panel visible. */
 [hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; max-width: 100%; }
 body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--ink);
-  font: 400 16px/1.55 var(--sans);
-  max-width: 100%;
-  overflow-wrap: break-word;
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 14px/1.5 var(--sans); max-width: 100%; overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
 }
-.wrap { max-width: 1240px; margin: 0 auto; padding: 26px 20px 64px; }
-.flow-button {
-  font-size: 12.5px; padding: 2px 9px; border-radius: 999px; margin-left: 8px;
-  color: var(--teal); border-color: var(--teal); background: transparent;
+.wrap {
+  max-width: 1480px; margin: 0 auto; padding: 0 24px 64px;
+  display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; align-items: start;
 }
-.flow-line .flow-button { margin-left: 0; font-size: 13.5px; padding: 5px 12px; }
-.flow-drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 20;
-  width: min(760px, 52vw); display: flex; flex-direction: column;
-  background: var(--panel); border-left: 1px solid var(--line-strong);
-  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.25);
-}
-.flow-drawer[hidden] { display: none; }
-.flow-bar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 10px 14px; border-bottom: 1px solid var(--line);
-}
-.flow-title { font-size: 14px; overflow-wrap: anywhere; font-family: var(--mono); }
-.flow-frame { flex: 1 1 auto; width: 100%; border: 0; background: var(--panel); }
-@media (min-width: 1100px) { body.flow-open .wrap { margin-right: min(760px, 52vw); } }
-@media (max-width: 1099px) { .flow-drawer { width: 100%; } }
-h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
-h1 { font-size: clamp(1.3rem, 1.05rem + 1.1vw, 1.8rem); overflow-wrap: anywhere; }
-h2 { font-size: 1.02rem; }
-.chip { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 1px 7px; border-radius: 999px; margin-left: 8px; border: 1px solid var(--line); color: var(--ink-soft); }
-.chip.status-attention { color: var(--alarm); border-color: var(--alarm); background: var(--alarm-bg); }
-.chip.status-uncertain { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
-.chip.status-low { color: var(--teal); border-color: var(--teal); }
-.hunk-list { display: grid; gap: 6px; }
-.page-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 6px 0 0; font-size: 14px; color: var(--ink-soft); }
-.page-meta a { font-weight: 600; }
-.order-source { margin: 0 0 12px; color: var(--ink-soft); }
-.order-list { margin: 0; padding: 0 0 0 2.2em; display: grid; gap: 10px; }
-.order-list > li::marker { font-weight: 700; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.order-item { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; background: var(--sunken); }
-.order-head { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
-.order-head .chip { margin-left: 0; }
-.hunk-size { font-size: 12.5px; color: var(--ink-soft); }
-.hunk-size .plus { color: var(--add); }
-.hunk-size .minus { color: var(--del); }
-.go-button { margin-left: auto; }
-.verdicts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
-.verdict { font-size: 12.5px; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink); background: var(--panel); }
-.verdict-ok { border-color: var(--teal); color: var(--teal); }
-.verdict-watch { border-color: var(--warn); color: var(--warn); background: var(--warn-bg); font-weight: 600; }
-.verdict-unsure { border-style: dashed; color: var(--ink-soft); }
-.fact-details { margin-top: 6px; }
-.fact-details > summary { cursor: pointer; font-size: 13px; color: var(--ink-soft); }
-.details-panel > summary { cursor: pointer; font-weight: 600; }
-.details-panel[open] > summary { margin-bottom: 8px; }
-@media (max-width: 640px) { .go-button { margin-left: 0; } .order-list { padding-left: 1.6em; } }
-.hunk-entry { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; background: var(--sunken); }
-.hunk-entry summary { cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.hunk-entry summary .chip { margin-left: 0; }
-.hunk-where { font-size: 13px; overflow-wrap: anywhere; }
-.fact-list, .question-list, .agenda-list { margin: 6px 0; padding-left: 20px; font-size: 13px; }
-.fact-list code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
-.fact-label { color: var(--ink-soft); }
-.question-list li { margin: 4px 0; }
-.question-text { display: block; }
-.answer { display: block; font-weight: 600; }
-.answer.pending { font-weight: 400; color: var(--ink-soft); font-style: italic; }
-.summary-line { font-weight: 600; }
-.diff-row.is-target { outline: 2px solid var(--cursor); outline-offset: -2px; }
-h3.subhead { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
+.wrap:has(> #analysis-section:not([hidden])) { grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); }
+.wrap > * { grid-column: -2; min-width: 0; }
+.wrap > .masthead { grid-column: 1 / -1; }
+h1, h2, h3, h4 { margin: 0; line-height: 1.3; }
+h1 { font-size: 28px; line-height: 1.2; font-weight: 650; letter-spacing: -0.02em; overflow-wrap: anywhere; max-width: 36em; }
+h2 { font-size: 14px; font-weight: 600; }
+h3.subhead { font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-top: 4px; }
 p { margin: 0; }
-a { color: var(--teal); overflow-wrap: anywhere; }
+a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+a:hover { text-decoration: underline; }
 .mono, code, .payload { font-family: var(--mono); }
-.lede { font-size: 13.5px; color: var(--ink-soft); }
-.note, .hint, .count, .status { font-size: 12.5px; color: var(--ink-soft); }
-.status { margin: 0 0 12px; overflow-wrap: anywhere; min-height: 1.2em; }
-.status.is-stale { color: var(--warn); font-weight: 600; }
+.note, .hint, .count, .status { font-size: 12px; color: var(--ink-soft); }
+.lede { font-size: 14px; color: var(--ink-soft); }
+.status { overflow-wrap: anywhere; }
+.status.is-stale { color: var(--warn); }
+.status.is-ok { color: var(--ok); }
+.is-error { color: var(--alarm) !important; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
-.masthead {
-  display: flex; flex-direction: column; gap: 8px;
-  padding-bottom: 16px; border-bottom: 2px solid var(--line-strong); margin-bottom: 18px;
-}
-.brand {
-  display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 700;
-  letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-soft);
-}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+:focus:not(:focus-visible) { outline: none; }
+
+/* ---------------------------------------------------------------- header */
+.masthead { display: flex; flex-direction: column; gap: 10px; padding: 18px 0 22px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; color: var(--ink); }
 ${BRAND_MARK_STYLES}
+.brand .brand-mark { width: 20px; height: 20px; }
+.page-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; color: var(--ink-soft); }
+.page-meta a { font-weight: 600; }
+.meta-item.sha { font: 12px var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--neutral-soft); color: var(--ink); }
+.state-badge {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; color: #fff; background: var(--ink-faint);
+}
+.state-badge.state-open { background: #2f8f4e; }
+.state-badge.state-merged { background: #8250df; }
+.state-badge.state-closed { background: var(--del-ink); }
+#message-note { font-size: 12px; color: var(--ink-faint); }
+
+/* ----------------------------------------------------------------- cards */
 .panel {
-  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
-  padding: 16px; margin: 0 0 16px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+  padding: 16px; margin: 0 0 20px; box-shadow: var(--shadow);
   display: flex; flex-direction: column; gap: 12px; min-width: 0;
 }
-.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-label { font-weight: 600; font-size: 13.5px; }
-input[type="text"], input[type="url"], textarea {
-  font: inherit; color: var(--ink); background: var(--sunken);
-  border: 1px solid var(--line-strong); border-radius: 6px;
-  padding: 8px 10px; width: 100%; max-width: 100%; min-width: 0;
+.panel.card { padding: 0; gap: 0; overflow: hidden; }
+/* The diff is the page's main surface: file blocks are its only frames. */
+#diff-section { background: none; border: 0; box-shadow: none; overflow: visible; }
+#diff-section > .card-head { background: none; border: 0; padding: 0 0 12px; }
+#diff-section > .card-head h2 { font-size: 16px; font-weight: 650; }
+#diff-section > .card-body { padding: 0; }
+.card-head {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px;
+  padding: 12px 16px; background: var(--panel-head); border-bottom: 1px solid var(--line);
 }
-input:focus-visible, textarea:focus-visible, button:focus-visible, .payload:focus-visible, a:focus-visible {
-  outline: 2px solid var(--cursor); outline-offset: 2px;
+.card-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 320px; }
+.card-sub { font-size: 12px; color: var(--ink-soft); }
+.card-sub:empty { display: none; }
+.card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.card-actions:empty { display: none; }
+.card-body { padding: 16px; min-width: 0; }
+.card-body.stack { display: flex; flex-direction: column; gap: 14px; }
+
+/* --------------------------------------------------------------- buttons */
+button { font: inherit; color: inherit; cursor: pointer; max-width: 100%; }
+button:disabled { cursor: not-allowed; }
+button:not([class]), .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: var(--radius);
+  font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap;
+  color: var(--ink); background: var(--btn-bg); border: 1px solid var(--line);
+  transition: background 0.1s, border-color 0.1s;
 }
-button {
-  font: inherit; color: var(--ink); background: var(--panel);
-  border: 1px solid var(--line-strong); border-radius: 6px;
-  padding: 7px 12px; cursor: pointer; max-width: 100%;
+button:not([class]):hover:not(:disabled), .btn:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--line-strong); }
+button:not([class]):disabled, .btn:disabled { color: var(--ink-faint); background: var(--btn-bg); opacity: 0.7; }
+.btn-primary { color: var(--primary-ink); background: var(--primary); border-color: rgba(31, 35, 40, 0.15); }
+.btn-primary:hover:not(:disabled) { background: var(--primary-hover); border-color: rgba(31, 35, 40, 0.15); }
+.btn-primary:disabled { color: rgba(255, 255, 255, 0.8); background: var(--primary); opacity: 0.45; }
+.btn-quiet { background: transparent; border-color: transparent; color: var(--ink-soft); }
+.btn-quiet:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--ink); }
+.btn-sm { height: 26px; padding: 0 9px; font-size: 12px; }
+.link-button {
+  border: 0; background: none; color: var(--accent); padding: 0; font-size: 12px; cursor: pointer;
 }
-button:hover:not(:disabled) { border-color: var(--teal); }
-button:disabled { cursor: default; opacity: 0.6; }
-form { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.link-button:hover { text-decoration: underline; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.error {
-  border: 1px solid var(--alarm); background: var(--alarm-bg); border-radius: 8px;
-  padding: 12px 14px; margin: 0 0 16px;
-  display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+body.is-busy button { cursor: progress; }
+.btn.is-loading::before, button.is-loading::before {
+  content: ""; width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%;
+  border: 2px solid currentColor; border-right-color: transparent; animation: spin 0.8s linear infinite;
 }
-.error-title { font-weight: 700; font-size: 13.5px; }
-.error-text { font-size: 13.5px; overflow-wrap: anywhere; }
-.empty {
-  border: 1px dashed var(--line-strong); border-radius: 8px; padding: 14px 16px;
-  color: var(--ink-soft); font-size: 13.5px; margin: 0 0 12px;
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .btn.is-loading::before, button.is-loading::before { animation-duration: 2.4s; } }
+
+/* ------------------------------------------------------------ tags, paths */
+.path { font-family: var(--mono); font-size: 12.5px; min-width: 0; overflow-wrap: anywhere; }
+.path-dir { color: var(--ink-soft); }
+.path-base { color: var(--ink); font-weight: 600; }
+.path-line { color: var(--ink-faint); }
+.size { display: inline-flex; gap: 6px; font: 12px var(--mono); white-space: nowrap; }
+.size .plus { color: var(--add-ink); }
+.size .minus { color: var(--del-ink); }
+.status-tag {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  color: var(--ink-soft); background: var(--neutral-soft);
 }
-.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 18px; margin: 0; }
-.facts dt { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
-.facts dd { margin: 2px 0 0; font-size: 13.5px; overflow-wrap: anywhere; }
-.facts dd.mono { font-size: 12px; }
-.file-block { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 14px; overflow: hidden; min-width: 0; }
+.status-tag.status-attention { color: var(--alarm); background: var(--alarm-bg); }
+.status-tag.status-uncertain { color: var(--warn); background: var(--warn-soft); }
+.tag-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.tag {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px;
+  border-radius: 999px; border: 1px solid var(--line); font-size: 12px; color: var(--ink); white-space: nowrap;
+}
+.tag::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); }
+.tag.tone-ok::before { background: var(--ok); }
+.tag.tone-watch { border-color: var(--warn); color: var(--warn); }
+.tag.tone-watch::before { background: var(--warn); }
+.tag.tone-unsure { color: var(--ink-soft); border-style: dashed; }
+.tag.tone-unsure::before { background: transparent; border: 1px solid var(--ink-faint); }
+.tag-lead { font-size: 12px; color: var(--ink-faint); margin-left: 6px; }
+.tag + .tag-lead { margin-left: 10px; }
+.tag-row > .tag-lead:first-child { margin-left: 0; }
+.fact {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px;
+  border-radius: 6px; border: 1px solid transparent; background: var(--neutral-soft);
+  font-size: 12px; color: var(--ink); white-space: nowrap;
+}
+button.fact:hover { border-color: var(--accent); background: var(--accent-soft); }
+.fact-line { font: 11px var(--mono); color: var(--ink-soft); }
+.agent-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #8250df; margin-right: 6px; vertical-align: 1px; }
+
+/* ------------------------------------------------ the reading-order rail */
+.rail {
+  grid-column: 1; grid-row: 2 / span 40; position: sticky; top: 16px;
+  display: flex; flex-direction: column; max-height: calc(100vh - 32px); min-width: 0;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.rail-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 4px; }
+.rail-head h2 { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.rail-sub { font-size: 12px; color: var(--ink-soft); }
+.rail-sub:empty { display: none; }
+.rail-actions { display: flex; gap: 6px; margin-top: 6px; }
+.rail-actions:empty { display: none; }
+.rail-body { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 6px 0; }
+.rail-body > .note, .rail-body > .inline-note { padding: 10px 16px; }
+.rail-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px 10px 16px; border-top: 1px solid var(--line-soft); background: var(--panel-head);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.rail-draft { font-size: 12px; color: var(--ink-soft); }
+.rail-foot .btn { text-decoration: none; }
+.order-list { list-style: none; margin: 0; padding: 0; }
+/* Stations sit on one continuous line: the route through the pull request. */
+.order-item {
+  position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 10px;
+  padding: 8px 14px 10px 12px; cursor: pointer;
+}
+.order-item::before {
+  content: ""; position: absolute; left: 24px; top: 0; bottom: 0; width: 2px; background: var(--route);
+}
+.order-item:first-child::before { top: 18px; }
+.order-item:last-child::before { bottom: calc(100% - 18px); }
+.order-item:hover { background: var(--hover); }
+.order-item:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+.order-rank {
+  position: relative; z-index: 1; width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums;
+  color: var(--ink-soft); background: var(--panel); border: 2px solid var(--route);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.order-item.is-current { background: var(--accent-soft); }
+.order-item.is-current .order-rank { color: var(--primary-ink); background: var(--accent); border-color: var(--accent); }
+.order-main { min-width: 0; padding-top: 2px; }
+.order-head { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; }
+.order-head .path { flex: 1 1 100%; order: -1; font-size: 12.5px; }
+.order-head .path-dir { display: block; font-size: 11px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.order-note { margin-top: 2px; font-size: 12px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.order-actions { display: flex; margin-top: 4px; }
+.order-item .tag-row { margin-top: 6px; gap: 4px; }
+.order-item .tag-lead { margin-left: 0; width: 100%; font-size: 11.5px; }
+.inline-note { font-size: 12px; color: var(--ink-soft); }
+.btn-xs { height: 22px; padding: 0 6px; font-size: 12px; margin-left: -6px; color: var(--accent); }
+
+/* ------------------------------------------------------------------ diff */
+.suggest-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  padding: 10px 12px; margin: 0 0 16px; border-radius: var(--radius);
+  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  font-size: 13px;
+}
+.suggest-bar p { flex: 1 1 280px; }
+.bar-link { font-size: 13px; font-weight: 500; }
+.file-block { border: 1px solid var(--line); border-radius: var(--radius); margin: 0 0 16px; min-width: 0; }
+.file-block:last-child { margin-bottom: 0; }
 .file-head {
+  position: sticky; top: 0; z-index: 2;
   display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
-  padding: 8px 12px; background: var(--sunken); font-size: 13px; cursor: pointer; list-style: none;
+  padding: 6px 8px 6px 12px; min-height: 42px; background: var(--panel-head);
+  border-radius: var(--radius) var(--radius) 0 0; cursor: pointer; list-style: none;
 }
+.file-block:not([open]) > .file-head { border-radius: var(--radius); }
 .file-head::-webkit-details-marker { display: none; }
-.file-head::before { content: ""; width: 7px; height: 7px; border-right: 2px solid var(--ink-soft); border-bottom: 2px solid var(--ink-soft); transform: rotate(-45deg); transition: transform 0.12s; margin-right: 2px; }
+.file-head::before {
+  content: ""; width: 6px; height: 6px; margin: 0 2px 0 2px;
+  border-right: 1.5px solid var(--ink-soft); border-bottom: 1.5px solid var(--ink-soft);
+  transform: rotate(-45deg); transition: transform 0.12s;
+}
 .file-block[open] > .file-head { border-bottom: 1px solid var(--line); }
 .file-block[open] > .file-head::before { transform: rotate(45deg); }
-.file-path { font-family: var(--mono); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
-.file-size { font-size: 12px; }
-.file-size .plus, .hunk-size .plus { color: var(--add-ink); }
-.file-size .minus, .hunk-size .minus { color: var(--del-ink); }
-.diff-rows { min-width: 0; }
-.diff-row {
-  display: flex; align-items: stretch;
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.6; min-height: 22px;
-}
-.diff-gutter { position: relative; flex: 0 0 auto; width: 64px; border-right: 1px solid var(--line); }
-.diff-ln { display: block; padding: 0 10px 0 28px; text-align: right; color: var(--ink-soft); user-select: none; }
+.file-tools { margin-left: auto; display: flex; gap: 4px; }
+.diff-rows { min-width: 0; overflow: hidden; border-radius: 0 0 var(--radius) var(--radius); }
+.diff-row { display: flex; align-items: stretch; font: 12px/20px var(--mono); min-height: 20px; }
+.diff-gutter { position: relative; flex: 0 0 auto; width: 60px; background: var(--panel); }
+.diff-ln { display: block; padding: 0 10px 0 26px; text-align: right; color: var(--ink-faint); user-select: none; }
 .diff-action {
-  position: absolute; left: 4px; top: 1px; width: 20px; height: 20px; padding: 0;
-  border: 0; border-radius: 6px; background: var(--cursor); color: #fff;
-  font: 700 15px/20px var(--sans); cursor: pointer; opacity: 0;
+  position: absolute; left: 4px; top: 0; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 6px; background: var(--accent); color: #fff;
+  font: 600 14px/20px var(--sans); cursor: pointer; opacity: 0; transform: scale(0.9);
+  transition: opacity 0.08s, transform 0.08s;
 }
-.diff-row:hover .diff-action:not(:disabled), .diff-action:focus-visible { opacity: 1; }
-.diff-action:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
-.diff-action.has-comment { opacity: 1; background: var(--warn); }
-.diff-action.is-armed { opacity: 1; width: auto; padding: 0 6px; font-size: 11px; }
-.diff-mark { flex: 0 0 auto; width: 20px; text-align: center; color: var(--ink-soft); user-select: none; }
-.diff-code { display: block; flex: 1 1 auto; min-width: 0; padding: 0 10px 0 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.diff-row:hover .diff-action:not(:disabled), .diff-action:focus-visible { opacity: 1; transform: scale(1); }
+.diff-action.has-comment { opacity: 1; transform: scale(1); background: var(--warn); }
+.diff-action.is-armed { opacity: 1; transform: scale(1); width: auto; padding: 0 6px; font-size: 11px; color: #fff; }
+.diff-mark { flex: 0 0 auto; width: 20px; text-align: center; color: var(--ink-faint); user-select: none; }
+.diff-code { display: block; flex: 1 1 auto; min-width: 0; padding: 0 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .kind-add { background: var(--add-bg); }
 .kind-delete { background: var(--del-bg); }
-.kind-add .diff-mark { color: var(--add-ink); }
-.kind-delete .diff-mark { color: var(--del-ink); }
 .kind-add .diff-gutter { background: var(--add-gutter); }
 .kind-delete .diff-gutter { background: var(--del-gutter); }
+.kind-add .diff-ln, .kind-delete .diff-ln { color: var(--ink-soft); }
+.kind-add .diff-mark { color: var(--add-ink); }
+.kind-delete .diff-mark { color: var(--del-ink); }
+.diff-row.is-target { box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
+.diff-gap {
+  display: flex; align-items: center; gap: 10px; min-height: 28px;
+  background: var(--gap-bg); color: var(--ink-soft); font: 12px var(--mono);
+}
+.diff-gap-mark { width: 60px; text-align: center; color: var(--accent); }
 .tok-k { color: var(--syn-keyword); }
 .tok-s { color: var(--syn-string); }
 .tok-c { color: var(--syn-comment); font-style: italic; }
@@ -2158,89 +2346,132 @@ form { display: flex; flex-direction: column; gap: 12px; align-items: flex-start
 .tok-t { color: var(--syn-type); }
 .tok-f { color: var(--syn-func); }
 .tok-p { color: var(--syn-number); }
-.editor {
-  background: var(--warn-bg); border-top: 1px solid var(--line-strong);
-  border-bottom: 1px solid var(--line-strong); padding: 10px 12px;
-  display: flex; flex-direction: column; gap: 6px;
+
+/* ------------------------------------------------ inline comments on lines */
+.editor, .suggestion {
+  margin: 8px 12px 10px 60px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); font-family: var(--sans); display: flex; flex-direction: column; gap: 8px; min-width: 0;
 }
+.editor { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
 .editor-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .editor-input { flex: 1 1 240px; min-width: 0; }
-.suggest-bar {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px;
-  border: 1px solid var(--teal); border-radius: 8px; padding: 10px 14px; margin: 0 0 14px;
-  font-size: 13.5px;
-}
-.suggest-bar p { flex: 1 1 260px; }
-.suggestion {
-  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
-  border-left: 4px solid var(--teal); background: var(--panel);
-  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
-}
 .suggestion-by { font-size: 12px; color: var(--ink-soft); }
-.suggestion-body { font-size: 14px; overflow-wrap: anywhere; }
-.suggestion-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.suggestion-add { background: var(--teal); border-color: var(--teal); color: var(--panel); font-weight: 600; }
-.suggestion-add:hover:not(:disabled) { filter: brightness(1.08); }
-.link-button {
-  border: 0; background: none; color: var(--teal);
-  padding: 2px 4px; text-decoration: underline; font-size: 12.5px; cursor: pointer;
+.suggestion-by strong { color: var(--ink); font-weight: 600; }
+.suggestion-body { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.suggestion-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* ---------------------------------------------------------------- forms */
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+label { font-weight: 600; font-size: 13px; }
+input[type="text"], input[type="url"], textarea {
+  font: 14px/1.5 var(--sans); color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 6px 10px; width: 100%; max-width: 100%; min-width: 0;
+  transition: border-color 0.1s, box-shadow 0.1s;
 }
-.draft-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.draft-item {
-  border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 6px;
-  padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+input[type="text"]:focus, input[type="url"]:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+textarea { resize: vertical; min-height: 88px; }
+form { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.event-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.event-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.event-option {
+  display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; font-weight: 400;
 }
-.draft-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
-.draft-where { font-size: 12.5px; overflow-wrap: anywhere; min-width: 0; }
-.draft-body { font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.event-option:hover { background: var(--hover); }
+.event-option:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.event-option input { grid-row: span 2; margin: 0; accent-color: var(--accent); }
+.event-name { font-weight: 600; font-size: 13px; }
+.event-help { grid-column: 2; font-size: 12px; color: var(--ink-soft); }
+
+/* --------------------------------------------------------- draft comments */
+.draft-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); }
+.draft-item { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-top: 1px solid var(--line-soft); min-width: 0; }
+.draft-item:first-child { border-top: 0; }
+.draft-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.draft-head .btn-quiet:first-of-type { margin-left: auto; }
+.draft-body { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.empty {
+  border: 1px dashed var(--line); border-radius: var(--radius); padding: 14px 16px;
+  color: var(--ink-soft); font-size: 13px; text-align: center;
+}
+#empty-note { margin: 0 0 16px; }
+
+/* ----------------------------------------------------------------- submit */
+.submit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.submit-row .status { flex: 1 1 200px; }
+.payload-details > summary { cursor: pointer; font-size: 12px; color: var(--ink-soft); width: fit-content; }
+.payload-details[open] > summary { margin-bottom: 8px; }
+.payload-details .hint { margin-top: 8px; }
+.payload {
+  background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px; margin: 0; max-height: 40vh; max-width: 100%; overflow: auto; font-size: 12px; white-space: pre;
+}
+
+/* ------------------------------------------------------ alerts and states */
+.error {
+  border: 1px solid var(--alarm); background: var(--alarm-bg); border-radius: var(--radius);
+  padding: 12px 16px; margin: 0 0 16px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+}
+.error-title { font-weight: 600; font-size: 13px; }
+.error-text { font-size: 13px; overflow-wrap: anywhere; }
+#status-line:empty { display: none; }
+#status-line { margin: 0 0 12px; }
 .revalidate-section {
-  border: 1px solid var(--warn); background: var(--warn-bg); border-radius: 8px;
+  border: 1px solid var(--warn); background: var(--warn-soft); border-radius: var(--radius);
   padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0;
 }
-.revalidate-item {
-  position: static; width: auto; margin: 0; background: var(--panel);
-  border: 1px solid var(--line-strong); border-left: 4px solid var(--warn);
-  border-radius: 6px;
-}
+.revalidate-item { position: static; width: auto; margin: 0; }
 /* The shared editor row sizes its input by flex-basis; inside this column
    container that basis would become a 240px height. */
 .revalidate-item .editor-input { flex: 0 0 auto; }
-.revalidate-item.is-armed { border-left-color: var(--cursor); outline: 2px solid var(--cursor); outline-offset: 2px; }
+.revalidate-item.is-armed { outline: 2px solid var(--accent); outline-offset: 2px; }
 .revalidate-where { overflow-wrap: anywhere; }
 .revalidate-code {
   display: block; white-space: pre; overflow-x: auto; max-width: 100%;
-  background: var(--sunken); border: 1px solid var(--line); border-radius: 4px;
-  padding: 4px 8px; font-size: 12px;
+  background: var(--sunken); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font-size: 12px;
 }
 .revalidate-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.diff-action.is-armed { color: var(--cursor); font-weight: 700; }
-.payload {
-  background: var(--sunken); border: 1px solid var(--line); border-radius: 6px;
-  padding: 12px; margin: 0; max-height: 44vh; max-width: 100%;
-  overflow: auto; font-size: 12.5px; white-space: pre;
+
+/* ---------------------------------------------------------------- details */
+.details-panel > summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--ink-soft); }
+.details-panel[open] > summary { margin-bottom: 8px; color: var(--ink); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 18px; margin: 0; }
+.facts dt { font-size: 12px; color: var(--ink-soft); }
+.facts dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.facts dd.mono { font-size: 12px; }
+.agenda-list { margin: 6px 0; padding-left: 20px; font-size: 13px; }
+.foot { padding-top: 4px; }
+
+/* -------------------------------------------------------- call-flow drawer */
+.flow-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 20;
+  width: min(760px, 60vw); display: flex; flex-direction: column;
+  background: var(--bg); border-left: 1px solid var(--line);
+  box-shadow: -8px 0 24px rgba(1, 4, 9, 0.2);
 }
-.event-fieldset {
-  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0;
-  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+.flow-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px 10px 16px; background: var(--panel-head); border-bottom: 1px solid var(--line);
 }
-.event-fieldset legend { font-weight: 600; font-size: 13.5px; padding: 0 4px; }
-.event-options { display: flex; flex-wrap: wrap; gap: 8px 20px; }
-.event-option { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
-.foot { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 6px; }
-body.is-busy button { cursor: progress; }
-button.is-loading { display: inline-flex; align-items: center; gap: 8px; }
-button.is-loading::before {
-  content: ""; width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%;
-  border: 2px solid currentColor; border-right-color: transparent;
-  animation: spin 0.8s linear infinite;
+.flow-title { font: 600 13px var(--sans); overflow-wrap: anywhere; }
+.flow-frame { flex: 1 1 auto; width: 100%; border: 0; background: var(--bg); }
+/* Beside the diff only when both still have room; otherwise it lies over the page. */
+@media (min-width: 1760px) { body.flow-open .wrap { margin-right: min(760px, 44vw); } }
+@media (max-width: 1099px) { .flow-drawer { width: 100%; } }
+
+@media (max-width: 960px) {
+  .wrap:has(> #analysis-section:not([hidden])) { grid-template-columns: minmax(0, 1fr); }
+  .rail { grid-column: 1; grid-row: auto; position: static; max-height: 60vh; margin-bottom: 20px; }
 }
-@keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { button.is-loading::before { animation-duration: 2.4s; } }
-.is-error { color: var(--alarm); }
 @media (max-width: 700px) {
-  .wrap { padding: 18px 12px 48px; }
+  .wrap { padding: 16px 12px 48px; }
+  h1 { font-size: 20px; }
   .panel { padding: 12px; }
+  .card-head, .card-body { padding: 12px; }
   .facts { grid-template-columns: 1fr; }
-  .diff-gutter { width: 56px; }
+  .diff-gutter { width: 52px; }
+  .diff-gap-mark { width: 52px; }
+  .editor, .suggestion { margin-left: 8px; margin-right: 8px; }
 }
 `;

@@ -4,6 +4,7 @@ import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
 import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
+import { PALETTE_STYLES } from "./palette.js";
 import { escapeHtml } from "./escape-html.js";
 import { testLikeFile } from "./file-role.js";
 
@@ -83,7 +84,9 @@ export function renderReview(report: ReviewReport): string {
 
 /** Trims the report's call-flow view to live inside the pull request page's drawer. */
 const EMBEDDED_FLOW_STYLES = `
-.flow-embed { padding: 12px 14px 18px; }
+body { background: var(--bg); font-family: var(--sans); }
+.flow-embed { padding: 4px 16px 20px; }
+.flow-embed .cf { margin-top: 8px; }
 .cf-diff-link { display: none !important; }
 .flow-single .cf-jump { display: none; }
 `;
@@ -104,7 +107,7 @@ export function renderCallFlowPage(report: ReviewReport, file?: string): string 
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="color-scheme" content="light dark">',
     `<title>${escapeHtml(file === undefined ? "Call flows" : `Call flow: ${file}`)}</title>`,
-    `<style>${STYLES}\n${CALL_FLOW_STYLES}\n${EMBEDDED_FLOW_STYLES}</style>`,
+    `<style>${STYLES}\n${CALL_FLOW_STYLES}\n${PALETTE_STYLES}\n${EMBEDDED_FLOW_STYLES}</style>`,
     "</head>",
     "<body>",
     `<section id="view-call-flow" class="flow-embed${file === undefined ? "" : " flow-single"}" aria-label="Call flow">`,
