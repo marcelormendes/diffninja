@@ -126,10 +126,12 @@ export interface ReviewItem extends ReviewUnit {
   facts?: ChangeFacts;
 }
 export interface AgentOrder {
-  /** Every item id of the report exactly once, most important first. */
+  /** Every item id of the report exactly once, most important first; the report's items follow it. */
   itemIds: string[];
   orderedBy: string;
   orderedAt: string;
+  /** diffninja's own order of the same items, kept so the page can still offer it. */
+  diffninjaIds: string[];
 }
 export interface ReviewReport {
   title: string;
@@ -149,7 +151,7 @@ export interface ReviewReport {
   warnings: string[];
   /** Questions for the reviewing agent's model, bound to hunks; answers never reorder the report. */
   questions: ReviewQuestion[];
-  /** The reading order the reviewing agent recorded; shown beside the report's own order, never replacing it. */
+  /** The reading order the reviewing agent recorded; once present, `items` follow it. */
   agentOrder?: AgentOrder;
   /**
    * Local repository context for a git-range review: prior reverts, contributor

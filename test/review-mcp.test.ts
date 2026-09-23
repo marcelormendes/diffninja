@@ -349,6 +349,7 @@ interface AnalysisView {
   reviewId?: string;
   reportUrl?: string;
   counts?: Record<string, number>;
+  order?: { source: string; orderedBy?: string };
   hunks?: Array<{ file: string; line: number; side: string; status: string; facts: unknown[]; questions: Array<{ id: string; choice?: string; answeredBy?: string }> }>;
   questions?: { total: number; answered: number };
 }
@@ -544,12 +545,12 @@ describe("record_order", () => {
 
   const cardOrder = (body: string) => [...body.matchAll(/<span class="path mono">([^<]*)<\/span>/g)].map(match => match[1]);
 
-  test("shows the agent's order on the page, attributed, without moving diffninja's order", async () => {
+  test("lists every hunk in the agent's order, attributed, and keeps diffninja's order one click away", async () => {
     blockNetwork();
     const client = await connectReview();
     const report = await reviewed(client);
     const before = await loopback(report.reportUrl);
-    expect(before?.body).not.toContain("Reading order recommended by");
+    expect(before?.body).not.toContain("recommended by");
 
     const reversed = report.items.map(item => item.id).reverse();
     const result = await order(client, { reviewId: report.reviewId, order: reversed });
@@ -559,11 +560,13 @@ describe("record_order", () => {
 
     const after = await loopback(report.reportUrl);
     expect(after?.status).toBe(200);
-    expect(after?.body).toContain("Reading order recommended by diffninja-mcp-test 0.1.0");
-    const recommended = [...after!.body.matchAll(/<ol class="agent-order-list">([\s\S]*?)<\/ol>/g)][0][1];
-    const ranks = [...recommended.matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]));
+    expect(after?.body).toContain("reading order recommended by diffninja-mcp-test 0.1.0");
+    // The cards now follow the agent's order...
+    expect(cardOrder(after!.body)).toEqual([...cardOrder(before!.body)].reverse());
+    // ...and diffninja's own order is still listed, each entry under its new rank.
+    const own = [...after!.body.matchAll(/<ol class="agent-order-list">([\s\S]*?)<\/ol>/g)][0][1];
+    const ranks = [...own.matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]));
     expect(ranks).toEqual(report.items.map((_, index) => index + 1).reverse());
-    expect(cardOrder(after!.body)).toEqual(cardOrder(before!.body));
     expect(fetchAttempts).toEqual([]);
   });
 
@@ -574,9 +577,11 @@ describe("record_order", () => {
     expect((await order(client, { reviewId: report.reviewId, order: [...ids].reverse() })).isError).toBeFalsy();
     expect((await order(client, { reviewId: report.reviewId, order: ids })).isError).toBeFalsy();
     const page = await loopback(report.reportUrl);
-    const recommended = [...page!.body.matchAll(/<ol class="agent-order-list">([\s\S]*?)<\/ol>/g)];
-    expect(recommended).toHaveLength(1);
-    expect([...recommended[0][1].matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]))).toEqual(ids.map((_, index) => index + 1));
+    expect(cardOrder(page!.body)).toEqual(report.items.map(item => item.file));
+    const own = [...page!.body.matchAll(/<ol class="agent-order-list">([\s\S]*?)<\/ol>/g)];
+    expect(own).toHaveLength(1);
+    // diffninja's order is the original one, not the first recorded order.
+    expect([...own[0][1].matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]))).toEqual(ids.map((_, index) => index + 1));
   });
 
   test("refuses the whole call, keeping the previous order, unless every hunk is named once", async () => {
@@ -606,7 +611,7 @@ describe("record_order", () => {
     const other = await connectReview();
     const result = await order(other, { reviewId: report.reviewId, order: report.items.map(item => item.id) });
     expect(result.isError).toBe(true);
-    expect((await loopback(report.reportUrl))!.body).not.toContain("Reading order recommended by");
+    expect((await loopback(report.reportUrl))!.body).not.toContain("recommended by");
   });
 });
 
@@ -750,11 +755,13 @@ describe("review_diff connected pull request mode", () => {
       expect(answered?.answeredBy).toBeTruthy();
 
       // The agent's reading order lands on the analysis page of that snapshot.
+      expect((await connectedAnalysis(payload.url))?.order).toEqual({ source: "diffninja" });
       const ordered = await client.callTool({ name: "record_order", arguments: {
         reviewId: payload.reviewId, order: payload.report!.items.map(item => item.id),
       } });
       expect(ordered.isError).toBeFalsy();
-      expect((await loopback(payload.reportUrl!))?.body).toContain("Reading order recommended by diffninja-mcp-test 0.1.0");
+      expect((await connectedAnalysis(payload.url))?.order).toEqual({ source: "agent", orderedBy: "diffninja-mcp-test 0.1.0" });
+      expect((await loopback(payload.url))?.status).toBe(200);
 
       // A repeated call for the same pull request reuses the same analysis.
       const again = connectedOf(await review(client, { pr: GH_URL }));

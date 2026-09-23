@@ -178,12 +178,16 @@ function renderBreadcrumb(): string {
   ].join("\n");
 }
 
-/** The reading order the reviewing agent recorded, linking each hunk under its rank in the report's own order. */
+/**
+ * Who ordered the hunks. Once the reviewing agent records an order, the items
+ * follow it, so every rank (#) on the page is the agent's; diffninja's own order
+ * stays one disclosure away, linking each hunk under its current rank.
+ */
 function renderAgentOrder(report: ReviewReport): string {
   const order = report.agentOrder;
   if (order === undefined) return "";
   const rankOf = new Map(report.items.map((item, index) => [item.id, index + 1]));
-  const links = order.itemIds
+  const links = order.diffninjaIds
     .map((id) => {
       const rank = rankOf.get(id)!;
       const item = report.items[rank - 1];
@@ -198,11 +202,13 @@ function renderAgentOrder(report: ReviewReport): string {
     })
     .join("\n");
   return [
-    '<details class="agent-order" open>',
-    `<summary>Reading order recommended by ${escapeHtml(order.orderedBy)}</summary>`,
-    '<p class="note">The agent that requested this review read the hunks and recommends this order. It is that agent&#39;s reading, not a verdict; diffninja&#39;s own order, statuses, and ranks (#) are unchanged.</p>',
+    '<section class="agent-order" aria-label="Reading order">',
+    `<p class="agent-order-by">Hunks are in the reading order recommended by ${escapeHtml(order.orderedBy)}, the agent that requested this review. It is that agent&#39;s reading, not a verdict; statuses come from diffninja.</p>`,
+    "<details>",
+    "<summary>diffninja&#39;s own order</summary>",
     `<ol class="agent-order-list">${links}</ol>`,
     "</details>",
+    "</section>",
   ].join("\n");
 }
 
@@ -939,7 +945,8 @@ button:disabled { cursor: default; opacity: .65; }
 .toc-list { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; max-height: 22vh; overflow-y: auto; }
 .toc-list > li { min-width: 0; max-width: 100%; }
 .agent-order { margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; }
-.agent-order > summary { padding: 10px 14px; cursor: pointer; font-weight: 600; }
+.agent-order-by { margin: 10px 14px; font-weight: 600; }
+.agent-order summary { padding: 0 14px 10px; cursor: pointer; }
 .agent-order-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 14px 12px; padding: 0; list-style: none; }
 .agent-order-list > li { min-width: 0; max-width: 100%; }
 .toc-link {

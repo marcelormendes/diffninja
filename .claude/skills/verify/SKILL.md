@@ -55,7 +55,7 @@ node .claude/skills/verify/drive.mjs review --args '<json>' [--answer cannot-tel
 
 - `--args`: the exact `review_diff` arguments. It is a strict schema: `diff`, `repo`, `from`, `to`, `pr`, `input`, `mode`, `expectedOutcome {title, description}`, and `referenceProject`. Any other key is an error.
 - `--answer`: answers every returned question through `record_answers` with `cannot-tell` or with each question's first option. Then it checks that an unlisted option is refused and that the re-fetched page shows answers attributed to the `diffninja-verify` client.
-- `--order reverse`: sends the reverse of the report's order through `record_order`, then checks that a partial order is refused, that the page lists the agent's order attributed to `diffninja-verify`, and that diffninja's own card order did not move.
+- `--order reverse`: sends the reverse of the report's order through `record_order`, then checks that a partial order is refused, that the report page lists the hunks in that order attributed to `diffninja-verify`, that diffninja's own order is still offered, and, for a connected review, that the pull request page's `/api/analysis` reports the agent's order.
 - `--hold N`: keeps the connection, and so the pages, alive for N seconds, and prints the URLs. Use it to open a page in a browser while the drive waits (see `features/report-page.md`).
 - `--out`: the evidence directory. The default is `<os tmpdir>/diffninja-verify/<ISO timestamp>/`, and the path is printed on the first line.
 

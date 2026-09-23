@@ -76,10 +76,14 @@ export interface ConnectedAnalysis {
   readonly reportUrl: string;
   readonly counts: Readonly<Record<ReviewStatus, number>>;
   readonly agenda: readonly { readonly title: string; readonly reason: string }[];
+  /** Whose order `hunks` follow: the reviewing agent's once it recorded one, otherwise diffninja's. */
+  readonly order: ConnectedOrder;
   /** Every hunk, in report order. */
   readonly hunks: readonly ConnectedHunk[];
   readonly questions: { readonly total: number; readonly answered: number };
 }
+
+export type ConnectedOrder = { readonly source: "agent"; readonly orderedBy: string } | { readonly source: "diffninja" };
 
 export interface ConnectedAnalysisUnavailable {
   readonly available: false;
@@ -177,6 +181,7 @@ export function connectedAnalysisOf(
       .filter((entry) => !entry.id.startsWith("agenda:hunks:"))
       .slice(0, CONNECTED_AGENDA_LIMIT)
       .map((entry) => ({ title: entry.title, reason: entry.reason })),
+    order: report.agentOrder === undefined ? { source: "diffninja" } : { source: "agent", orderedBy: report.agentOrder.orderedBy },
     hunks,
     questions: { total: report.questions.length, answered },
   };

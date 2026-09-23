@@ -138,10 +138,11 @@ The tool writes no report files. Arguments and examples:
    the agent answers through `record_answers`, and the answers appear on the
    report page attributed to that agent, never reordering anything. diffninja
    itself still calls no model.
-   After reading the hunks, the agent can also send the reading order it
-   recommends through `record_order` (every hunk id once, most important
-   first). The page shows it at the top, attributed to that agent, beside
-   diffninja's own order, which does not change. On 159 held-out open-source
+   After reading the hunks, the agent sends the reading order it recommends
+   through `record_order` (every hunk id once, most important first). From
+   then on the report page and the pull request page list every hunk in the
+   agent's order, attributed to it; diffninja's own order stays available one
+   click away, and statuses stay diffninja's. On 159 held-out open-source
    pull requests, weighted by the severity of maintainers' actual review
    comments, a host model that read diffninja's report put the serious
    comments earlier than diffninja's deterministic order did.

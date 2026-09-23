@@ -79,10 +79,14 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     page, and never change status, priority, or order.
   - `record_order`: strict `{ reviewId, order: string[] }` naming every
     `items[].id` of that review exactly once; anything else refuses the whole
-    call and keeps the previous order. The agent's order is attributed to the MCP
-    client, shown at the top of the report page beside diffninja's own order,
-    and replaced by a later call; it never changes the report's order, status,
-    or priority. Reviews are reachable only
+    call and keeps the previous order. The host agent's order is the product's
+    reading order: the report's items are reordered to it, so the report page,
+    the connected pull request page (`/api/analysis` `order`), and every rank
+    follow it, attributed to the MCP client; diffninja's own order is kept in
+    `agentOrder.diffninjaIds` and stays one disclosure away. Status and priority
+    never change, and a later call replaces an earlier one. Until an order
+    arrives, the pages show diffninja's order and the connected page keeps
+    polling for one. Reviews are reachable only
     from the connection that created them. Report pages are `GET /report/<256-bit token>` only, Host-checked,
     CSP-pinned by hash, no-store, at most 20 per connection, and close with it.
     Connected success returns `{ mode: "connected", url, pr, snapshot }` plus,

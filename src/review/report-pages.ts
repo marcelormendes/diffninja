@@ -146,11 +146,12 @@ export class ReportPages {
   }
 
   /**
-   * Record the reading order the reviewing agent recommends and re-render the
-   * page. The order must name every hunk of the review exactly once; anything
-   * else refuses the whole call and keeps the previous order. The report's own
-   * order, statuses, and priorities never change. A later order replaces an
-   * earlier one.
+   * Record the reading order the reviewing agent recommends: the report's items
+   * are reordered to it, so every page and the connected analysis list hunks in
+   * the agent's order, and the page is re-rendered. diffninja's own order is kept
+   * beside it; statuses and priorities never change. The order must name every
+   * hunk of the review exactly once; anything else refuses the whole call and
+   * keeps the previous order. A later order replaces an earlier one.
    */
   recordOrder(reviewId: string, itemIds: readonly string[], orderedBy: string): RecordedOrder {
     const { token, page, report } = this.review(reviewId);
@@ -163,7 +164,10 @@ export class ReportPages {
     });
     const missing = report.items.filter((item) => !seen.has(item.id)).map((item) => item.id);
     if (missing.length > 0) throw new Error(`order leaves out ${missing.length} of ${known.size} hunks, starting with ${missing[0]}; name every hunk once.`);
-    report.agentOrder = { itemIds: [...itemIds], orderedBy, orderedAt: new Date().toISOString() };
+    const diffninjaIds = report.agentOrder?.diffninjaIds ?? report.items.map((item) => item.id);
+    const position = new Map(itemIds.map((id, index) => [id, index]));
+    report.items.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
+    report.agentOrder = { itemIds: [...itemIds], orderedBy, orderedAt: new Date().toISOString(), diffninjaIds };
     this.rerender(page, report);
     return { reviewId, ordered: itemIds.length, reportUrl: `${this.origin}/report/${token}` };
   }

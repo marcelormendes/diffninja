@@ -851,7 +851,7 @@ function script(csrf: string): string {
     analysisTimer = setTimeout(function () { analysisTimer = null; loadAnalysis(); }, delay);
   }
 
-  /** Fetch the analysis for the loaded revision; keep polling while answers are outstanding. */
+  /** Fetch the analysis for the loaded revision; keep polling while answers or the agent's order are outstanding. */
   function loadAnalysis() {
     var snap = snapshot();
     if (!snap || analysisLoading) return;
@@ -868,8 +868,9 @@ function script(csrf: string): string {
       var current = snapshot();
       if (!current) return;
       if (analysis && analysis.available === true && analysis.snapshotId !== current.id) { scheduleAnalysis(1000); return; }
-      var pending = analysis && analysis.available === true && analysis.questions && analysis.questions.answered < analysis.questions.total;
-      if (pending) scheduleAnalysis(10000);
+      var pendingAnswers = analysis && analysis.available === true && analysis.questions && analysis.questions.answered < analysis.questions.total;
+      var pendingOrder = analysis && analysis.available === true && !(analysis.order && analysis.order.source === 'agent');
+      if (pendingAnswers || pendingOrder) scheduleAnalysis(10000);
     });
   }
 
@@ -969,6 +970,10 @@ function script(csrf: string): string {
         + ' answered. Ask the agent that opened this page to answer them; they appear here as they arrive.'));
     }
     el.analysisBody.appendChild(make('h3', 'subhead', 'Hunks in reading order'));
+    var byAgent = analysis.order && analysis.order.source === 'agent';
+    el.analysisBody.appendChild(make('p', 'note', byAgent
+      ? 'Ordered by ' + String(analysis.order.orderedBy) + ', the agent that opened this page. Statuses come from diffninja.'
+      : 'The order diffninja computed. Ask the agent that opened this page to send its recommended order; it replaces this list as soon as it arrives.'));
     var list = make('div', 'hunk-list');
     var hunks = Array.isArray(analysis.hunks) ? analysis.hunks : [];
     for (var h = 0; h < hunks.length; h += 1) list.appendChild(renderHunkEntry(hunks[h], h));

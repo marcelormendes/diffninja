@@ -141,11 +141,19 @@ async function review() {
       check("record_order refuses an order that leaves a hunk out", partial.isError === true);
       const after = await get(report.reportUrl);
       save("reportUrl.after-order.html", after.body);
+      const cards = body => [...body.matchAll(/<span class="path mono">([^<]*)<\/span>/g)].map(match => match[1]).join("|");
+      check("page lists the hunks in the agent's order, attributed to this client",
+        after.body.includes(`reading order recommended by ${CLIENT.name}`) && cards(after.body) === cards(before.body).split("|").reverse().join("|"));
       const list = /<ol class="agent-order-list">([\s\S]*?)<\/ol>/.exec(after.body)?.[1] ?? "";
       const ranks = [...list.matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]));
-      check("page lists the agent's order, attributed to this client", after.body.includes(`Reading order recommended by ${CLIENT.name}`) && ranks.join(",") === items.map((_, k) => k + 1).reverse().join(","), ranks.join(","));
-      const cards = body => [...body.matchAll(/<span class="path mono">([^<]*)<\/span>/g)].map(match => match[1]).join("|");
-      check("diffninja's own card order is unchanged", cards(after.body) === cards(before.body));
+      check("page still offers diffninja's own order", ranks.join(",") === items.map((_, k) => k + 1).reverse().join(","), ranks.join(","));
+      if (report.url) {
+        const view = await get(new URL("api/analysis", report.url).href);
+        const analysis = JSON.parse(view.body);
+        save("url.analysis.after-order.json", analysis);
+        check("pull request page's reading order is the agent's", analysis.order?.source === "agent" && analysis.order?.orderedBy?.startsWith(CLIENT.name)
+          && analysis.hunks.map(h => h.id).join(",") === ids.join(","), JSON.stringify(analysis.order));
+      }
     }
     if (values.hold) {
       console.log(`HOLD ${values.hold}s — open now: ${Object.values(pages).filter(Boolean).join(" ")}`);
