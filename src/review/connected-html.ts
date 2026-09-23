@@ -159,6 +159,7 @@ function script(csrf: string): string {
   var draftOwner = '';
   var analysis = null;
   var showLoad = false;
+  var closedFiles = Object.create(null);
   var analysisFor = '';
   var analysisLoading = false;
   var analysisTimer = null;
@@ -1031,6 +1032,8 @@ function script(csrf: string): string {
       if (target === null && row.getAttribute('data-line') === line) target = row;
     }
     if (target === null) return;
+    var file = target.closest('details.file-block');
+    if (file && !file.open) { file.open = true; closedFiles[path] = false; }
     target.scrollIntoView({ block: 'center' });
     target.classList.add('is-target');
     setTimeout(function () { target.classList.remove('is-target'); }, 2000);
@@ -1038,18 +1041,137 @@ function script(csrf: string): string {
     if (action) action.focus({ preventScroll: true });
   }
 
+  /* ----------------------------------------------------------- highlight -- */
+
+  var C_KEYWORDS = 'abstract as async await break case catch chan class const continue crate debugger declare default defer delete do else enum export extends false final finally fn for from func function go if impl implements import in instanceof interface is let loop map match mod mut namespace new nil null of package private protected pub public readonly ref return select self static struct super switch this throw trait true try type typeof undefined unsafe use var void where while with yield';
+  var HASH_KEYWORDS = 'and as assert async await begin break case class continue def del do elif else elsif end ensure esac except export fi finally for from function global if import in is lambda local module next nil None nonlocal not or pass raise require rescue return self then True False unless until when while with yield';
+  var SQL_KEYWORDS = 'add all alter and as asc begin between by case commit create delete desc distinct drop else end exists false from group having if in index inner insert into is join key left like limit not null offset on or order outer primary references returning right rollback select set table then true union unique update using values when where with';
+  var LANGUAGES = {
+    c: { line: ['//'], block: true, quotes: '"\\'\`', words: C_KEYWORDS },
+    hash: { line: ['#'], block: false, quotes: '"\\'', words: HASH_KEYWORDS },
+    sql: { line: ['--'], block: true, quotes: '\\'"', words: SQL_KEYWORDS, caseless: true },
+    json: { line: [], block: false, quotes: '"', words: 'true false null' },
+    css: { line: [], block: true, quotes: '"\\'', words: 'important' }
+  };
+  var EXTENSIONS = {
+    c: 'js jsx ts tsx mjs cjs mts cts java kt kts scala swift go rs c h cc cpp hpp cs php dart groovy gradle',
+    hash: 'py rb sh bash zsh fish yml yaml toml pl r ex exs cfg conf ini ps1 psm1 dockerfile makefile',
+    sql: 'sql',
+    json: 'json jsonc',
+    css: 'css scss less'
+  };
+  var languageByExtension = {};
+  Object.keys(EXTENSIONS).forEach(function (name) {
+    EXTENSIONS[name].split(' ').forEach(function (ext) { languageByExtension[ext] = name; });
+  });
+
+  function languageOf(path) {
+    var base = String(path).split('/').pop().toLowerCase();
+    if (base === 'dockerfile' || base === 'makefile') return LANGUAGES.hash;
+    var dot = base.lastIndexOf('.');
+    var name = dot >= 0 ? languageByExtension[base.slice(dot + 1)] : undefined;
+    return name ? LANGUAGES[name] : null;
+  }
+
+  function wordSet(language) {
+    if (!language.set) {
+      language.set = Object.create(null);
+      language.words.split(' ').forEach(function (word) { language.set[language.caseless ? word.toLowerCase() : word] = true; });
+    }
+    return language.set;
+  }
+
+  /**
+   * Split one line into [className, text] tokens. \`state.block\` carries an open
+   * block comment and \`state.quote\` an open template string into the next line
+   * of the same file. Text is only ever placed with textContent.
+   */
+  function tokenize(text, language, state) {
+    var out = [];
+    var i = 0;
+    var plain = '';
+    function flush() { if (plain !== '') { out.push(['', plain]); plain = ''; } }
+    function push(cls, value) { flush(); out.push([cls, value]); }
+    var words = wordSet(language);
+    while (i < text.length) {
+      if (state.block) {
+        var close = text.indexOf('*/', i);
+        if (close < 0) { push('tok-c', text.slice(i)); return out; }
+        push('tok-c', text.slice(i, close + 2)); i = close + 2; state.block = false; continue;
+      }
+      if (state.quote) {
+        var q = state.quote;
+        var j = i;
+        while (j < text.length && text[j] !== q) j += text[j] === '\\\\' ? 2 : 1;
+        if (j >= text.length) { push('tok-s', text.slice(i)); return out; }
+        push('tok-s', text.slice(i, j + 1)); i = j + 1; state.quote = ''; continue;
+      }
+      var ch = text[i];
+      var lineComment = false;
+      for (var l = 0; l < language.line.length; l += 1) {
+        if (text.startsWith(language.line[l], i)) { lineComment = true; break; }
+      }
+      if (lineComment) { push('tok-c', text.slice(i)); return out; }
+      if (language.block && text.startsWith('/*', i)) { state.block = true; continue; }
+      if (language.quotes.indexOf(ch) >= 0) {
+        var k = i + 1;
+        while (k < text.length && text[k] !== ch) k += text[k] === '\\\\' ? 2 : 1;
+        if (k >= text.length) {
+          if (ch === '\`') { push('tok-s', text.slice(i)); state.quote = '\`'; return out; }
+          push('tok-s', text.slice(i)); return out;
+        }
+        var literal = text.slice(i, k + 1);
+        var rest = text.slice(k + 1);
+        push(language === LANGUAGES.json && /^\\s*:/.test(rest) ? 'tok-p' : 'tok-s', literal);
+        i = k + 1; continue;
+      }
+      if (/[0-9]/.test(ch) && !/[A-Za-z0-9_$]/.test(text[i - 1] || '')) {
+        var num = /^(0x[0-9a-fA-F_]+|[0-9][0-9_]*(\\.[0-9_]+)?([eE][+-]?[0-9]+)?[a-zA-Z]*)/.exec(text.slice(i));
+        push('tok-n', num[0]); i += num[0].length; continue;
+      }
+      if (/[A-Za-z_$@]/.test(ch)) {
+        var word = /^[A-Za-z_$@][A-Za-z0-9_$]*/.exec(text.slice(i))[0];
+        var after = text.slice(i + word.length);
+        var key = language.caseless ? word.toLowerCase() : word;
+        if (words[key]) push('tok-k', word);
+        else if (/^\\s*\\(/.test(after)) push('tok-f', word);
+        else if (/^[A-Z][a-z0-9]/.test(word) && language !== LANGUAGES.sql) push('tok-t', word);
+        else plain += word;
+        i += word.length; continue;
+      }
+      plain += ch; i += 1;
+    }
+    flush();
+    return out;
+  }
+
+  function codeNode(text, language, state) {
+    var code = make('code', 'diff-code');
+    if (!language || text.length > 2000) { code.textContent = text; return code; }
+    var tokens = tokenize(text, language, state);
+    for (var t = 0; t < tokens.length; t += 1) {
+      if (tokens[t][0] === '') code.appendChild(document.createTextNode(tokens[t][1]));
+      else code.appendChild(make('span', tokens[t][0], tokens[t][1]));
+    }
+    return code;
+  }
+
+  /* ---------------------------------------------------------------- diff -- */
+
+  /** Files in the reading order: the first hunk each file has in the analysis, then any file it does not list. */
+  function readingRank() {
+    var rank = Object.create(null);
+    var current = currentAnalysis();
+    var hunks = current && Array.isArray(current.hunks) ? current.hunks : [];
+    for (var h = 0; h < hunks.length; h += 1) {
+      if (hunks[h] && !(hunks[h].file in rank)) rank[hunks[h].file] = h;
+    }
+    return rank;
+  }
+
   function renderDiff() {
     var snap = snapshot();
     show(el.diffSection, Boolean(snap));
-    // A render rebuilds every block, so keep each file's scroll offset by path:
-    // a reviewer deep in a long diff must not be thrown back to the top by a
-    // preview or a reconcile.
-    var offsets = {};
-    var previous = el.diffBody.querySelectorAll('.file-block');
-    for (var p = 0; p < previous.length; p += 1) {
-      var scroller = previous[p].querySelector('.diff-scroll');
-      if (scroller) offsets[previous[p].getAttribute('data-path')] = { top: scroller.scrollTop, left: scroller.scrollLeft };
-    }
     el.diffBody.textContent = '';
     if (!snap) return;
     if (typeof snap.unavailableReason === 'string' && snap.unavailableReason !== '') {
@@ -1066,31 +1188,43 @@ function script(csrf: string): string {
     for (var i = 0; i < list.length; i += 1) {
       var line = list[i];
       var group = index[line.path];
-      if (!group) { group = { path: line.path, lines: [] }; index[line.path] = group; groups.push(group); }
+      if (!group) { group = { path: line.path, lines: [], order: groups.length }; index[line.path] = group; groups.push(group); }
       group.lines.push(line);
     }
+    var rank = readingRank();
+    groups.sort(function (a, b) {
+      var ra = a.path in rank ? rank[a.path] : Infinity;
+      var rb = b.path in rank ? rank[b.path] : Infinity;
+      return ra === rb ? a.order - b.order : ra - rb;
+    });
     var disabled = composeDisabled();
-    for (var g = 0; g < groups.length; g += 1) {
-      var block = renderFileBlock(groups[g], disabled);
-      el.diffBody.appendChild(block);
-      var kept = offsets[groups[g].path];
-      if (!kept) continue;
-      var target = block.querySelector('.diff-scroll');
-      if (target) { target.scrollTop = kept.top; target.scrollLeft = kept.left; }
-    }
+    for (var g = 0; g < groups.length; g += 1) el.diffBody.appendChild(renderFileBlock(groups[g], disabled));
   }
 
   function renderFileBlock(group, disabled) {
-    var block = make('section', 'file-block');
+    var block = make('details', 'file-block');
     block.dataset.path = group.path;
-    var head = make('h4', 'file-head');
+    block.open = closedFiles[group.path] !== true;
+    block.addEventListener('toggle', function () { closedFiles[group.path] = !block.open; });
+    var head = make('summary', 'file-head');
     head.appendChild(make('span', 'file-path', group.path));
-    head.appendChild(make('span', 'file-count', group.lines.length + ' line' + (group.lines.length === 1 ? '' : 's')));
+    var added = 0;
+    var removed = 0;
+    for (var c = 0; c < group.lines.length; c += 1) {
+      if (group.lines[c].kind === 'add') added += 1;
+      else if (group.lines[c].kind === 'delete') removed += 1;
+    }
+    var size = make('span', 'file-size mono');
+    size.appendChild(make('span', 'plus', '+' + added));
+    size.appendChild(document.createTextNode(' '));
+    size.appendChild(make('span', 'minus', '−' + removed));
+    head.appendChild(size);
     var worst = worstStatusFor(group.path);
     if (worst !== '') head.appendChild(make('span', 'chip status-' + worst, worst));
     block.appendChild(head);
-    var scroll = make('div', 'diff-scroll');
     var rows = make('div', 'diff-rows');
+    var language = languageOf(group.path);
+    var state = { block: false, quote: '' };
     for (var i = 0; i < group.lines.length; i += 1) {
       var line = group.lines[i];
       var row = make('div', 'diff-row kind-' + String(line.kind));
@@ -1099,7 +1233,8 @@ function script(csrf: string): string {
       row.dataset.side = line.side;
       var attached = commentIndexAt(line);
       var arming = reattachIndex >= 0;
-      var action = make('button', 'diff-action' + (arming ? ' is-armed' : ''), arming ? 'Attach' : (attached >= 0 ? 'Edit' : 'Comment'));
+      var gutter = make('span', 'diff-gutter');
+      var action = make('button', 'diff-action' + (arming ? ' is-armed' : '') + (attached >= 0 ? ' has-comment' : ''), arming ? 'Attach' : '+');
       action.type = 'button';
       action.dataset.action = 'comment';
       action.dataset.path = line.path;
@@ -1108,16 +1243,16 @@ function script(csrf: string): string {
       action.disabled = disabled;
       action.setAttribute('aria-label', arming
         ? 'Attach the comment awaiting revalidation to line ' + line.line + ' of ' + line.path + ' (' + sideLabel(line.side) + ' side)'
-        : 'Comment on line ' + line.line + ' of ' + line.path + ' (' + sideLabel(line.side) + ' side)');
-      row.appendChild(action);
-      row.appendChild(make('span', 'diff-ln', line.line));
-      row.appendChild(make('span', 'diff-side', sideLabel(line.side)));
-      row.appendChild(make('code', 'diff-code', line.text));
+        : (attached >= 0 ? 'Edit the comment on line ' : 'Comment on line ') + line.line + ' of ' + line.path + ' (' + sideLabel(line.side) + ' side)');
+      gutter.appendChild(action);
+      gutter.appendChild(make('span', 'diff-ln', line.line));
+      row.appendChild(gutter);
+      row.appendChild(make('span', 'diff-mark', line.kind === 'add' ? '+' : line.kind === 'delete' ? '−' : ' '));
+      row.appendChild(codeNode(line.text, language, state));
       rows.appendChild(row);
       if (attached >= 0) rows.appendChild(editorRow(attached));
     }
-    scroll.appendChild(rows);
-    block.appendChild(scroll);
+    block.appendChild(rows);
     return block;
   }
 
@@ -1130,7 +1265,7 @@ function script(csrf: string): string {
     setText(el.draftCount, comments.length === 0 ? 'no line comments yet' : comments.length + ' line comment' + (comments.length === 1 ? '' : 's'));
     if (anchored.length === 0) {
       el.draftList.appendChild(make('p', 'empty', comments.length === 0
-        ? 'No line comments yet. Use the Comment button on a diff line.'
+        ? 'No line comments yet. Hover a diff line and press + to add one.'
         : 'No line comment is attached to the current revision yet. Every comment above needs revalidation.'));
       return;
     }
@@ -1503,6 +1638,16 @@ const STYLES = `
   --del: #82071e;
   --del-bg: #ffebe9;
   --cursor: #2f6fae;
+  --add-ink: #1a7f37;
+  --del-ink: #cf222e;
+  --add-gutter: #ccffd8;
+  --del-gutter: #ffd7d5;
+  --syn-keyword: #cf222e;
+  --syn-string: #0a3069;
+  --syn-comment: #6e7781;
+  --syn-number: #0550ae;
+  --syn-type: #953800;
+  --syn-func: #8250df;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
@@ -1525,6 +1670,16 @@ const STYLES = `
     --del: #ffdcd7;
     --del-bg: #3f1b22;
     --cursor: #7aa7d8;
+    --add-ink: #3fb950;
+    --del-ink: #f85149;
+    --add-gutter: #1b4721;
+    --del-gutter: #5a1e25;
+    --syn-keyword: #ff7b72;
+    --syn-string: #a5d6ff;
+    --syn-comment: #8b949e;
+    --syn-number: #79c0ff;
+    --syn-type: #ffa657;
+    --syn-func: #d2a8ff;
   }
 }
 *, *::before, *::after { box-sizing: border-box; }
@@ -1650,38 +1805,49 @@ form { display: flex; flex-direction: column; gap: 12px; align-items: flex-start
 .facts dd.mono { font-size: 12px; }
 .file-block { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 14px; overflow: hidden; min-width: 0; }
 .file-head {
-  display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline;
-  padding: 8px 12px; background: var(--sunken); border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+  padding: 8px 12px; background: var(--sunken); font-size: 13px; cursor: pointer; list-style: none;
 }
-.file-path { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; min-width: 0; }
-.file-count { font-size: 12px; color: var(--ink-soft); }
-.diff-scroll { max-height: 65vh; overflow: auto; max-width: 100%; }
-.diff-rows { width: max-content; min-width: 100%; }
+.file-head::-webkit-details-marker { display: none; }
+.file-head::before { content: ""; width: 7px; height: 7px; border-right: 2px solid var(--ink-soft); border-bottom: 2px solid var(--ink-soft); transform: rotate(-45deg); transition: transform 0.12s; margin-right: 2px; }
+.file-block[open] > .file-head { border-bottom: 1px solid var(--line); }
+.file-block[open] > .file-head::before { transform: rotate(45deg); }
+.file-path { font-family: var(--mono); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.file-size { font-size: 12px; }
+.file-size .plus, .hunk-size .plus { color: var(--add-ink); }
+.file-size .minus, .hunk-size .minus { color: var(--del-ink); }
+.diff-rows { min-width: 0; }
 .diff-row {
-  display: flex; align-items: stretch; border-top: 1px solid var(--line);
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.5; min-height: 22px;
+  display: flex; align-items: stretch;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6; min-height: 22px;
 }
-.diff-rows > .diff-row:first-child { border-top: 0; }
+.diff-gutter { position: relative; flex: 0 0 auto; width: 64px; border-right: 1px solid var(--line); }
+.diff-ln { display: block; padding: 0 10px 0 28px; text-align: right; color: var(--ink-soft); user-select: none; }
 .diff-action {
-  position: sticky; left: 0; z-index: 2; flex: 0 0 auto; width: 62px;
-  border: 0; border-right: 1px solid var(--line); border-radius: 0;
-  background: var(--panel); color: var(--ink-soft);
-  padding: 1px 6px; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+  position: absolute; left: 4px; top: 1px; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 6px; background: var(--cursor); color: #fff;
+  font: 700 15px/20px var(--sans); cursor: pointer; opacity: 0;
 }
-.diff-action:hover:not(:disabled) { background: var(--sunken); color: var(--ink); }
-.diff-ln { flex: 0 0 auto; width: 54px; padding: 1px 8px; text-align: right; color: var(--ink-soft); border-right: 1px solid var(--line); }
-.diff-side { flex: 0 0 auto; width: 40px; padding: 1px 8px; color: var(--ink-soft); border-right: 1px solid var(--line); }
-.diff-code { display: block; padding: 1px 10px; white-space: pre; }
+.diff-row:hover .diff-action:not(:disabled), .diff-action:focus-visible { opacity: 1; }
+.diff-action:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.diff-action.has-comment { opacity: 1; background: var(--warn); }
+.diff-action.is-armed { opacity: 1; width: auto; padding: 0 6px; font-size: 11px; }
+.diff-mark { flex: 0 0 auto; width: 20px; text-align: center; color: var(--ink-soft); user-select: none; }
+.diff-code { display: block; flex: 1 1 auto; min-width: 0; padding: 0 10px 0 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .kind-add { background: var(--add-bg); }
 .kind-delete { background: var(--del-bg); }
-.kind-add .diff-action { background: var(--add-bg); }
-.kind-delete .diff-action { background: var(--del-bg); }
-.kind-add .diff-code { color: var(--add); }
-.kind-delete .diff-code { color: var(--del); }
+.kind-add .diff-mark { color: var(--add-ink); }
+.kind-delete .diff-mark { color: var(--del-ink); }
+.kind-add .diff-gutter { background: var(--add-gutter); }
+.kind-delete .diff-gutter { background: var(--del-gutter); }
+.tok-k { color: var(--syn-keyword); }
+.tok-s { color: var(--syn-string); }
+.tok-c { color: var(--syn-comment); font-style: italic; }
+.tok-n { color: var(--syn-number); }
+.tok-t { color: var(--syn-type); }
+.tok-f { color: var(--syn-func); }
+.tok-p { color: var(--syn-number); }
 .editor {
-  position: sticky; left: 0; z-index: 1;
-  width: min(960px, calc(100vw - 96px));
   background: var(--warn-bg); border-top: 1px solid var(--line-strong);
   border-bottom: 1px solid var(--line-strong); padding: 10px 12px;
   display: flex; flex-direction: column; gap: 6px;
@@ -1739,7 +1905,6 @@ body.is-busy button { cursor: progress; }
   .wrap { padding: 18px 12px 48px; }
   .panel { padding: 12px; }
   .facts { grid-template-columns: 1fr; }
-  .editor { width: min(960px, calc(100vw - 64px)); }
-  .diff-ln { width: 44px; }
+  .diff-gutter { width: 56px; }
 }
 `;
