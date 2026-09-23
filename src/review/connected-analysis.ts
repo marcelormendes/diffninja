@@ -12,6 +12,7 @@
  */
 
 import { CHANGE_FACT_QUESTIONS, type ChangeFactQuestion } from "./change-facts.js";
+import { verdictOf, type QuestionKind, type Verdict } from "./questions.js";
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
 
 /** Most agenda entries the page lists; the full report has the rest. */
@@ -42,16 +43,21 @@ export interface ConnectedFact {
 
 export interface ConnectedQuestion {
   readonly id: string;
+  readonly kind: QuestionKind;
   readonly text: string;
   readonly options: readonly string[];
   choice?: string;
   answeredBy?: string;
+  /** The short label the page shows for the recorded answer. */
+  verdict?: Verdict;
 }
 
 export interface ConnectedHunk {
   readonly id: string;
   readonly file: string;
   readonly header: string;
+  readonly added: number;
+  readonly removed: number;
   /** First line to scroll to, on the side the diff shows it: the new side unless the hunk only removes. */
   readonly line: number;
   readonly side: "LEFT" | "RIGHT";
@@ -132,10 +138,12 @@ export function connectedAnalysisOf(
 ): ConnectedAnalysis {
   const questionsByUnit = new Map<string, ConnectedQuestion[]>();
   for (const question of report.questions) {
-    const view: ConnectedQuestion = { id: question.id, text: question.text, options: question.options };
+    const view: ConnectedQuestion = { id: question.id, kind: question.kind, text: question.text, options: question.options };
     if (question.answer !== undefined) {
       view.choice = question.answer.choice;
       view.answeredBy = question.answer.answeredBy;
+      const verdict = verdictOf(question.kind, question.answer.choice);
+      if (verdict !== undefined) view.verdict = verdict;
     }
     const owner = question.unitIds[0];
     if (owner === undefined) continue;
@@ -158,6 +166,8 @@ export function connectedAnalysisOf(
       id: item.id,
       file: item.file,
       header: item.header,
+      added: item.added,
+      removed: item.removed,
       line: landing.line,
       side: landing.side,
       status: item.status,

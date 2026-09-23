@@ -1,5 +1,5 @@
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
-import type { ReviewQuestion } from "./questions.js";
+import { verdictOf, type ReviewQuestion } from "./questions.js";
 import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
@@ -303,21 +303,28 @@ function renderHistory(item: ReviewItem): string {
  */
 function renderQuestions(questions: readonly ReviewQuestion[]): string {
   if (questions.length === 0) return "";
+  const verdicts = questions.flatMap((question) => {
+    const verdict = question.answer === undefined ? undefined : verdictOf(question.kind, question.answer.choice);
+    return verdict === undefined ? [] : [{ question, verdict }];
+  });
+  const chips = verdicts
+    .map(({ question, verdict }) => `<span class="verdict verdict-${verdict.tone}" title="${escapeHtml(question.text)}">${escapeHtml(verdict.label)}</span>`)
+    .join("");
+  const answeredBy = verdicts[0]?.question.answer?.answeredBy;
+  const pending = questions.filter((question) => question.answer === undefined).length;
   const rows = questions.map((question) => {
     const answer = question.answer;
-    const shown =
-      answer === undefined
-        ? '<span class="obs-line">not answered</span>'
-        : question.options.includes(answer.choice)
-          ? `${escapeHtml(answer.choice)} <span class="obs-line">answered by ${escapeHtml(answer.answeredBy)}</span>`
-          : escapeHtml("unrecognized answer");
-    return `<dt>${escapeHtml(question.text)}</dt><dd class="mono">${shown}</dd>`;
+    const shown = answer === undefined ? "not answered yet" : (verdictOf(question.kind, answer.choice)?.label ?? "unrecognized answer");
+    return `<dt>${escapeHtml(question.text)}</dt><dd>${escapeHtml(shown)}</dd>`;
   });
   return [
+    verdicts.length === 0
+      ? ""
+      : `<p class="verdicts"><span class="verdicts-by">${escapeHtml(answeredBy ?? "Your agent")}:</span>${chips}</p>`,
     '<details class="obs">',
-    `<summary>Questions for your agent (${questions.filter((question) => question.answer !== undefined).length}/${questions.length} answered)</summary>`,
+    `<summary>${pending === 0 ? "What the agent was asked" : `Questions for your agent (${pending} not answered yet)`}</summary>`,
     '<div class="obs-body">',
-    '<p class="note">diffninja asks these of the agent that requested the review; answers are that agent&#39;s reading, not a verdict, and never change the order or the status.</p>',
+    '<p class="note">Answers are the agent&#39;s reading, not a verdict. They never change a status.</p>',
     `<dl class="obs-list">${rows.join("")}</dl>`,
     "</div>",
     "</details>",
@@ -1024,6 +1031,12 @@ button:disabled { cursor: default; opacity: .65; }
 .obs { margin: 10px 14px; }
 .obs > summary { cursor: pointer; font-size: 12.5px; color: var(--ink-soft); }
 .obs-body { border: 1px dashed var(--line-strong); border-radius: 6px; padding: 8px 10px; margin-top: 6px; }
+.verdicts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 16px 4px; }
+.verdicts-by { font-size: 12.5px; color: var(--ink-soft); margin-right: 2px; }
+.verdict { font-size: 12.5px; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink); }
+.verdict-ok { border-color: var(--teal); color: var(--teal); }
+.verdict-watch { border-color: var(--warn, #a2701f); color: var(--warn, #a2701f); font-weight: 600; }
+.verdict-unsure { border-style: dashed; color: var(--ink-soft); }
 .obs-body .note { margin: 0 0 6px; font-size: 12.5px; }
 .obs-note { font-style: italic; }
 .obs-line { font-family: var(--sans); color: var(--ink-soft); margin-left: 6px; }
