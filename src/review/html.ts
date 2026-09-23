@@ -81,6 +81,42 @@ export function renderReview(report: ReviewReport): string {
   ].join("\n");
 }
 
+/** Trims the report's call-flow view to live inside the pull request page's drawer. */
+const EMBEDDED_FLOW_STYLES = `
+.flow-embed { padding: 12px 14px 18px; }
+.cf-diff-link { display: none !important; }
+.flow-single .cf-jump { display: none; }
+`;
+
+/**
+ * The call flows of one review as a page of their own, for the connected pull
+ * request page to show beside its diff: every changed file with call flows, or
+ * only `file` when given. Tree, Graph and Sequence work as in the report; links
+ * into the report's diff are dropped, since the page showing this has its own.
+ */
+export function renderCallFlowPage(report: ReviewReport, file?: string): string {
+  const scoped = file === undefined ? report : { ...report, callFlows: report.callFlows.filter((entry) => entry.file === file) };
+  return [
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<meta name="color-scheme" content="light dark">',
+    `<title>${escapeHtml(file === undefined ? "Call flows" : `Call flow: ${file}`)}</title>`,
+    `<style>${STYLES}\n${CALL_FLOW_STYLES}\n${EMBEDDED_FLOW_STYLES}</style>`,
+    "</head>",
+    "<body>",
+    `<section id="view-call-flow" class="flow-embed${file === undefined ? "" : " flow-single"}" aria-label="Call flow">`,
+    renderCallFlows(scoped),
+    "</section>",
+    `<script>document.documentElement.classList.add('js');\n${CALL_FLOW_SCRIPT}</script>`,
+    "</body>",
+    "</html>",
+    "",
+  ].join("\n");
+}
+
 const STATUS_ORDER: readonly ReviewStatus[] = [
   "attention",
   "uncertain",

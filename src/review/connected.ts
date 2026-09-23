@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ConnectedReview, type ConnectedState, type ReviewPayload } from "./github.js";
 import { renderConnectedPage } from "./connected-html.js";
 import type { ConnectedAnalysisView } from "./connected-analysis.js";
+import { reportPolicy } from "./report-pages.js";
 
 const MAX_BODY = 256 * 1024;
 const loadSchema = z.object({ url: z.string() }).strict();
@@ -24,6 +25,12 @@ export interface ConnectedOptions {
    * describe the snapshot the review currently holds, or say it is unavailable.
    */
   readonly analysis?: () => Promise<ConnectedAnalysisView>;
+  /**
+   * The call-flow page of the analysis of snapshot `snapshotId`, for one changed
+   * file or all of them, for `GET /flow`. Undefined when that snapshot is not
+   * the one analyzed or it has no call flows there.
+   */
+  readonly flow?: (snapshotId: string, file: string | undefined) => Promise<string | undefined>;
 }
 
 const NO_ANALYSIS: ConnectedAnalysisView = {
@@ -64,7 +71,7 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "no-referrer");
-    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${csrf}'; style-src 'nonce-${csrf}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${csrf}'; style-src 'nonce-${csrf}'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
     const json = (code: number, value: ApiResponse) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(value)); };
     if (!requestIsTrusted(req, origin)) { json(403, { error: "Untrusted Host or Origin." }); return; }
     if (req.method === "GET" && req.url === "/") {
@@ -77,6 +84,24 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
       } catch (error) {
         json(200, { available: false, reason: `Local analysis failed: ${error instanceof Error ? error.message : "unknown error"}` });
       }
+      return;
+    }
+    if (req.method === "GET" && (req.url ?? "").startsWith("/flow?")) {
+      const query = new URL(req.url ?? "", origin).searchParams;
+      const snapshotId = query.get("snapshot") ?? "";
+      const file = query.get("file") ?? undefined;
+      let html: string | undefined;
+      try {
+        html = options.flow === undefined ? undefined : await options.flow(snapshotId, file);
+      } catch {
+        html = undefined;
+      }
+      if (html === undefined) { json(404, { error: "No call flow for that revision and file." }); return; }
+      // Only this page may frame it: the drawer beside the diff.
+      res.setHeader("Content-Security-Policy", reportPolicy(html).replace("frame-ancestors 'none'", "frame-ancestors 'self'"));
+      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
       return;
     }
     const routes = ["/api/load", "/api/preview", "/api/submit", "/api/reconcile"];

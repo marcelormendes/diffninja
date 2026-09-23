@@ -120,7 +120,11 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   Missing/ambiguous references ask for one full link without echoing pasted text.
 - Keep connected safeguards: immutable snapshot binding, canonical line anchors,
   stale-snapshot and duplicate-submit blocking, loopback-only Host/Origin/CSRF
-  checks, and no general GitHub/command proxy.
+  checks, and no general GitHub/command proxy. `GET /flow?snapshot=&file=`
+  serves the analyzed snapshot's call-flow page (`renderCallFlowPage`, hashed
+  CSP) framable only by its own origin (`frame-ancestors 'self'`,
+  `X-Frame-Options: SAMEORIGIN`); any other snapshot or file is a 404, and the
+  review page's CSP allows only `frame-src 'self'`.
 - Static reports lead with exact expected-outcome metadata and a deterministic
   review agenda. Description/source matches are navigation hints, never proof
   of fulfillment; generated claims remain separately attributed. All hunks stay

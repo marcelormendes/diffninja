@@ -124,6 +124,13 @@ export function renderConnectedPage(csrf: string): string {
     '<p class="note">Reports and this page contain source code. Keep them private. Diffninja gives no automatic approval.</p>',
     "</footer>",
     "</div>",
+    '<aside id="flow-drawer" class="flow-drawer" aria-labelledby="flow-title" hidden>',
+    '<div class="flow-bar">',
+    '<h2 id="flow-title" class="flow-title">Call flow</h2>',
+    '<button type="button" id="flow-close" class="link-button" data-action="close-flow">Close</button>',
+    "</div>",
+    '<iframe id="flow-frame" class="flow-frame" title="Call flow"></iframe>',
+    "</aside>",
     `<script nonce="${nonce}">${script(csrf)}</script>`,
     "</body>",
     "</html>",
@@ -165,6 +172,8 @@ function script(csrf: string): string {
   var busyAction = '';
   var placeAnchor = null;
   var revealReceipt = false;
+  var flowSnapshot = '';
+  var flowReturn = null;
   var analysisFor = '';
   var analysisLoading = false;
   var analysisTimer = null;
@@ -951,6 +960,7 @@ function script(csrf: string): string {
     go.dataset.line = String(hunk.line);
     go.dataset.side = hunk.side === 'LEFT' ? 'LEFT' : 'RIGHT';
     head.appendChild(go);
+    if (hasCallFlow(String(hunk.file))) head.appendChild(flowButton(String(hunk.file), 'Call flow'));
     entry.appendChild(head);
     var verdicts = answeredVerdicts(hunk);
     if (verdicts.length > 0) {
@@ -1028,6 +1038,15 @@ function script(csrf: string): string {
     el.analysisBody.appendChild(make('p', 'order-source', byAgent
       ? 'Order recommended by ' + String(analysis.order.orderedBy) + ', the agent that opened this page. Labels are its answers; statuses come from diffninja.'
       : 'Waiting for your agent\u2019s recommended order. Until it arrives, this is the order diffninja computed.'));
+    var flowFiles = Array.isArray(analysis.callFlowFiles) ? analysis.callFlowFiles : [];
+    if (flowFiles.length > 0) {
+      var flows = make('p', 'flow-line');
+      flows.appendChild(flowButton('', flowFiles.length === 1 ? 'See the call flow (1 file)' : 'See the call flows (' + flowFiles.length + ' files)'));
+      el.analysisBody.appendChild(flows);
+    } else if (analysis.scope && analysis.scope.source === 'patch' && typeof analysis.scope.note === 'string') {
+      el.analysisBody.appendChild(make('p', 'note flow-missing', 'No call-flow diagrams for this review. ' + analysis.scope.note));
+    }
+    if (!el.flowDrawer.hidden && flowSnapshot !== analysis.snapshotId) closeFlow();
     var total = analysis.questions ? analysis.questions.total : 0;
     var answered = analysis.questions ? analysis.questions.answered : 0;
     if (total > 0 && answered < total) {
@@ -1179,6 +1198,56 @@ function script(csrf: string): string {
   /* ---------------------------------------------------------------- diff -- */
 
   /** Files in the reading order: the first hunk each file has in the analysis, then any file it does not list. */
+  /* ------------------------------------------------------------ call flow -- */
+
+  function hasCallFlow(path) {
+    var current = currentAnalysis();
+    return Boolean(current && Array.isArray(current.callFlowFiles) && current.callFlowFiles.indexOf(path) >= 0);
+  }
+
+  function flowButton(path, label) {
+    var button = make('button', 'flow-button', label);
+    button.type = 'button';
+    button.dataset.action = 'open-flow';
+    if (path !== '') button.dataset.path = path;
+    button.setAttribute('aria-label', path === '' ? 'Open the call flows of every changed file' : 'Open the call flow of ' + path);
+    return button;
+  }
+
+  /** Show the call flow of one file, or of every file for an empty path, in the drawer beside the diff. */
+  function openFlow(path, opener) {
+    var current = currentAnalysis();
+    if (!current) return;
+    var src = '/flow?snapshot=' + encodeURIComponent(current.snapshotId) + (path === '' ? '' : '&file=' + encodeURIComponent(path));
+    if (el.flowFrame.getAttribute('src') !== src) el.flowFrame.setAttribute('src', src);
+    flowSnapshot = current.snapshotId;
+    setText(el.flowTitle, path === '' ? 'Call flows' : 'Call flow: ' + path);
+    el.flowFrame.title = path === '' ? 'Call flows of every changed file' : 'Call flow of ' + path;
+    if (el.flowDrawer.hidden) flowReturn = opener || document.activeElement;
+    show(el.flowDrawer, true);
+    document.body.classList.add('flow-open');
+    el.flowClose.focus();
+  }
+
+  function closeFlow() {
+    if (el.flowDrawer.hidden) return;
+    show(el.flowDrawer, false);
+    document.body.classList.remove('flow-open');
+    // The opener may have been re-rendered meanwhile: return to its replacement.
+    var back = flowReturn && flowReturn.isConnected ? flowReturn : null;
+    if (!back && flowReturn && flowReturn.dataset && flowReturn.dataset.action === 'open-flow') {
+      back = document.querySelector(flowReturn.dataset.path
+        ? '[data-action="open-flow"][data-path="' + CSS.escape(flowReturn.dataset.path) + '"]'
+        : '[data-action="open-flow"]:not([data-path])');
+    }
+    if (back) back.focus();
+    flowReturn = null;
+  }
+
+  function onFlowKey(event_) {
+    if (event_.key === 'Escape' && !el.flowDrawer.hidden) { event_.preventDefault(); closeFlow(); }
+  }
+
   /* --------------------------------------------------------- suggestions -- */
 
   function anchorKeyOf(anchor) { return anchor.path + '|' + anchor.side + ':' + anchor.line; }
@@ -1390,6 +1459,7 @@ function script(csrf: string): string {
     head.appendChild(size);
     var worst = worstStatusFor(group.path);
     if (worst !== '') head.appendChild(make('span', 'chip status-' + worst, worst));
+    if (hasCallFlow(group.path)) head.appendChild(flowButton(group.path, 'Call flow'));
     block.appendChild(head);
     var rows = make('div', 'diff-rows');
     var language = languageOf(group.path);
@@ -1735,6 +1805,8 @@ function script(csrf: string): string {
     var action = node.getAttribute('data-action');
     placeAnchor = action === 'preview' || action === 'submit' || action === 'refresh' ? node : null;
     if (action === 'comment') { event_.preventDefault(); addComment(node); return; }
+    if (action === 'open-flow') { event_.preventDefault(); openFlow(node.getAttribute('data-path') || '', node); return; }
+    if (action === 'close-flow') { event_.preventDefault(); closeFlow(); return; }
     if (action === 'add-suggestion') { event_.preventDefault(); addSuggestion(node); return; }
     if (action === 'add-all-suggestions') { event_.preventDefault(); addAllSuggestions(); return; }
     if (action === 'dismiss-suggestion') { event_.preventDefault(); dismissSuggestion(node); return; }
@@ -1818,6 +1890,15 @@ function script(csrf: string): string {
     el.receiptBody = byId('receipt-body');
     el.eventInputs = document.querySelectorAll('input[name="event"]');
     el.loadForm.addEventListener('submit', onLoad);
+    el.flowDrawer = byId('flow-drawer');
+    el.flowTitle = byId('flow-title');
+    el.flowClose = byId('flow-close');
+    el.flowFrame = byId('flow-frame');
+    // Escape closes the drawer from inside the diagram too: it is served from this origin.
+    el.flowFrame.addEventListener('load', function () {
+      try { el.flowFrame.contentDocument.addEventListener('keydown', onFlowKey); } catch (error) { /* not ours to reach */ }
+    });
+    document.addEventListener('keydown', onFlowKey);
     document.addEventListener('click', onClick);
     document.addEventListener('change', onChange);
     document.addEventListener('input', onInput);
@@ -1910,6 +1991,26 @@ body {
   overflow-wrap: break-word;
 }
 .wrap { max-width: 1240px; margin: 0 auto; padding: 26px 20px 64px; }
+.flow-button {
+  font-size: 12.5px; padding: 2px 9px; border-radius: 999px; margin-left: 8px;
+  color: var(--teal); border-color: var(--teal); background: transparent;
+}
+.flow-line .flow-button { margin-left: 0; font-size: 13.5px; padding: 5px 12px; }
+.flow-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 20;
+  width: min(760px, 52vw); display: flex; flex-direction: column;
+  background: var(--panel); border-left: 1px solid var(--line-strong);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.25);
+}
+.flow-drawer[hidden] { display: none; }
+.flow-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+}
+.flow-title { font-size: 14px; overflow-wrap: anywhere; font-family: var(--mono); }
+.flow-frame { flex: 1 1 auto; width: 100%; border: 0; background: var(--panel); }
+@media (min-width: 1100px) { body.flow-open .wrap { margin-right: min(760px, 52vw); } }
+@media (max-width: 1099px) { .flow-drawer { width: 100%; } }
 h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
 h1 { font-size: clamp(1.3rem, 1.05rem + 1.1vw, 1.8rem); overflow-wrap: anywhere; }
 h2 { font-size: 1.02rem; }

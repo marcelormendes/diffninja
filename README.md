@@ -68,10 +68,13 @@ static review gives, for exactly that revision: every hunk's status and change
 facts with the line each rests on, the checks that ran, a link to the full
 report, and "go to the diff" buttons. Questions for your agent (does this
 change behavior, does a test exercise it, does it serve the stated goal) show
-its answers as they arrive, attributed to the agent's client. If you also tell
-the agent where your local clone is (`repo`), and the clone already has the
-pull request's commits, call flows and definitions are added; diffninja never
-fetches or writes in it.
+its answers as they arrive, attributed to the agent's client. When the agent
+works inside your local clone it passes it as `repo`; once the clone has the
+pull request's commits, the analysis adds definitions and call flows, and the
+page opens each file's call-flow diagrams (Tree, Graph, Sequence) in a drawer
+beside the diff, from the reading order or the file's header. diffninja never
+fetches or writes in the clone; when it lacks the commits, the page says so and
+names the `git fetch` that would add them.
 
 ## Review a diff or a git range
 

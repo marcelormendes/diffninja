@@ -22,6 +22,31 @@ describe("connected session boundary", () => {
     expect(hostileHostStatus).toBe(403);
     expect((await fetch(url + "api/load", { method: "POST", headers: { Origin: new URL(url).origin, "Content-Type": "application/json" }, body: JSON.stringify({ url: "https://github.com/a/b/pull/1" }) })).status).toBe(403);
   });
+  it("serves call-flow pages only to its own origin's frames, and only for the analyzed revision", async () => {
+    const asked: Array<[string, string | undefined]> = [];
+    const session = await serveConnected(undefined, {
+      flow: async (snapshotId, file) => {
+        asked.push([snapshotId, file]);
+        return snapshotId === "snap-1" ? "<!doctype html><title>flow</title><style>p{}</style><script>void 0</script>" : undefined;
+      },
+    });
+    servers.push(session);
+    const page = await fetch(session.url);
+    expect(page.headers.get("content-security-policy")).toContain("frame-src 'self'");
+    expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    const flow = await fetch(session.url + "flow?snapshot=snap-1&file=" + encodeURIComponent("src/a b.ts"));
+    expect(flow.status).toBe(200);
+    expect(flow.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+    const policy = flow.headers.get("content-security-policy")!;
+    expect(policy).toContain("frame-ancestors 'self'");
+    expect(policy).not.toContain("frame-ancestors 'none'");
+    expect(policy).toMatch(/script-src 'sha256-/);
+    expect(await flow.text()).toContain("<title>flow</title>");
+    expect((await fetch(session.url + "flow?snapshot=snap-2")).status).toBe(404);
+    expect(asked).toEqual([["snap-1", "src/a b.ts"], ["snap-2", undefined]]);
+    expect((await fetch(session.url + "flow?snapshot=snap-1", { headers: { Origin: "https://attacker.example" } })).status).toBe(403);
+    expect((await fetch(session.url + "flow?snapshot=snap-1", { headers: { "Sec-Fetch-Site": "cross-site" } })).status).toBe(403);
+  });
   it("rejects arbitrary endpoints and malformed authenticated requests", async () => {
     const { url } = await start();
     const page = await fetch(url);
