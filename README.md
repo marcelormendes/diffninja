@@ -123,9 +123,11 @@ The tool writes no report files. Arguments and examples:
    boundary group (what the change says or bounds) and of the failure group
    (failures, CI gates, permissions) — each group counts once, never summed. The report lists
    manual work first (binary and other metadata-only units), then the read hunks
-   by priority, then passes. Hunks in test files (by path convention: `test/`,
-   `*.test.ts`, `test_*.py`, `*_test.go`, …) come after the other hunks, still
-   ordered by their own priority: a regression test changes as much as its fix.
+   by priority, then passes; among equal priorities the hunk that changes more
+   lines comes first. Hunks in test files (by path convention: `test/`,
+   `*.test.ts`, `test_*.py`, `*_test.go`, …, including snapshots diffninja does
+   not read) come after the other hunks, still ordered by their own priority: a
+   regression test changes as much as its fix.
    Documentation is not demoted, because prose can be normative. Status is a
    label for filtering and never reorders the report.
 4. **Questions for your agent.** Where a judgment needs meaning rather than

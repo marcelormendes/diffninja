@@ -166,6 +166,26 @@ describe("report order", () => {
     expect(byId(items, "type-test").priority).toBeGreaterThan(byId(items, "fix").priority);
   });
 
+  test("among equal priorities the larger change comes first, then diff order", () => {
+    const { items } = reviewUnits([
+      makeUnit({ id: "small", file: "a.js", diff: hunk("-if (a > 1) run();", "+if (a >= 1) run();") }),
+      makeUnit({ id: "large", file: "b.js", diff: hunk("-if (b > 1) run();", "+if (b >= 1) run();", "+log(b);", "+log(b + 1);") }),
+      makeUnit({ id: "small-too", file: "c.js", diff: hunk("-if (c > 1) run();", "+if (c >= 1) run();") }),
+    ]);
+    expect(new Set(items.map((item) => item.priority)).size).toBe(1);
+    expect(items.map((item) => item.id)).toEqual(["large", "small", "small-too"]);
+  });
+
+  test("a test file diffninja cannot read goes with the tests, after the code", () => {
+    const { items } = reviewUnits([
+      makeUnit({ id: "snapshot", file: "tests/__snapshots__/export.test.ts.snap", diff: hunk("+<svg></svg>") }),
+      makeUnit({ id: "code", file: "src/export.ts", diff: hunk("+export const scale = 2;") }),
+      makeUnit({ id: "test", file: "tests/export.test.ts", diff: hunk("+expect(scale).toBe(2);") }),
+    ]);
+    expect(byId(items, "snapshot").status).toBe("uncertain");
+    expect(items.map((item) => item.id)).toEqual(["code", "snapshot", "test"]);
+  });
+
   test("the same input always produces the same report", () => {
     const units = () => [
       makeUnit({ id: "a", diff: hunk("-if (x > 1) retry();", "+if (x >= 1) retry();") }),

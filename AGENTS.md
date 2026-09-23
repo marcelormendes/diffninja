@@ -114,7 +114,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   `attention` only for an instruction, link, or limit change, else `low`; a test
   file is `attention` only for a limit change, a discarded failure, or a weakened
   gate, else `low`; a formatting-, comment-, or reflow-only change `passed`. Order: manual units, read hunks by
-  priority (test files after the rest), passes. Docs are never demoted by path.
+  priority (test files after the rest, read or not), passes; equal priorities put
+  more changed lines first, then diff order. Docs are never demoted by path.
 - Semantic interpretation belongs to the host agent's model or the human, never
   to a model diffninja calls itself.
 - Reference checks are opt-in and use only the trusted installed compiler and

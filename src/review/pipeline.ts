@@ -82,7 +82,8 @@ export const TRIVIAL_PRIORITY = 5;
 
 /**
  * Report position of one item: manual work, then read hunks outside test files,
- * then read hunks in test files, then passes. Test files come after the code they
+ * then hunks in test files (read or not), then passes; within a position, higher
+ * priority first and, among equal priorities, more changed lines first. Test files come after the code they
  * exercise because a regression test changes as much as its fix does; which file
  * is a test is a path fact. Documentation is not demoted: prose can be normative.
  */
@@ -218,7 +219,13 @@ function readItem(unit: ReviewUnit): ReviewItem {
 export function placementOf(item: ReviewItem): number {
   if (item.status === "passed") return REPORT_PLACEMENT.passed;
   if (item.facts === undefined) return REPORT_PLACEMENT.manual;
-  return item.facts.language !== null && testLikeFile(item.file) ? REPORT_PLACEMENT.readTest : REPORT_PLACEMENT.read;
+  // A test file diffninja cannot read (a snapshot, expected compiler output) is
+  // still a test file: it belongs with the tests, not ahead of the code.
+  return testLikeFile(item.file) ? REPORT_PLACEMENT.readTest : REPORT_PLACEMENT.read;
+}
+
+function changedLines(item: ReviewItem): number {
+  return item.added + item.removed;
 }
 
 /** Route, read, and order every unit. Deterministic: no network, no model, no randomness. */
@@ -238,6 +245,10 @@ export function reviewUnits(units: readonly ReviewUnit[]): ReviewPipelineResult 
     (left, right) =>
       placementOf(left.item) - placementOf(right.item) ||
       right.item.priority - left.item.priority ||
+      // Equal priority: the larger change first. On maintainer-reviewed pull
+      // requests the hunk they commented on was, among equals, usually the one
+      // that changed the most lines, not the first one in path order.
+      changedLines(right.item) - changedLines(left.item) ||
       left.index - right.index,
   );
   return { items: items.map((entry) => entry.item), warnings: [] };
