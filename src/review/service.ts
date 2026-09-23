@@ -42,6 +42,26 @@ function changedLineIdentity(units: readonly ReviewUnit[]): string {
 export const REPORT_CONTEXT_NODES = 8;
 /** Most call-flow block characters one hunk carries in the report. */
 export const REPORT_CALL_FLOW_CHARS = 24_000;
+/** Most characters of whole-diff call-flow trees the report carries. */
+export const REPORT_CALL_FLOW_TREE_CHARS = 64_000;
+
+/** The leading blocks a size bound kept, and how many it left out. */
+interface BoundedBlocks {
+  readonly kept: string[];
+  readonly omitted: number;
+}
+
+/** Leading blocks, whole, within `limit` characters; always at least the first. */
+function keepWithin(blocks: readonly string[], limit: number): BoundedBlocks {
+  const kept: string[] = [];
+  let used = 0;
+  for (const block of blocks) {
+    if (used + block.length > limit && kept.length > 0) break;
+    kept.push(block);
+    used += block.length;
+  }
+  return { kept, omitted: blocks.length - kept.length };
+}
 
 /** Keep the highest-priority context of one hunk, whole, and say what was left out. */
 export function boundReportContext(unit: ReviewUnit): void {
@@ -49,16 +69,23 @@ export function boundReportContext(unit: ReviewUnit): void {
     unit.contextNodes = unit.contextNodes.slice(0, REPORT_CONTEXT_NODES);
   }
   if (unit.callFlow === undefined) return;
-  const kept: string[] = [];
-  let used = 0;
-  for (const block of unit.callFlow) {
-    if (used + block.length > REPORT_CALL_FLOW_CHARS && kept.length > 0) break;
-    kept.push(block);
-    used += block.length;
-  }
-  const omitted = unit.callFlow.length - kept.length;
+  const { kept, omitted } = keepWithin(unit.callFlow, REPORT_CALL_FLOW_CHARS);
   if (omitted > 0) kept.push(`omitted call-flow blocks=${omitted} reason=report-size-limit chars=${REPORT_CALL_FLOW_CHARS}`);
   unit.callFlow = kept;
+}
+
+/** The whole-diff call-flow trees in engine order, whole, within the report bound. */
+export function boundCallFlowTrees(trees: readonly string[]): string[] {
+  const { kept, omitted } = keepWithin(trees, REPORT_CALL_FLOW_TREE_CHARS);
+  // A single tree over the bound keeps its leading lines: the root and nearest calls.
+  const first = kept[0];
+  if (first !== undefined && first.length > REPORT_CALL_FLOW_TREE_CHARS) {
+    const lines = first.split("\n");
+    const head = keepWithin(lines.map((line) => `${line}\n`), REPORT_CALL_FLOW_TREE_CHARS);
+    kept[0] = `${head.kept.join("")}omitted tree lines=${head.omitted} reason=report-size-limit chars=${REPORT_CALL_FLOW_TREE_CHARS}`;
+  }
+  if (omitted > 0) kept.push(`omitted call-flow trees=${omitted} reason=report-size-limit chars=${REPORT_CALL_FLOW_TREE_CHARS}`);
+  return kept;
 }
 
 /** Shared report orchestration; transports own input reading and output persistence. */
@@ -128,7 +155,9 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
         },
       });
       trees = flow.trees;
-      callFlow.push(...trees.map(tree => tree.ascii));
+      // One tree can reach thousands of callers (a neovim hunk made 5.7 MB); the
+      // agent gets the leading trees whole, the structured flows stay bounded.
+      callFlow.push(...boundCallFlowTrees(trees.map(tree => tree.ascii)));
       warnings.push("Call flows are syntactic, not a type checker. Dynamic calls and parse failures may be absent. An empty flow is not evidence of safety.");
     } catch {
       for (const unit of units) {

@@ -6,7 +6,7 @@ import { describe, expect, test } from "vitest";
 import { buildIndex, extractFunctions } from "../src/extract.js";
 import { buildCallContext } from "../src/review/call-context.js";
 import type { ContextSources } from "../src/review/call-context.js";
-import { boundReportContext, REPORT_CALL_FLOW_CHARS, REPORT_CONTEXT_NODES, reviewDiff } from "../src/review/service.js";
+import { boundCallFlowTrees, boundReportContext, REPORT_CALL_FLOW_CHARS, REPORT_CALL_FLOW_TREE_CHARS, REPORT_CONTEXT_NODES, reviewDiff } from "../src/review/service.js";
 import { parseDiff } from "../src/review/input.js";
 import type { SourceLoc } from "../src/types.js";
 import type { ReviewContextNode, ReviewUnit } from "../src/review/types.js";
@@ -384,6 +384,18 @@ describe("report context bound", () => {
       Array.from({ length: REPORT_CONTEXT_NODES }, (_, index) => `after:caller${index}`),
     );
     expect(reviewUnit.callFlow).toEqual([block, block, `omitted call-flow blocks=2 reason=report-size-limit chars=${REPORT_CALL_FLOW_CHARS}`]);
+  });
+
+  test("bounds the whole-diff call-flow trees and names how many it left out", () => {
+    const tree = "t".repeat(REPORT_CALL_FLOW_TREE_CHARS / 4);
+    expect(boundCallFlowTrees([tree, tree, tree, tree, tree, tree])).toEqual([
+      tree, tree, tree, tree, `omitted call-flow trees=2 reason=report-size-limit chars=${REPORT_CALL_FLOW_TREE_CHARS}`,
+    ]);
+    expect(boundCallFlowTrees(["small"])).toEqual(["small"]);
+    const line = `${"l".repeat(99)}\n`;
+    const [bounded] = boundCallFlowTrees([line.repeat(1000).trimEnd()]);
+    expect(bounded.length).toBeLessThanOrEqual(REPORT_CALL_FLOW_TREE_CHARS + 80);
+    expect(bounded).toMatch(/omitted tree lines=360 reason=report-size-limit chars=64000$/);
   });
 
   test("keeps a single oversized call-flow block rather than an empty flow", () => {
