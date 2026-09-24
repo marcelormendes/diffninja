@@ -64,6 +64,7 @@ export function renderConnectedPage(csrf: string): string {
     '<header class="rail-head">',
     '<h2 id="analysis-heading">Reading order</h2>',
     '<p id="analysis-sub" class="rail-sub"></p>',
+    '<p id="rail-progress" class="rail-progress" hidden><span id="rail-at"></span><span class="rail-keys"><kbd>j</kbd> <kbd>k</kbd> next and previous</span></p>',
     '<div id="analysis-actions" class="rail-actions"></div>',
     "</header>",
     '<div id="analysis-body" class="rail-body"></div>',
@@ -75,6 +76,10 @@ export function renderConnectedPage(csrf: string): string {
     '<section id="diff-section" class="panel card" aria-labelledby="diff-heading" hidden>',
     '<header class="card-head">',
     '<div class="card-titles"><h2 id="diff-heading">Changes</h2><p id="diff-sub" class="card-sub">Hover a line and press + to comment. Comments stay in this tab until you submit.</p></div>',
+    '<div id="view-switch" class="view-switch" role="group" aria-label="Diff layout" hidden>',
+    '<button type="button" data-action="view" data-view="guided" aria-pressed="true">Reading order</button>',
+    '<button type="button" data-action="view" data-view="file" aria-pressed="false">By file</button>',
+    "</div>",
     "</header>",
     '<div id="diff-body" class="card-body"></div>',
     "</section>",
@@ -199,6 +204,13 @@ function script(csrf: string): string {
   var analysisFor = '';
   var analysisLoading = false;
   var analysisTimer = null;
+  var VIEW_KEY = 'diffninja.connected.view';
+  var view = 'guided';
+  var stopsNow = [];
+  var currentRank = 0;
+  var followedRank = 0;
+  var seenRanks = Object.create(null);
+  var seenFor = '';
   var el = {};
 
   function byId(id) { return document.getElementById(id); }
@@ -935,8 +947,10 @@ function script(csrf: string): string {
       analysis = { available: false, reason: 'The local analysis could not be read from the diffninja server.' };
     }).then(function () {
       analysisLoading = false;
+      var place = readingPlace();
       renderAnalysis();
       renderDiff();
+      keepReadingPlace(place);
       queueStationMark();
       var current = snapshot();
       if (!current) return;
@@ -1001,25 +1015,50 @@ function script(csrf: string): string {
     return go;
   }
 
+  /** One station of the rail: where the change is and whether it asks for attention; what to look at lives beside the code. */
   function renderHunkEntry(hunk, rank) {
     var entry = make('li', 'order-item');
-    // The whole station jumps to its hunk; the buttons inside keep their own actions.
-    entry.dataset.action = 'goto';
+    entry.dataset.action = 'goto-stop';
+    entry.dataset.rank = String(rank);
     entry.dataset.path = String(hunk.file);
     entry.dataset.line = String(hunk.line);
     entry.dataset.side = hunk.side === 'LEFT' ? 'LEFT' : 'RIGHT';
+    entry.title = String(hunk.file) + ':' + String(hunk.line);
     entry.appendChild(make('span', 'order-rank', String(rank)));
     var main = make('div', 'order-main');
-    var head = make('div', 'order-head');
-    // Only a status that asks for something is shown; low and passed stay quiet.
-    if (hunk.status === 'attention' || hunk.status === 'uncertain') head.appendChild(statusTag(hunk.status));
     var where = pathNode(hunk.file, 'order-path');
     where.appendChild(make('span', 'path-line', ':' + String(hunk.line)));
-    head.appendChild(where);
-    head.appendChild(sizeNode(hunk.added, hunk.removed));
-    main.appendChild(head);
+    main.appendChild(where);
+    var meta = make('div', 'order-meta');
+    // Only a status that asks for something is shown; low and passed stay quiet.
+    if (hunk.status === 'attention' || hunk.status === 'uncertain') meta.appendChild(statusTag(hunk.status));
+    meta.appendChild(sizeNode(hunk.added, hunk.removed));
+    main.appendChild(meta);
+    var jump = make('a', 'sr-only', 'Go to change ' + rank + ', ' + hunk.file + ' line ' + hunk.line);
+    jump.href = '#diff-section';
+    jump.dataset.action = 'goto-stop';
+    jump.dataset.rank = entry.dataset.rank;
+    main.appendChild(jump);
+    entry.appendChild(main);
+    return entry;
+  }
+
+  /**
+   * What the agent says about one change and where to look, shown above its
+   * code. A rank badge marks it when no stop header already carries the number.
+   */
+  function stopWhy(hunk, rank) {
     var verdicts = answeredVerdicts(hunk);
     var facts = Array.isArray(hunk.facts) ? hunk.facts : [];
+    var note = typeof hunk.note === 'string' ? hunk.note : '';
+    if (rank === 0 && verdicts.length === 0 && facts.length === 0 && note === '') return null;
+    var why = make('div', 'stop-why' + (rank > 0 ? ' has-rank' : ''));
+    if (rank > 0) {
+      var badge = make('span', 'why-rank', String(rank));
+      badge.setAttribute('aria-label', 'Change ' + rank + ' in the reading order');
+      why.appendChild(badge);
+    }
+    var main = make('div', 'why-main');
     if (verdicts.length > 0) {
       var said = make('div', 'tag-row');
       said.appendChild(make('span', 'sr-only', 'Your agent says: '));
@@ -1050,25 +1089,9 @@ function script(csrf: string): string {
       }
       main.appendChild(tags);
     }
-    if (typeof hunk.note === 'string') {
-      var note = make('p', 'order-note', hunk.note);
-      note.title = hunk.note;
-      main.appendChild(note);
-    }
-    entry.appendChild(main);
-    if (hasCallFlow(String(hunk.file))) {
-      var actions = make('div', 'order-actions');
-      actions.appendChild(flowButton(String(hunk.file), 'Call flow', 'btn btn-quiet btn-xs'));
-      main.appendChild(actions);
-    }
-    var jump = make('a', 'sr-only', 'Go to ' + hunk.file + ' line ' + hunk.line);
-    jump.href = '#diff-section';
-    jump.dataset.action = 'goto';
-    jump.dataset.path = entry.dataset.path;
-    jump.dataset.line = entry.dataset.line;
-    jump.dataset.side = entry.dataset.side;
-    main.appendChild(jump);
-    return entry;
+    if (note !== '') main.appendChild(make('p', 'why-note', note));
+    why.appendChild(main);
+    return why;
   }
 
   function renderAnalysisDetails(current) {
@@ -1168,31 +1191,89 @@ function script(csrf: string): string {
     return el.diffBody.querySelector(selector);
   }
 
+  /** The rank of the last stop that has reached the window's reading line, or 0 above the first and once past the last. */
+  function currentStopRank() {
+    var sections = el.diffBody.querySelectorAll('.stop');
+    // Near the top, so a short stop that was jumped to is the current one, not the next.
+    var line = Math.min(window.innerHeight * 0.33, 160);
+    var at = null;
+    for (var i = 0; i < sections.length; i += 1) {
+      if (sections[i].getBoundingClientRect().top > line) break;
+      at = sections[i];
+    }
+    if (!at || (at === sections[sections.length - 1] && at.getBoundingClientRect().bottom <= line)) return 0;
+    return Number(at.dataset.rank);
+  }
+
   /**
-   * Mark the station whose hunk the reader is looking at: the last hunk whose
-   * first line has scrolled past the top third of the window. Stations are in
-   * reading order, not file order, so every one is measured. The rail's list
-   * is left where the reader put it: stations of one file sit far apart in the
-   * reading order, so following them would swing the list up and down.
+   * By file, the station whose hunk the reader is looking at: the last hunk
+   * whose first line has scrolled past the top third of the window. Stations
+   * are in reading order, not file order, so every one is measured.
    */
-  function markCurrentStation() {
-    spyQueued = false;
-    fitRail();
-    var stations = el.analysisBody.querySelectorAll('.order-item');
+  function currentFileRank(stations) {
     var line = window.innerHeight * 0.33;
-    var best = null;
+    var rank = 0;
     var bestTop = -Infinity;
     for (var i = 0; i < stations.length; i += 1) {
       var row = stationRow(stations[i]);
       if (!row || row.offsetParent === null) continue;
       var top = row.getBoundingClientRect().top;
-      if (top <= line && top > bestTop) { best = stations[i]; bestTop = top; }
+      if (top <= line && top > bestTop) { rank = Number(stations[i].dataset.rank); bestTop = top; }
     }
+    return rank;
+  }
+
+  /** The stop a rank is read in: its own, or the one whose hunk already holds its line. */
+  function stopOf(rank) {
+    for (var i = 0; i < stopsNow.length; i += 1) {
+      for (var h = 0; h < stopsNow[i].hunks.length; h += 1) {
+        if (stopsNow[i].hunks[h].rank === rank) return stopsNow[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Mark where the reader is on the rail and what they have read. In the
+   * reading order the stops run 1, 2, 3 down the page, so the rail's list
+   * follows each new one; by file the stations of one file sit far apart in the
+   * reading order, so the list stays where the reader put it.
+   */
+  function markCurrentStation() {
+    spyQueued = false;
+    fitRail();
+    var snap = snapshot();
+    if (snap && seenFor !== snap.id) { seenFor = snap.id; seenRanks = Object.create(null); }
+    var stations = el.analysisBody.querySelectorAll('.order-item');
+    var guided = el.diffBody.querySelector('.stop') !== null;
+    currentRank = guided ? currentStopRank() : currentFileRank(stations);
+    // Every change read in the current stop is current, and read.
+    var here = Object.create(null);
+    var stop = guided ? stopOf(currentRank) : null;
+    if (stop) {
+      for (var h = 0; h < stop.hunks.length; h += 1) here[stop.hunks[h].rank] = true;
+    } else if (currentRank > 0) here[currentRank] = true;
+    for (var seen in here) seenRanks[seen] = true;
+    var current = null;
     for (var j = 0; j < stations.length; j += 1) {
-      var on = stations[j] === best;
+      var rank = Number(stations[j].dataset.rank);
+      var on = here[rank] === true;
+      if (rank === currentRank) current = stations[j];
       stations[j].classList.toggle('is-current', on);
+      stations[j].classList.toggle('is-seen', seenRanks[rank] === true);
       if (on) stations[j].setAttribute('aria-current', 'step');
       else stations[j].removeAttribute('aria-current');
+    }
+    show(el.railProgress, stations.length > 0);
+    setText(el.railAt, currentRank > 0 ? 'Change ' + currentRank + ' of ' + stations.length : stations.length + (stations.length === 1 ? ' change' : ' changes') + ' to read');
+    // Only a new current change moves the list, so a list the reader scrolled stays put while they read on.
+    if (guided && current && currentRank !== followedRank) {
+      followedRank = currentRank;
+      var list = el.analysisBody;
+      var box = current.getBoundingClientRect();
+      var frame = list.getBoundingClientRect();
+      if (box.top < frame.top) list.scrollTop -= frame.top - box.top + 8;
+      else if (box.bottom > frame.bottom) list.scrollTop += box.bottom - frame.bottom + 8;
     }
   }
 
@@ -1209,6 +1290,82 @@ function script(csrf: string): string {
     if (spyQueued) return;
     spyQueued = true;
     window.requestAnimationFrame(markCurrentStation);
+  }
+
+  /** Bring a change into view: its stop in the reading order, or its first line by file. */
+  function gotoStop(rank) {
+    var stop = stopOf(rank);
+    var section = stop ? byId('stop-' + stop.rank) : null;
+    if (section) {
+      window.scrollTo({ top: section.getBoundingClientRect().top + window.scrollY - 12 });
+      currentRank = stop.rank;
+      var head = section.querySelector('.stop-head');
+      if (head) head.focus({ preventScroll: true });
+      queueStationMark();
+      return;
+    }
+    var entry = el.analysisBody.querySelector('.order-item[data-rank="' + rank + '"]');
+    if (!entry) return;
+    gotoLine(entry);
+    currentRank = rank;
+    queueStationMark();
+  }
+
+  /** j and k step through the changes in reading order, from wherever the reader is. */
+  function onStepKey(event_) {
+    if (event_.defaultPrevented || event_.metaKey || event_.ctrlKey || event_.altKey) return;
+    if (event_.key !== 'j' && event_.key !== 'k') return;
+    var target = event_.target;
+    if (target && target.closest && target.closest('input, textarea, select, [contenteditable]')) return;
+    if (!el.flowDrawer.hidden) return;
+    var ranks = [];
+    if (el.diffBody.querySelector('.stop') !== null) {
+      for (var i = 0; i < stopsNow.length; i += 1) ranks.push(stopsNow[i].rank);
+    } else {
+      var stations = el.analysisBody.querySelectorAll('.order-item');
+      for (var s = 0; s < stations.length; s += 1) if (stationRow(stations[s])) ranks.push(Number(stations[s].dataset.rank));
+    }
+    var next = 0;
+    for (var r = 0; r < ranks.length; r += 1) {
+      if (event_.key === 'j' && ranks[r] > currentRank) { next = ranks[r]; break; }
+      if (event_.key === 'k' && ranks[r] < currentRank) next = ranks[r];
+    }
+    if (next === 0) return;
+    event_.preventDefault();
+    gotoStop(next);
+  }
+
+  function readView() {
+    try { return window.localStorage.getItem(VIEW_KEY) === 'file' ? 'file' : 'guided'; } catch (error) { return 'guided'; }
+  }
+
+  /** Switch the diff's layout and land on the change the reader was at. */
+  function setView(next) {
+    if ((next !== 'guided' && next !== 'file') || next === view) return;
+    var rank = currentRank;
+    view = next;
+    try { window.localStorage.setItem(VIEW_KEY, next); } catch (error) { /* the choice lasts this page only */ }
+    renderDiff();
+    if (rank > 0) gotoStop(rank);
+    else if (el.diffSection.getBoundingClientRect().top < 0) el.diffSection.scrollIntoView({ block: 'start' });
+    queueStationMark();
+  }
+
+  /** Where the reader is in the reading order, to keep them there when the stops are rebuilt in a new order. */
+  function readingPlace() {
+    var section = currentRank > 0 && stopOf(currentRank) ? byId('stop-' + stopOf(currentRank).rank) : null;
+    return section ? { hunk: section.dataset.hunk, top: section.getBoundingClientRect().top } : null;
+  }
+
+  function keepReadingPlace(place) {
+    if (!place) return;
+    var sections = el.diffBody.querySelectorAll('.stop');
+    for (var i = 0; i < sections.length; i += 1) {
+      if (sections[i].dataset.hunk !== place.hunk) continue;
+      var drift = sections[i].getBoundingClientRect().top - place.top;
+      if (drift !== 0) window.scrollBy(0, drift);
+      return;
+    }
   }
 
   /* ----------------------------------------------------------- highlight -- */
@@ -1550,10 +1707,76 @@ function script(csrf: string): string {
     return rank;
   }
 
+  /**
+   * Split one file's diff lines into its hunks: a new-side line that does not
+   * follow the previous one starts another, together with any removed lines
+   * right before it.
+   */
+  function segmentsOf(path, fileLines) {
+    var segments = [];
+    var current = [];
+    var lastNew = 0;
+    for (var i = 0; i < fileLines.length; i += 1) {
+      var line = fileLines[i];
+      if (line.side === 'RIGHT') {
+        if (lastNew > 0 && line.line > lastNew + 1) {
+          var cut = current.length;
+          while (cut > 0 && current[cut - 1].kind === 'delete') cut -= 1;
+          if (cut > 0) { segments.push({ path: path, lines: current.slice(0, cut), stop: null }); current = current.slice(cut); }
+        }
+        lastNew = line.line;
+      }
+      current.push(line);
+    }
+    if (current.length > 0) segments.push({ path: path, lines: current, stop: null });
+    return segments;
+  }
+
+  /**
+   * The stops of the reading order: each ranked hunk with the diff segment its
+   * first line is in. A hunk whose line shares a segment with a higher-ranked
+   * one is read in that stop; one whose line is not in the diff has no stop.
+   */
+  function readingStops(groups) {
+    var current = currentAnalysis();
+    var hunks = current && Array.isArray(current.hunks) ? current.hunks : [];
+    var where = Object.create(null);
+    for (var g = 0; g < groups.length; g += 1) {
+      for (var s = 0; s < groups[g].segments.length; s += 1) {
+        var segment = groups[g].segments[s];
+        for (var l = 0; l < segment.lines.length; l += 1) {
+          var key = anchorKeyOf(segment.lines[l]);
+          if (!(key in where)) where[key] = segment;
+        }
+      }
+    }
+    var stops = [];
+    for (var h = 0; h < hunks.length; h += 1) {
+      var hunk = hunks[h];
+      if (!hunk) continue;
+      var at = where[anchorKeyOf({ path: String(hunk.file), side: hunk.side === 'LEFT' ? 'LEFT' : 'RIGHT', line: hunk.line })];
+      if (!at) continue;
+      if (at.stop) { at.stop.hunks.push({ hunk: hunk, rank: h + 1 }); continue; }
+      at.stop = { rank: h + 1, path: at.path, segment: at, hunks: [{ hunk: hunk, rank: h + 1 }] };
+      stops.push(at.stop);
+    }
+    return stops;
+  }
+
+  function diffSubText(guided, hasStops) {
+    if (state && state.receipt && typeof state.receipt === 'object') return 'This review is posted. Read the diff here; replies and new reviews happen on GitHub.';
+    var how = 'Hover a line and press + to comment. Comments stay in this tab until you submit.';
+    if (!hasStops) return how;
+    return (guided ? 'Each change in the order to read it. ' : 'File by file. ') + how;
+  }
+
   function renderDiff() {
     var snap = snapshot();
     show(el.diffSection, Boolean(snap));
     el.diffBody.textContent = '';
+    stopsNow = [];
+    show(el.viewSwitch, false);
+    setText(el.diffSub, diffSubText(false, false));
     if (!snap) return;
     if (typeof snap.unavailableReason === 'string' && snap.unavailableReason !== '') {
       el.diffBody.appendChild(make('p', 'empty', snap.unavailableReason));
@@ -1578,29 +1801,106 @@ function script(csrf: string): string {
       var rb = b.path in rank ? rank[b.path] : Infinity;
       return ra === rb ? a.order - b.order : ra - rb;
     });
+    for (var s = 0; s < groups.length; s += 1) groups[s].segments = segmentsOf(groups[s].path, groups[s].lines);
+    stopsNow = readingStops(groups);
+    var guided = stopsNow.length > 0 && view === 'guided';
+    show(el.viewSwitch, stopsNow.length > 0);
+    var switches = el.viewSwitch.querySelectorAll('button');
+    for (var w = 0; w < switches.length; w += 1) switches[w].setAttribute('aria-pressed', String(switches[w].dataset.view === (guided ? 'guided' : 'file')));
+    setText(el.diffSub, diffSubText(guided, stopsNow.length > 0));
     var disabled = composeDisabled();
     var open = openSuggestions();
     var bar = suggestionBar(open, disabled);
     if (bar) el.diffBody.appendChild(bar);
     var suggestions = Object.create(null);
     for (var o = 0; o < open.length; o += 1) suggestions[anchorKeyOf(open[o])] = open[o];
-    for (var g = 0; g < groups.length; g += 1) el.diffBody.appendChild(renderFileBlock(groups[g], disabled, suggestions));
+    if (!guided) {
+      for (var g = 0; g < groups.length; g += 1) el.diffBody.appendChild(renderFileBlock(groups[g], groups[g].segments, disabled, suggestions, true));
+      return;
+    }
+    for (var k = 0; k < stopsNow.length; k += 1) {
+      el.diffBody.appendChild(renderStop(stopsNow[k], k > 0 ? stopsNow[k - 1].path : '', disabled, suggestions));
+    }
+    var rest = [];
+    for (var r = 0; r < groups.length; r += 1) {
+      var unranked = groups[r].segments.filter(function (segment) { return !segment.stop; });
+      if (unranked.length > 0) rest.push({ group: groups[r], segments: unranked });
+    }
+    if (rest.length === 0) return;
+    var head = make('div', 'rest-head');
+    head.appendChild(make('h3', '', 'Other changes'));
+    head.appendChild(make('p', '', 'Not in the reading order. File by file.'));
+    el.diffBody.appendChild(head);
+    for (var t = 0; t < rest.length; t += 1) el.diffBody.appendChild(renderFileBlock(rest[t].group, rest[t].segments, disabled, suggestions, false));
   }
 
-  function renderFileBlock(group, disabled, suggestions) {
+  function sizeOf(segments) {
+    var added = 0;
+    var removed = 0;
+    for (var s = 0; s < segments.length; s += 1) {
+      for (var i = 0; i < segments[s].lines.length; i += 1) {
+        if (segments[s].lines[i].kind === 'add') added += 1;
+        else if (segments[s].lines[i].kind === 'delete') removed += 1;
+      }
+    }
+    return sizeNode(added, removed);
+  }
+
+  function gapNode(count) {
+    var gap = make('div', 'diff-gap');
+    gap.appendChild(make('span', 'diff-gap-mark', '⋯'));
+    gap.appendChild(make('span', 'diff-gap-text', count + ' unchanged ' + (count === 1 ? 'line' : 'lines')));
+    return gap;
+  }
+
+  /** One change in the reading order: its number and place, what to look at, then its code. */
+  function renderStop(stop, previousPath, disabled, suggestions) {
+    var lead = stop.hunks[0].hunk;
+    var section = make('section', 'stop');
+    section.id = 'stop-' + stop.rank;
+    section.dataset.rank = String(stop.rank);
+    section.dataset.hunk = String(lead.id);
+    section.setAttribute('aria-label', 'Change ' + stop.rank + ', ' + stop.path);
+    var head = make('div', 'stop-head');
+    head.tabIndex = -1;
+    head.appendChild(make('span', 'stop-rank', String(stop.rank)));
+    // The directory repeats nothing new when the change before was in the same file.
+    var where = pathNode(stop.path, 'file-path' + (stop.path === previousPath ? ' is-same-file' : ''));
+    where.appendChild(make('span', 'path-line', ':' + String(lead.line)));
+    head.appendChild(where);
+    head.appendChild(sizeOf([stop.segment]));
+    if (lead.status === 'attention' || lead.status === 'uncertain') head.appendChild(statusTag(lead.status));
+    var tools = make('span', 'file-tools');
+    if (hasCallFlow(stop.path)) tools.appendChild(flowButton(stop.path, 'Call flow'));
+    var inFile = make('button', 'btn btn-quiet', 'Show in file');
+    inFile.type = 'button';
+    inFile.dataset.action = 'show-in-file';
+    inFile.dataset.path = stop.path;
+    inFile.dataset.line = String(lead.line);
+    inFile.dataset.side = lead.side === 'LEFT' ? 'LEFT' : 'RIGHT';
+    inFile.setAttribute('aria-label', 'Show change ' + stop.rank + ' in the whole diff of ' + stop.path);
+    tools.appendChild(inFile);
+    head.appendChild(tools);
+    section.appendChild(head);
+    for (var h = 0; h < stop.hunks.length; h += 1) {
+      var why = stopWhy(stop.hunks[h].hunk, h === 0 ? 0 : stop.hunks[h].rank);
+      if (why) section.appendChild(why);
+    }
+    var rows = make('div', 'diff-rows');
+    renderRows(rows, stop.segment.lines, languageOf(stop.path), disabled, suggestions);
+    section.appendChild(rows);
+    return section;
+  }
+
+  /** A file's diff, or the given hunks of it; with ranks on, each ranked hunk opens with its number and what to look at. */
+  function renderFileBlock(group, segments, disabled, suggestions, ranks) {
     var block = make('details', 'file-block');
     block.dataset.path = group.path;
     block.open = closedFiles[group.path] !== true;
     block.addEventListener('toggle', function () { closedFiles[group.path] = !block.open; });
     var head = make('summary', 'file-head');
     head.appendChild(pathNode(group.path, 'file-path'));
-    var added = 0;
-    var removed = 0;
-    for (var c = 0; c < group.lines.length; c += 1) {
-      if (group.lines[c].kind === 'add') added += 1;
-      else if (group.lines[c].kind === 'delete') removed += 1;
-    }
-    head.appendChild(sizeNode(added, removed));
+    head.appendChild(sizeOf(segments));
     var worst = worstStatusFor(group.path);
     if (worst === 'attention' || worst === 'uncertain') head.appendChild(statusTag(worst));
     var tools = make('span', 'file-tools');
@@ -1609,25 +1909,30 @@ function script(csrf: string): string {
     block.appendChild(head);
     var rows = make('div', 'diff-rows');
     var language = languageOf(group.path);
-    var state = { block: false, quote: '' };
     var lastNew = 0;
-    for (var i = 0; i < group.lines.length; i += 1) {
-      var line = group.lines[i];
-      // A new-side line that does not follow the previous one starts another
-      // hunk; the separator goes above any removed lines that open it.
-      if (line.side === 'RIGHT') {
-        if (lastNew > 0 && line.line > lastNew + 1) {
-          var before = null;
-          for (var back = rows.lastElementChild; back && back.classList.contains('kind-delete'); back = back.previousElementSibling) before = back;
-          var gap = make('div', 'diff-gap');
-          gap.appendChild(make('span', 'diff-gap-mark', '⋯'));
-          gap.appendChild(make('span', 'diff-gap-text', (line.line - lastNew - 1) + ' unchanged ' + (line.line - lastNew - 1 === 1 ? 'line' : 'lines')));
-          if (before) rows.insertBefore(gap, before);
-          else rows.appendChild(gap);
-          state = { block: false, quote: '' };
-        }
-        lastNew = line.line;
+    for (var s = 0; s < segments.length; s += 1) {
+      var segment = segments[s];
+      var firstNew = 0;
+      for (var f = 0; f < segment.lines.length && firstNew === 0; f += 1) if (segment.lines[f].side === 'RIGHT') firstNew = segment.lines[f].line;
+      if (lastNew > 0 && firstNew > lastNew + 1) rows.appendChild(gapNode(firstNew - lastNew - 1));
+      if (ranks && segment.stop) {
+        for (var h = 0; h < segment.stop.hunks.length; h += 1) rows.appendChild(stopWhy(segment.stop.hunks[h].hunk, segment.stop.hunks[h].rank));
       }
+      renderRows(rows, segment.lines, language, disabled, suggestions);
+      for (var b = segment.lines.length - 1; b >= 0; b -= 1) if (segment.lines[b].side === 'RIGHT') { lastNew = segment.lines[b].line; break; }
+    }
+    block.appendChild(rows);
+    return block;
+  }
+
+  /** Diff rows for consecutive lines, each with its + button, its draft comment and the agent's suggestion. */
+  function renderRows(rows, segmentLines, language, disabled, suggestions) {
+    var state = { block: false, quote: '' };
+    var widest = Number(rows.style.getPropertyValue('--ln-digits')) || 1;
+    for (var n = 0; n < segmentLines.length; n += 1) widest = Math.max(widest, String(segmentLines[n].line).length);
+    rows.style.setProperty('--ln-digits', String(widest));
+    for (var i = 0; i < segmentLines.length; i += 1) {
+      var line = segmentLines[i];
       var row = make('div', 'diff-row kind-' + String(line.kind));
       row.dataset.path = line.path;
       row.dataset.line = String(line.line);
@@ -1655,8 +1960,6 @@ function script(csrf: string): string {
       var suggestion = suggestions[anchorKeyOf(line)];
       if (suggestion) rows.appendChild(suggestionRow(suggestion, disabled));
     }
-    block.appendChild(rows);
-    return block;
   }
 
   function renderDraftList(disabled) {
@@ -1880,9 +2183,6 @@ function script(csrf: string): string {
     el.receiptBody.textContent = '';
     // Once posted, the rail's footer points at the receipt, not at a draft that no longer exists.
     setText(el.railFinish, receipt ? 'See the receipt' : 'Finish review');
-    setText(el.diffSub, receipt
-      ? 'This review is posted. Read the diff here; replies and new reviews happen on GitHub.'
-      : 'Hover a line and press + to comment. Comments stay in this tab until you submit.');
     el.railFinish.href = receipt ? '#receipt-heading' : '#compose-heading';
     if (!receipt) return;
     setText(el.railDraft, 'Review posted to GitHub');
@@ -2003,6 +2303,9 @@ function script(csrf: string): string {
     if (action === 'submit') { event_.preventDefault(); submitReview(); return; }
     if (action === 'refresh') { event_.preventDefault(); refreshState(); return; }
     if (action === 'goto') { event_.preventDefault(); gotoLine(node); return; }
+    if (action === 'goto-stop') { event_.preventDefault(); gotoStop(Number(node.getAttribute('data-rank'))); return; }
+    if (action === 'view') { event_.preventDefault(); setView(node.getAttribute('data-view') || ''); return; }
+    if (action === 'show-in-file') { event_.preventDefault(); setView('file'); gotoLine(node); return; }
     if (action === 'show-load') { event_.preventDefault(); showLoad = true; render(); el.prUrl.focus(); return; }
   }
 
@@ -2056,6 +2359,10 @@ function script(csrf: string): string {
     el.analysisSub = byId('analysis-sub');
     el.railDraft = byId('rail-draft');
     el.railFinish = byId('rail-finish');
+    el.railProgress = byId('rail-progress');
+    el.railAt = byId('rail-at');
+    el.viewSwitch = byId('view-switch');
+    view = readView();
     el.analysisActions = byId('analysis-actions');
     el.diffSub = byId('diff-sub');
     el.diffSection = byId('diff-section');
@@ -2088,6 +2395,7 @@ function script(csrf: string): string {
       try { el.flowFrame.contentDocument.addEventListener('keydown', onFlowKey); } catch (error) { /* not ours to reach */ }
     });
     document.addEventListener('keydown', onFlowKey);
+    document.addEventListener('keydown', onStepKey);
     window.addEventListener('message', onFlowMessage);
     window.addEventListener('scroll', queueStationMark, { passive: true });
     window.addEventListener('resize', queueStationMark);
@@ -2283,13 +2591,15 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
 /* Stations sit on one continuous line: the route through the pull request. */
 .order-item {
   position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 10px;
-  padding: 8px 14px 10px 12px; cursor: pointer;
+  padding: 6px 14px 6px 12px; cursor: pointer;
 }
 .order-item::before {
   content: ""; position: absolute; left: 24px; top: 0; bottom: 0; width: 2px; background: var(--route);
 }
-.order-item:first-child::before { top: 18px; }
-.order-item:last-child::before { bottom: calc(100% - 18px); }
+.order-item:first-child::before { top: 16px; }
+.order-item:last-child::before { bottom: calc(100% - 16px); }
+/* The route fills in behind the reader: a read station and the line after it turn accent. */
+.order-item.is-seen::before { background: var(--accent); opacity: 0.55; }
 .order-item:hover { background: var(--hover); }
 .order-item:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
 .order-rank {
@@ -2298,16 +2608,22 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
   color: var(--ink-soft); background: var(--panel); border: 2px solid var(--route);
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
+.order-item.is-seen .order-rank { color: var(--accent); border-color: var(--accent); }
 .order-item.is-current { background: var(--accent-soft); }
 .order-item.is-current .order-rank { color: var(--primary-ink); background: var(--accent); border-color: var(--accent); }
-.order-main { min-width: 0; padding-top: 2px; }
-.order-head { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; }
-.order-head .path { flex: 1 1 100%; order: -1; font-size: 12.5px; }
-.order-head .path-dir { display: block; font-size: 11px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.order-note { margin-top: 2px; font-size: 12px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.order-actions { display: flex; margin-top: 4px; }
-.order-item .tag-row { margin-top: 6px; gap: 4px; }
-.order-item .tag-lead { margin-left: 0; width: 100%; font-size: 11.5px; }
+.order-main { min-width: 0; padding-top: 1px; display: flex; flex-direction: column; gap: 3px; }
+.order-path { display: flex; min-width: 0; font-size: 12.5px; white-space: nowrap; }
+.order-path .path-base { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.order-path .path-line { flex: 0 0 auto; }
+.order-path .path-dir { display: none; }
+.order-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.rail-progress { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.rail-progress[hidden] { display: none; }
+.rail-keys { color: var(--ink-faint); white-space: nowrap; }
+kbd {
+  display: inline-block; min-width: 18px; padding: 0 4px; font: 11px/16px var(--mono); text-align: center;
+  color: var(--ink-soft); background: var(--bg); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px;
+}
 .inline-note { font-size: 12px; color: var(--ink-soft); }
 .btn-xs { height: 22px; padding: 0 6px; font-size: 12px; margin-left: -6px; color: var(--accent); }
 
@@ -2320,8 +2636,45 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
 }
 .suggest-bar p { flex: 1 1 280px; }
 .bar-link { font-size: 13px; font-weight: 500; }
-.file-block { border: 1px solid var(--line); border-radius: var(--radius); margin: 0 0 16px; min-width: 0; }
-.file-block:last-child { margin-bottom: 0; }
+.file-block, .stop { border: 1px solid var(--line); border-radius: var(--radius); margin: 0 0 16px; min-width: 0; }
+.file-block:last-child, .stop:last-child { margin-bottom: 0; }
+/* ------------------------------------------- a change in the reading order */
+.stop-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; flex-wrap: nowrap; gap: 4px 12px; align-items: center;
+  padding: 6px 8px 6px 10px; min-height: 42px; background: var(--panel-head);
+  border-bottom: 1px solid var(--line); border-radius: var(--radius) var(--radius) 0 0;
+}
+.stop-head:focus { outline: none; }
+.stop-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.stop-rank, .why-rank {
+  flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  font: 650 12px var(--sans); font-variant-numeric: tabular-nums; color: var(--primary-ink); background: var(--accent);
+}
+.why-rank { width: 22px; height: 22px; font-size: 11.5px; }
+.is-same-file .path-dir { display: none; }
+.stop-why { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px 10px; background: var(--panel); border-bottom: 1px solid var(--line-soft); font-family: var(--sans); }
+.stop-why .tag-row:first-child { margin-top: 0; }
+.why-main { min-width: 0; flex: 1 1 auto; }
+.why-note { font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+.why-main > .why-note:first-child { margin-top: 0; }
+/* By file, a ranked hunk opens with its number, between the code around it. */
+.diff-rows > .stop-why { border-top: 1px solid var(--line-soft); }
+.diff-rows > .stop-why:first-child { border-top: 0; }
+.stop-why.has-rank { padding-left: 16px; }
+.stop-why.has-rank .why-main:empty { display: none; }
+.rest-head { margin: 28px 0 12px; }
+.rest-head h3 { font-size: 14px; font-weight: 650; }
+.rest-head p { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.view-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); flex: 0 0 auto; }
+.view-switch[hidden] { display: none; }
+.view-switch button {
+  height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent;
+  font-size: 12px; font-weight: 600; color: var(--ink-soft);
+}
+.view-switch button:hover { color: var(--ink); background: var(--hover); }
+.view-switch button[aria-pressed="true"] { color: var(--ink); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.view-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .file-head {
   position: sticky; top: 0; z-index: 2;
   display: flex; flex-wrap: nowrap; gap: 4px 12px; align-items: center;
@@ -2339,14 +2692,17 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
 .file-block[open] > .file-head::before { transform: rotate(45deg); }
 .file-tools { margin-left: auto; display: flex; gap: 4px; flex: 0 0 auto; }
 /* A long path gives way first: its directory truncates, the file name stays whole. */
-.file-head .file-path { display: flex; min-width: 0; flex: 0 1 auto; overflow: hidden; }
-.file-head .path-dir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-head .path-base { flex: 0 0 auto; white-space: nowrap; }
-.file-head .size, .file-head .status-tag { flex: 0 0 auto; }
+.file-head .file-path, .stop-head .file-path { display: flex; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.file-head .path-dir, .stop-head .path-dir { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-head .path-base, .stop-head .path-base { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stop-head .path-line { flex: 0 0 auto; white-space: nowrap; }
+.file-head .size, .file-head .status-tag, .stop-head .size, .stop-head .status-tag { flex: 0 0 auto; }
 .diff-rows { min-width: 0; overflow: hidden; border-radius: 0 0 var(--radius) var(--radius); }
 .diff-row { display: flex; align-items: stretch; font: 12px/20px var(--mono); min-height: 20px; }
-.diff-gutter { position: relative; flex: 0 0 auto; width: 60px; background: var(--panel); }
-.diff-ln { display: block; padding: 0 10px 0 26px; text-align: right; color: var(--ink-faint); user-select: none; }
+/* The number column fits the widest line number of its block, set by the page as --ln-digits. */
+.diff-rows { --gutter: calc(36px + var(--ln-digits, 3) * 1ch); }
+.diff-gutter { position: relative; flex: 0 0 auto; width: var(--gutter); background: var(--panel); }
+.diff-ln { display: block; padding: 0 10px 0 26px; text-align: right; white-space: nowrap; color: var(--ink-faint); user-select: none; }
 .diff-action {
   position: absolute; left: 4px; top: 0; width: 20px; height: 20px; padding: 0;
   border: 0; border-radius: 6px; background: var(--accent); color: #fff;
@@ -2370,7 +2726,7 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
   display: flex; align-items: center; gap: 10px; min-height: 28px;
   background: var(--gap-bg); color: var(--ink-soft); font: 12px var(--mono);
 }
-.diff-gap-mark { width: 60px; text-align: center; color: var(--accent); }
+.diff-gap-mark { width: var(--gutter); text-align: center; color: var(--accent); }
 .tok-k { color: var(--syn-keyword); }
 .tok-s { color: var(--syn-string); }
 .tok-c { color: var(--syn-comment); font-style: italic; }
@@ -2504,8 +2860,6 @@ body.flow-full .flow-bar { display: none; }
   .panel { padding: 12px; }
   .card-head, .card-body { padding: 12px; }
   .facts { grid-template-columns: 1fr; }
-  .diff-gutter { width: 52px; }
-  .diff-gap-mark { width: 52px; }
   .editor, .suggestion { margin-left: 8px; margin-right: 8px; }
 }
 `;
