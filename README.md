@@ -66,18 +66,19 @@ you chose, and diffninja only carries it to GitHub. It never approves, blocks, o
 anything on its own. The page belongs to the agent's MCP connection and closes
 when the agent exits.
 
-Above the diff, a **Reading order** panel shows the same local analysis a
-static review gives, for exactly that revision: every hunk's status and change
-facts with the line each rests on, the checks that ran, a link to the full
-report, and "go to the diff" buttons. Questions for your agent (does this
-change behavior, does a test exercise it, does it serve the stated goal) show
-its answers as they arrive, attributed to the agent's client. When the agent
-works inside your local clone it passes it as `repo`; once the clone has the
-pull request's commits, the analysis adds definitions and call flows, and the
-page opens each file's call-flow diagrams (Tree, Graph, Sequence) in a drawer
-beside the diff, from the reading order or the file's header. diffninja never
-fetches or writes in the clone; when it lacks the commits, the page says so and
-names the `git fetch` that would add them.
+The diff opens in the **reading order**: each hunk is a numbered change,
+most important first, with your agent's answers (does this change behavior,
+does a test exercise it, does it serve the stated goal) and the facts to look
+at above its code. Hunks outside the order follow under **Other changes**.
+Press `j` and `k` to step through the changes. A rail beside the diff lists
+them, marks the one you are reading, and fills in as you read. **By file**
+switches to one block per file, with each change's number where it starts, and
+**Show in file** opens a change there. When the agent works inside your local
+clone it passes it as `repo`; once the clone has the pull request's commits,
+the analysis adds definitions and call flows, and the page opens a file's call
+flow in a drawer beside the diff. diffninja never fetches or writes in the
+clone; when it lacks the commits, the page says so and names the `git fetch`
+that would add them.
 
 ## Review a diff or a git range
 
