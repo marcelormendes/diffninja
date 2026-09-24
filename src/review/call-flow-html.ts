@@ -243,6 +243,7 @@ function renderControls(): string {
     '<div class="cf-controls">',
     `<div class="cf-modes" role="group" aria-label="Call flow mode">${links}</div>`,
     '<button type="button" class="cf-diagram-btn enhanced" data-cf-diagram aria-label="Open the call diagram full screen">Diagram</button>',
+    '<p class="cf-diagram-hint" data-cf-diagram-hint hidden>Scroll or drag to move. Hold Ctrl or \u2318 and scroll to zoom.</p>',
     '<button type="button" class="cf-diagram-close" data-cf-diagram-close hidden>Close diagram</button>',
     '<div class="cf-depth enhanced" role="group" aria-label="Diagram depth below the focused call">',
     '<span class="cf-depth-label">Depth</span>',
@@ -960,9 +961,11 @@ export const CALL_FLOW_STYLES = `
   border-radius: 4px;
   background: none;
   text-align: left;
+  /* Capped so a long call never pushes its row onto a second line; the
+     location takes what is left and truncates first. */
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 100%;
+  max-width: 62%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -970,7 +973,7 @@ export const CALL_FLOW_STYLES = `
 .js .cf-label { cursor: pointer; }
 .js .cf-label:hover, .cf-label:focus-visible { text-decoration: underline; }
 .cf-label:focus-visible { outline: 2px solid var(--cursor); outline-offset: 1px; }
-.cf-loc { flex: 0 1 auto; min-width: 0; font-size: 11px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cf-loc { flex: 1 1 0; min-width: 0; font-size: 11px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cf-loc-none { font-style: italic; }
 .cf-node, .cf-gnode, .cf-chip { --cf-node-color: var(--cf-chg); --cf-node-fill: var(--cf-chg-soft); --cf-node-weight: 600; --cf-node-decoration: none; }
 .cf-st-added { --cf-node-color: var(--cf-add); --cf-node-fill: var(--cf-add-soft); }
@@ -998,6 +1001,8 @@ export const CALL_FLOW_STYLES = `
 .cf-diagram-btn::after { content: "\\2197"; font-size: 12px; }
 .cf-diagram-btn:hover, .cf-diagram-close:hover { background: var(--sunken); }
 .cf-diagram-close { margin-left: auto; }
+.cf-diagram-hint { margin: 0 0 0 auto; font-size: 12px; color: var(--ink-soft); }
+.cf-diagram-hint + .cf-diagram-close { margin-left: 12px; }
 .cf.cf-diagram-open .cf-head { display: none; }
 /* The full-screen diagram: the call-flow view fills the screen (or the window,
    where full screen is refused), and each graph gets nearly all of its height. */
@@ -1008,7 +1013,35 @@ export const CALL_FLOW_STYLES = `
 }
 .cf.cf-diagram-open .cf-controls { position: sticky; top: -12px; z-index: 5; background: var(--bg); padding: 10px 0; }
 .cf.cf-diagram-open .cf-modes, .cf.cf-diagram-open .cf-diagram-btn { display: none !important; }
-.cf.cf-diagram-open .cf-svg-wrap { height: calc(100vh - 190px); min-height: 320px; }
+.cf.cf-diagram-open { padding-left: 292px; }
+.cf.cf-diagram-open .cf-svg-wrap { height: calc(100vh - 150px); min-height: 320px; }
+/* One canvas at a time: the entry point picked in the list, in its own file. */
+.cf.cf-diagram-open .cf-jump, .cf.cf-diagram-open .cf-bounds, .cf.cf-diagram-open .cf-omitted { display: none !important; }
+.cf.cf-diagram-open .cf-file:not(.cf-file-current) { display: none; }
+.cf.cf-diagram-open .cf-graph-frame:not(.cf-frame-current) { display: none; }
+.cf.cf-diagram-open .cf-file-body { padding-bottom: 0; }
+.cf-diagram-nav {
+  position: fixed; top: 0; bottom: 0; left: 0; width: 276px; overflow-y: auto; z-index: 6;
+  padding: 16px 12px; background: var(--sunken); border-right: 1px solid var(--line);
+}
+.cf-diagram-nav-head { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.cf-diagram-nav-file {
+  margin: 14px 0 4px; font: 600 12px var(--mono); color: var(--ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cf-diagram-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.cf-diagram-nav button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%;
+  padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: pointer;
+}
+.cf-diagram-nav button:hover { background: var(--panel); }
+.cf-diagram-nav button[aria-current] { background: var(--panel); box-shadow: inset 3px 0 0 var(--cursor); }
+.cf-diagram-nav-name { max-width: 100%; font: 600 12px/1.35 var(--mono); overflow-wrap: anywhere; }
+.cf-diagram-nav-count { max-width: 100%; font-size: 11px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+  .cf.cf-diagram-open { padding-left: 12px; padding-top: 12px; }
+  .cf-diagram-nav { position: static; width: auto; max-height: 30vh; margin: 0 0 8px; border: 1px solid var(--line); border-radius: 6px; }
+}
 .cf-ready .cf-svg-wrap:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
 .cf-ready .cf-svg-wrap.cf-dragging { cursor: grabbing; user-select: none; }
 .cf-ready .cf-svg { width: 100%; height: 100%; }
@@ -1656,13 +1689,107 @@ export const CALL_FLOW_SCRIPT = `
     if (window.parent !== window) window.parent.postMessage({ type: 'diffninja-diagram', open: open }, window.location.origin);
   }
 
+  // The full-screen view shows one entry point's diagram at a time, picked from
+  // a list of every entry point per file, instead of stacking every canvas.
+  var diagramNav = null;
+  var diagramCurrent = null;
+
+  function frameName(frame) {
+    var node = frame.querySelector('a.cf-gnode title');
+    var text = node ? node.textContent : '';
+    return text.split(' \u00b7 ')[0] || 'Entry point';
+  }
+
+  function showFrame(frame) {
+    diagramCurrent = frame;
+    var all = host.querySelectorAll('.cf-graph-frame');
+    for (var i = 0; i < all.length; i++) all[i].classList.toggle('cf-frame-current', all[i] === frame);
+    for (var f = 0; f < files.length; f++) {
+      var mine = files[f].contains(frame);
+      files[f].classList.toggle('cf-file-current', mine);
+      if (mine) files[f].open = true;
+    }
+    if (diagramNav) {
+      var items = diagramNav.querySelectorAll('[data-cf-frame]');
+      for (var n = 0; n < items.length; n++) {
+        var on = items[n].getAttribute('data-cf-frame') === frame.getAttribute('data-cf-graph');
+        if (on) items[n].setAttribute('aria-current', 'true');
+        else items[n].removeAttribute('aria-current');
+      }
+    }
+    // Open on the whole entry point when that still leaves its text readable.
+    window.requestAnimationFrame(function () {
+      frameGraphs();
+      var graph = frame.querySelector('svg'), info = graphViews.get(graph);
+      if (!info) return;
+      var whole = cfNav.frame(info.bounds, info.size, info.target, true);
+      if (whole.scale >= 0.55) paintCamera(graph, whole);
+    });
+  }
+
+  function buildDiagramNav() {
+    var nav = document.createElement('nav');
+    nav.className = 'cf-diagram-nav';
+    nav.setAttribute('aria-label', 'Entry points');
+    var heading = document.createElement('p');
+    heading.className = 'cf-diagram-nav-head';
+    heading.textContent = 'Entry points';
+    nav.appendChild(heading);
+    for (var f = 0; f < files.length; f++) {
+      var frames = files[f].querySelectorAll('.cf-graph-frame');
+      if (!frames.length) continue;
+      var path = files[f].querySelector('.cf-file-path');
+      var group = document.createElement('p');
+      group.className = 'cf-diagram-nav-file';
+      var full = path ? path.textContent : '';
+      group.textContent = full.slice(full.lastIndexOf('/') + 1);
+      group.title = full;
+      nav.appendChild(group);
+      var list = document.createElement('ul');
+      for (var i = 0; i < frames.length; i++) {
+        var item = document.createElement('li');
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.setAttribute('data-cf-frame', frames[i].getAttribute('data-cf-graph'));
+        // "Class.method(args)" reads as the method, with its class beneath: entry
+        // points of one class would otherwise all start the same way.
+        var label = frameName(frames[i]);
+        var paren = label.indexOf('(');
+        var dot = label.lastIndexOf('.', paren < 0 ? label.length : paren);
+        var name = document.createElement('span');
+        name.className = 'cf-diagram-nav-name';
+        name.textContent = dot > 0 && label.slice(0, 4) !== 'new ' ? label.slice(dot + 1) : label;
+        button.title = label;
+        var count = document.createElement('span');
+        count.className = 'cf-diagram-nav-count';
+        var calls = frames[i].querySelectorAll('a.cf-gnode').length;
+        count.textContent = (dot > 0 && label.slice(0, 4) !== 'new ' ? label.slice(0, dot) + ', ' : '') + calls + (calls === 1 ? ' call' : ' calls');
+        button.appendChild(name);
+        button.appendChild(count);
+        item.appendChild(button);
+        list.appendChild(item);
+      }
+      nav.appendChild(list);
+    }
+    host.insertBefore(nav, host.firstChild);
+    return nav;
+  }
+
   function openDiagram() {
     if (diagramReturn !== null) return;
     diagramReturn = state.mode === 'graph' ? 'tree' : state.mode;
     host.classList.add('cf-diagram-open');
     tellEmbedder(true);
     if (diagramClose) diagramClose.hidden = false;
+    var hint = host.querySelector('[data-cf-diagram-hint]');
+    if (hint) hint.hidden = false;
     setMode('graph');
+    diagramNav = buildDiagramNav();
+    var first = null;
+    for (var f = 0; f < files.length && first === null; f++) {
+      if (!files[f].hidden) first = files[f].querySelector('.cf-graph-frame');
+    }
+    if (first) showFrame(first);
     // The browser's full screen when it allows it; the class alone fills the window otherwise.
     if (view.requestFullscreen) view.requestFullscreen().catch(function () {});
     window.requestAnimationFrame(frameGraphs);
@@ -1675,7 +1802,14 @@ export const CALL_FLOW_SCRIPT = `
     diagramReturn = null;
     host.classList.remove('cf-diagram-open');
     tellEmbedder(false);
+    if (diagramNav) diagramNav.remove();
+    diagramNav = null;
+    diagramCurrent = null;
+    var marked = host.querySelectorAll('.cf-frame-current, .cf-file-current');
+    for (var m = 0; m < marked.length; m++) marked[m].classList.remove('cf-frame-current', 'cf-file-current');
     if (diagramClose) diagramClose.hidden = true;
+    var hintOff = host.querySelector('[data-cf-diagram-hint]');
+    if (hintOff) hintOff.hidden = true;
     if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
     setMode(back);
     var opener = host.querySelector('[data-cf-diagram]');
@@ -1729,6 +1863,13 @@ export const CALL_FLOW_SCRIPT = `
     if (event.target.closest('[data-cf-diagram]')) {
       event.preventDefault();
       openDiagram();
+      return;
+    }
+    var pick = event.target.closest('[data-cf-frame]');
+    if (pick && diagramNav && diagramNav.contains(pick)) {
+      event.preventDefault();
+      var chosen = host.querySelector('.cf-graph-frame[data-cf-graph="' + CSS.escape(pick.getAttribute('data-cf-frame')) + '"]');
+      if (chosen) showFrame(chosen);
       return;
     }
     if (event.target.closest('[data-cf-diagram-close]')) {
@@ -1826,6 +1967,28 @@ export const CALL_FLOW_SCRIPT = `
     if (drag.wrap.hasPointerCapture(event.pointerId)) drag.wrap.releasePointerCapture(event.pointerId);
     drag = null;
   }
+  // In the full-screen diagram the wheel moves the diagram, as in a map: scroll
+  // pans, Ctrl or Cmd with the wheel (a trackpad pinch) zooms at the pointer.
+  // Inline, the wheel keeps scrolling the page.
+  view.addEventListener('wheel', function (event) {
+    if (!host.classList.contains('cf-diagram-open')) return;
+    var wrap = event.target.closest('.cf-svg-wrap');
+    if (!wrap) return;
+    var graph = wrap.querySelector('svg'), info = graphViews.get(graph);
+    if (!info) return;
+    event.preventDefault();
+    var unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? info.size.height : 1;
+    var camera = state.cameras[info.key];
+    if (event.ctrlKey || event.metaKey) {
+      var box = wrap.getBoundingClientRect();
+      var factor = Math.exp(-event.deltaY * unit * 0.0025);
+      paintCamera(graph, cfNav.zoom(camera, factor, { x: event.clientX - box.left, y: event.clientY - box.top }, info.bounds, info.size));
+    } else {
+      var dx = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
+      var dy = event.shiftKey && !event.deltaX ? 0 : event.deltaY;
+      paintCamera(graph, cfNav.pan(camera, -dx * unit, -dy * unit, info.bounds, info.size));
+    }
+  }, { passive: false });
   view.addEventListener('pointerup', finishDrag);
   view.addEventListener('pointercancel', finishDrag);
   view.addEventListener('click', function (event) {

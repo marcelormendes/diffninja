@@ -2308,7 +2308,7 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
 .file-block:last-child { margin-bottom: 0; }
 .file-head {
   position: sticky; top: 0; z-index: 2;
-  display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+  display: flex; flex-wrap: nowrap; gap: 4px 12px; align-items: center;
   padding: 6px 8px 6px 12px; min-height: 42px; background: var(--panel-head);
   border-radius: var(--radius) var(--radius) 0 0; cursor: pointer; list-style: none;
 }
@@ -2321,7 +2321,12 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
 }
 .file-block[open] > .file-head { border-bottom: 1px solid var(--line); }
 .file-block[open] > .file-head::before { transform: rotate(45deg); }
-.file-tools { margin-left: auto; display: flex; gap: 4px; }
+.file-tools { margin-left: auto; display: flex; gap: 4px; flex: 0 0 auto; }
+/* A long path gives way first: its directory truncates, the file name stays whole. */
+.file-head .file-path { display: flex; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.file-head .path-dir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.file-head .path-base { flex: 0 0 auto; white-space: nowrap; }
+.file-head .size, .file-head .status-tag { flex: 0 0 auto; }
 .diff-rows { min-width: 0; overflow: hidden; border-radius: 0 0 var(--radius) var(--radius); }
 .diff-row { display: flex; align-items: stretch; font: 12px/20px var(--mono); min-height: 20px; }
 .diff-gutter { position: relative; flex: 0 0 auto; width: 60px; background: var(--panel); }
