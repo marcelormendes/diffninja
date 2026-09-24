@@ -47,6 +47,16 @@ describe("connected session boundary", () => {
     expect((await fetch(session.url + "flow?snapshot=snap-1", { headers: { Origin: "https://attacker.example" } })).status).toBe(403);
     expect((await fetch(session.url + "flow?snapshot=snap-1", { headers: { "Sec-Fetch-Site": "cross-site" } })).status).toBe(403);
   });
+  it("keeps scrolled-to controls clear of the pinned file headers", async () => {
+    const { url } = await start();
+    const html = await (await fetch(url)).text();
+    // File headers are sticky; without scroll padding a control scrolled into view
+    // lands under one, and a click meant for it folds the file instead.
+    expect(html).toMatch(/\.file-head \{\s*position: sticky; top: 0;/);
+    const padding = /scroll-padding-top: (\d+)px/.exec(html);
+    const header = /\.file-head \{[^}]*min-height: (\d+)px/.exec(html);
+    expect(Number(padding?.[1])).toBeGreaterThan(Number(header?.[1]));
+  });
   it("rejects arbitrary endpoints and malformed authenticated requests", async () => {
     const { url } = await start();
     const page = await fetch(url);
