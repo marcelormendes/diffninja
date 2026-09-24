@@ -2107,7 +2107,10 @@ ${PALETTE_STYLES}
 /* Class rules below set display, which would otherwise beat the UA's hidden
    rule and leave every collapsed panel visible. */
 [hidden] { display: none !important; }
-html { -webkit-text-size-adjust: 100%; max-width: 100%; }
+/* File headers stay pinned to the top while the diff scrolls. Anything scrolled
+   into view (a jump, a focused control, a reattached comment) must land below
+   one, or a click meant for it hits the header and folds the file. */
+html { -webkit-text-size-adjust: 100%; max-width: 100%; scroll-padding-top: 56px; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font: 400 14px/1.5 var(--sans); max-width: 100%; overflow-wrap: break-word;
