@@ -557,7 +557,7 @@ describe("record_order", () => {
     const reversed = report.items.map(item => item.id).reverse();
     const result = await order(client, { reviewId: report.reviewId, order: reversed });
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toEqual({ reviewId: report.reviewId, ordered: reversed.length, reportUrl: report.reportUrl });
+    expect(result.structuredContent).toEqual({ reviewId: report.reviewId, ordered: reversed.length, reportUrl: report.reportUrl, next: expect.stringContaining("suggest_comments") });
     expect(result.structuredContent).toEqual(JSON.parse(textOf(result)));
 
     const after = await loopback(report.reportUrl);

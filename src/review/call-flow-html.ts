@@ -242,7 +242,7 @@ function renderControls(): string {
   return [
     '<div class="cf-controls">',
     `<div class="cf-modes" role="group" aria-label="Call flow mode">${links}</div>`,
-    '<button type="button" class="cf-diagram-btn enhanced" data-cf-diagram aria-label="Open the call diagram full screen">Diagram</button>',
+    '<button type="button" class="cf-diagram-btn enhanced" data-cf-diagram aria-label="Open the call diagram across the window">Diagram</button>',
     '<p class="cf-diagram-hint" data-cf-diagram-hint hidden>Scroll or drag to move. Hold Ctrl or \u2318 and scroll to zoom.</p>',
     '<button type="button" class="cf-diagram-close" data-cf-diagram-close hidden>Close diagram</button>',
     '<div class="cf-depth enhanced" role="group" aria-label="Diagram depth below the focused call">',
@@ -1004,9 +1004,7 @@ export const CALL_FLOW_STYLES = `
 .cf-diagram-hint { margin: 0 0 0 auto; font-size: 12px; color: var(--ink-soft); }
 .cf-diagram-hint + .cf-diagram-close { margin-left: 12px; }
 .cf.cf-diagram-open .cf-head { display: none; }
-/* The full-screen diagram: the call-flow view fills the screen (or the window,
-   where full screen is refused), and each graph gets nearly all of its height. */
-#view-call-flow:fullscreen { background: var(--bg); overflow: auto; }
+/* The diagram view fills the browser window, and the graph gets nearly all of its height. */
 .cf.cf-diagram-open {
   position: fixed; inset: 0; z-index: 50; margin: 0; padding: 12px 20px 20px;
   background: var(--bg); overflow: auto; overscroll-behavior: contain;
@@ -1679,17 +1677,17 @@ export const CALL_FLOW_SCRIPT = `
     reveal();
   }
 
-  // Mode to return to when the full-screen diagram closes; null while it is closed.
+  // Mode to return to when the diagram view closes; null while it is closed.
   var diagramReturn = null;
   var diagramClose = host.querySelector('[data-cf-diagram-close]');
 
   // Inside the pull request page's drawer, ask the page to widen the drawer to
-  // the whole window too, so a refused full screen still gets all the room.
+  // the whole window too, so the diagram gets all of it.
   function tellEmbedder(open) {
     if (window.parent !== window) window.parent.postMessage({ type: 'diffninja-diagram', open: open }, window.location.origin);
   }
 
-  // The full-screen view shows one entry point's diagram at a time, picked from
+  // The diagram view shows one entry point's diagram at a time, picked from
   // a list of every entry point per file, instead of stacking every canvas.
   var diagramNav = null;
   var diagramCurrent = null;
@@ -1790,8 +1788,6 @@ export const CALL_FLOW_SCRIPT = `
       if (!files[f].hidden) first = files[f].querySelector('.cf-graph-frame');
     }
     if (first) showFrame(first);
-    // The browser's full screen when it allows it; the class alone fills the window otherwise.
-    if (view.requestFullscreen) view.requestFullscreen().catch(function () {});
     window.requestAnimationFrame(frameGraphs);
     if (diagramClose) diagramClose.focus({ preventScroll: true });
   }
@@ -1810,16 +1806,10 @@ export const CALL_FLOW_SCRIPT = `
     if (diagramClose) diagramClose.hidden = true;
     var hintOff = host.querySelector('[data-cf-diagram-hint]');
     if (hintOff) hintOff.hidden = true;
-    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
     setMode(back);
     var opener = host.querySelector('[data-cf-diagram]');
     if (opener) opener.focus({ preventScroll: true });
   }
-
-  document.addEventListener('fullscreenchange', function () {
-    if (document.fullscreenElement) window.requestAnimationFrame(frameGraphs);
-    else closeDiagram();
-  });
 
   function setDepth(value) {
     var change = cfNav.setDepth(state, value);
@@ -1967,7 +1957,7 @@ export const CALL_FLOW_SCRIPT = `
     if (drag.wrap.hasPointerCapture(event.pointerId)) drag.wrap.releasePointerCapture(event.pointerId);
     drag = null;
   }
-  // In the full-screen diagram the wheel moves the diagram, as in a map: scroll
+  // In the diagram view the wheel moves the diagram, as in a map: scroll
   // pans, Ctrl or Cmd with the wheel (a trackpad pinch) zooms at the pointer.
   // Inline, the wheel keeps scrolling the page.
   view.addEventListener('wheel', function (event) {

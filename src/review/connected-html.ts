@@ -151,7 +151,7 @@ export function renderConnectedPage(csrf: string): string {
     '<h2 id="flow-title" class="flow-title">Call flow</h2>',
     '<button type="button" id="flow-close" class="btn btn-quiet btn-sm" data-action="close-flow" aria-label="Close the call flow">Close</button>',
     "</div>",
-    '<iframe id="flow-frame" class="flow-frame" title="Call flow" allow="fullscreen"></iframe>',
+    '<iframe id="flow-frame" class="flow-frame" title="Call flow"></iframe>',
     "</aside>",
     `<script nonce="${nonce}">${script(csrf)}</script>`,
     "</body>",
@@ -1380,7 +1380,7 @@ function script(csrf: string): string {
 
   function onFlowKey(event_) {
     // The diagram inside the drawer handles its own Escape first.
-    if (event_.defaultPrevented || document.fullscreenElement) return;
+    if (event_.defaultPrevented) return;
     if (event_.key === 'Escape' && !el.flowDrawer.hidden) { event_.preventDefault(); closeFlow(); }
   }
 

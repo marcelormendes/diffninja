@@ -13,6 +13,25 @@ import type { ReviewReport } from "./types.js";
 
 const PR_LINK_ERROR = "A pull request review needs exactly one full github.com pull request URL, for example https://github.com/OWNER/REPO/pull/123. Ask the user for their link; do not guess, search, or invent one.";
 const STATIC_MODE_ERROR = "mode static reviews a diff or git range and accepts no pr or input. Use mode connected to review a pull request link.";
+/**
+ * What the reviewing agent does after a review_diff result, in order. Agents
+ * follow a result more reliably than a long tool description, so the result
+ * carries the steps the description already asks for.
+ */
+const CONNECTED_NEXT_STEPS = [
+  "Give the user the url: it is their review page.",
+  "Read the hunks in report.items, then answer every question in report.questions with record_answers (this reviewId, one listed option each; cannot-tell rather than guess).",
+  "Send the reading order you recommend with record_order: every report.items[].id once, the hunks a maintainer is most likely to push back on first.",
+  "Send the line comments you would leave with suggest_comments: only where a maintainer would ask for something, each one short line in the reviewer's own voice, no labels. They appear under their lines for the user to add.",
+  "Do not submit or post anything: the user reviews and submits on the page.",
+];
+const STATIC_NEXT_STEPS = [
+  "Give the user the reportUrl: it is the readable report.",
+  "Read the hunks, then answer every question in questions with record_answers (this reviewId, one listed option each; cannot-tell rather than guess).",
+  "Send the reading order you recommend with record_order: every items[].id once, the hunks a maintainer is most likely to push back on first.",
+];
+const SUGGEST_NEXT = "For a pull request review, next send the line comments you would leave with suggest_comments.";
+
 const SHUTDOWN_ERROR = "This MCP connection is shutting down; open a new session to review a pull request.";
 
 interface ConnectedBinding {
@@ -275,7 +294,7 @@ export function createReviewServer(): McpServer {
             mode: "connected", url: binding.url, pr: target, snapshot: binding.review.getState().snapshot,
             ...("unavailable" in analysis
               ? { analysisUnavailable: analysis.unavailable }
-              : { reviewId: analysis.reviewId, reportUrl: analysis.reportUrl, analysisScope: analysis.scope, report: analysis.report }),
+              : { reviewId: analysis.reviewId, reportUrl: analysis.reportUrl, analysisScope: analysis.scope, report: analysis.report, nextSteps: CONNECTED_NEXT_STEPS }),
           };
           return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: { ...payload } };
         }
@@ -295,7 +314,7 @@ export function createReviewServer(): McpServer {
           pr: expectedOutcome === undefined ? undefined : { title: expectedOutcome.title, body: expectedOutcome.description } });
       // The agent reads the report as data; the human reads the same report as a page.
       const published = await reports.publish(report);
-      const payload = { ...report, reportUrl: published.url, reviewId: published.reviewId };
+      const payload = { ...report, reportUrl: published.url, reviewId: published.reviewId, nextSteps: STATIC_NEXT_STEPS };
       return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: { ...payload } };
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
@@ -314,7 +333,13 @@ export function createReviewServer(): McpServer {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async ({ reviewId, answers }) => {
     try {
-      const result = reports.record(reviewId, answers, clientName(server));
+      const recorded = reports.record(reviewId, answers, clientName(server));
+      const result = {
+        ...recorded,
+        next: recorded.unanswered > 0
+          ? `${recorded.unanswered} question(s) still unanswered: answer them with record_answers, then send your reading order with record_order.`
+          : "Next: send your reading order with record_order, then, for a pull request review, your line comments with suggest_comments.",
+      };
       return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: { ...result } };
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
@@ -330,7 +355,7 @@ export function createReviewServer(): McpServer {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async ({ reviewId, order }) => {
     try {
-      const result = reports.recordOrder(reviewId, order, clientName(server));
+      const result = { ...reports.recordOrder(reviewId, order, clientName(server)), next: SUGGEST_NEXT };
       return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: { ...result } };
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
