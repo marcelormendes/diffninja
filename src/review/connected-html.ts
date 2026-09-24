@@ -69,7 +69,7 @@ export function renderConnectedPage(csrf: string): string {
     '<div id="analysis-body" class="rail-body"></div>',
     '<footer class="rail-foot">',
     '<p id="rail-draft" class="rail-draft">No comments yet</p>',
-    '<a class="btn btn-primary btn-sm" href="#compose-heading">Finish review</a>',
+    '<a id="rail-finish" class="btn btn-primary btn-sm" href="#compose-heading">Finish review</a>',
     "</footer>",
     "</nav>",
     '<section id="diff-section" class="panel card" aria-labelledby="diff-heading" hidden>',
@@ -1873,7 +1873,14 @@ function script(csrf: string): string {
     var receipt = state && state.receipt && typeof state.receipt === 'object' ? state.receipt : null;
     show(el.receiptSection, Boolean(receipt));
     el.receiptBody.textContent = '';
+    // Once posted, the rail's footer points at the receipt, not at a draft that no longer exists.
+    setText(el.railFinish, receipt ? 'See the receipt' : 'Finish review');
+    setText(el.diffSub, receipt
+      ? 'This review is posted. Read the diff here; replies and new reviews happen on GitHub.'
+      : 'Hover a line and press + to comment. Comments stay in this tab until you submit.');
+    el.railFinish.href = receipt ? '#receipt-heading' : '#compose-heading';
     if (!receipt) return;
+    setText(el.railDraft, 'Review posted to GitHub');
     var dl = make('dl', 'facts');
     addFact(dl, 'Review id', typeof receipt.id === 'number' ? String(receipt.id) : 'unknown');
     addFact(dl, 'GitHub state', typeof receipt.state === 'string' ? receipt.state : 'unknown');
@@ -2043,6 +2050,7 @@ function script(csrf: string): string {
     el.analysisBody = byId('analysis-body');
     el.analysisSub = byId('analysis-sub');
     el.railDraft = byId('rail-draft');
+    el.railFinish = byId('rail-finish');
     el.analysisActions = byId('analysis-actions');
     el.diffSub = byId('diff-sub');
     el.diffSection = byId('diff-section');
@@ -2324,7 +2332,7 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
 .file-tools { margin-left: auto; display: flex; gap: 4px; flex: 0 0 auto; }
 /* A long path gives way first: its directory truncates, the file name stays whole. */
 .file-head .file-path { display: flex; min-width: 0; flex: 0 1 auto; overflow: hidden; }
-.file-head .path-dir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.file-head .path-dir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-head .path-base { flex: 0 0 auto; white-space: nowrap; }
 .file-head .size, .file-head .status-tag { flex: 0 0 auto; }
 .diff-rows { min-width: 0; overflow: hidden; border-radius: 0 0 var(--radius) var(--radius); }
