@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { mislabeledPrebuild, npmSpawnSpec } from "../src/languages/grammars.js";
+import { ensureCachePackageJson, mislabeledPrebuild, npmSpawnSpec } from "../src/languages/grammars.js";
 
 test("Windows npm execution preserves cache paths without shell expansion", () => {
   const directory = mkdtempSync(join(tmpdir(), "diffninja npm "));
@@ -111,5 +111,23 @@ test("mislabeledPrebuild skips unreadable prebuild files", () => {
     expect(mislabeledPrebuild(root)).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the grammar cache allows each grammar's install script, keeping what an older cache wrote", () => {
+  const cache = mkdtempSync(join(tmpdir(), "diffninja-cache-"));
+  try {
+    // A cache from before npm 12 blocked install scripts has no allowScripts.
+    writeFileSync(join(cache, "package.json"), JSON.stringify({ name: "calldiff-grammar-cache", private: true }));
+    ensureCachePackageJson(cache, "tree-sitter-python");
+    ensureCachePackageJson(cache, "tree-sitter-swift");
+    const manifest: unknown = JSON.parse(readFileSync(join(cache, "package.json"), "utf8"));
+    expect(manifest).toEqual({
+      name: "calldiff-grammar-cache",
+      private: true,
+      allowScripts: { "tree-sitter-python": true, "tree-sitter-swift": true },
+    });
+  } finally {
+    rmSync(cache, { recursive: true, force: true });
   }
 });

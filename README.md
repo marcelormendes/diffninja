@@ -47,9 +47,10 @@ The package ships `diffninja` (setup only) and `diffninja-mcp` (the MCP server).
 `npx` fetches the latest published version on first run; if a cached copy feels
 stale, pin it explicitly (`npx -y diffninja@latest setup`).
 
-`0.1.0` is packaged and heading to the registry; until it lands, build from the
-checkout (`npm install && npm run build`) and point your agent at
-`node /absolute/path/to/diffninja/dist/review/mcp-cli.js`.
+On npm 12 and later, which block dependency install scripts by default, setup
+names the ones diffninja needs (`--allow-scripts=diffninja,tree-sitter,...`), so
+nothing extra is required. If you install by hand, pass the same flag:
+`npm install -g --allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript diffninja`.
 
 ## Review a pull request
 
