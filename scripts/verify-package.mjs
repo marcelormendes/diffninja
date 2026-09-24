@@ -110,24 +110,25 @@ try {
     // spawns .cmd files through cmd.exe, the same path real MCP clients use.
     const command = join(binDir, windows ? "diffninja-mcp.cmd" : "diffninja-mcp");
     await client.connect(new StdioClientTransport({ command, stderr: "inherit", cwd: sandbox }));
-    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["review_diff", "record_answers", "record_order", "suggest_comments"]);
+    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["review_diff", "finish_review", "record_answers", "record_order", "suggest_comments"]);
     const result = await client.callTool({ name: "review_diff", arguments: { diff: patch } });
     assert(!result.isError);
     assert.equal(result.structuredContent.items.length, 1);
     assert.equal(result.structuredContent.items[0].facts.language, "c-like");
-    assert.match(result.structuredContent.reportUrl, /^http:\/\/127\.0\.0\.1:\d+\/report\/[a-f0-9]{64}$/);
+    // No page link until the reading is finished.
+    assert.equal(result.structuredContent.reportUrl, undefined);
     const questions = result.structuredContent.questions;
     assert(questions.length > 0);
-    const recorded = await client.callTool({ name: "record_answers", arguments: {
-      reviewId: result.structuredContent.reviewId, answers: [{ questionId: questions[0].id, choice: "cannot-tell" }],
+    const finished = await client.callTool({ name: "finish_review", arguments: {
+      reviewId: result.structuredContent.reviewId,
+      answers: questions.map(question => ({ questionId: question.id, choice: "cannot-tell" })),
+      order: result.structuredContent.items.map(item => item.id),
+      comments: [],
     } });
-    assert(!recorded.isError);
-    assert.equal(recorded.structuredContent.answered, 1);
-    const ordered = await client.callTool({ name: "record_order", arguments: {
-      reviewId: result.structuredContent.reviewId, order: result.structuredContent.items.map(item => item.id),
-    } });
-    assert(!ordered.isError);
-    assert.equal(ordered.structuredContent.ordered, 1);
+    assert(!finished.isError);
+    assert.equal(finished.structuredContent.answered, questions.length);
+    assert.equal(finished.structuredContent.ordered, 1);
+    assert.match(finished.structuredContent.reportUrl, /^http:\/\/127\.0\.0\.1:\d+\/report\/[a-f0-9]{64}$/);
     assert.deepEqual(result.structuredContent, JSON.parse(result.content[0].text));
   } finally {
     await client.close();

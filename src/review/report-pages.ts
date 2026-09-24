@@ -54,6 +54,8 @@ interface ReportPage {
   /** The report behind a published page, kept so recorded answers can re-render it. */
   readonly report?: ReviewReport;
   readonly reviewId?: string;
+  /** Set once finish_review accepted the agent's whole reading; only then is the page's address handed out. */
+  finished?: boolean;
 }
 
 /** A static review published on this connection. */
@@ -73,7 +75,6 @@ export interface RecordedAnswers {
   readonly recorded: number;
   readonly answered: number;
   readonly unanswered: number;
-  readonly reportUrl: string;
 }
 
 interface ReviewedPage {
@@ -85,13 +86,90 @@ interface ReviewedPage {
 export interface RecordedOrder {
   readonly reviewId: string;
   readonly ordered: number;
-  readonly reportUrl: string;
 }
 
 export interface RecordedComments {
   readonly reviewId: string;
   readonly suggested: number;
+}
+
+/** Everything the reviewing agent owes a review before its pages are handed out. */
+export interface FinishInput {
+  readonly answers: readonly AnswerInput[];
+  readonly order: readonly string[];
+  readonly comments: readonly SuggestedComment[];
+}
+
+export interface FinishedReview {
+  readonly reviewId: string;
+  readonly answered: number;
+  readonly ordered: number;
+  readonly suggested: number;
   readonly reportUrl: string;
+}
+
+/** Every answer names a question this review asked, once, with one of its options. */
+function checkAnswers(report: ReviewReport, answers: readonly AnswerInput[]): void {
+  const questions = new Map(report.questions.map((question) => [question.id, question]));
+  const seen = new Set<string>();
+  answers.forEach((answer, index) => {
+    const question = questions.get(answer.questionId);
+    if (question === undefined) throw new Error(`answers[${index}] names a question this review did not ask.`);
+    if (seen.has(answer.questionId)) throw new Error(`answers[${index}] answers the same question twice in one call.`);
+    if (!question.options.includes(answer.choice)) {
+      throw new Error(`answers[${index}] is not one of that question's options: ${question.options.join(", ")}.`);
+    }
+    seen.add(answer.questionId);
+  });
+}
+
+function applyAnswers(report: ReviewReport, answers: readonly AnswerInput[], answeredBy: string): void {
+  const questions = new Map(report.questions.map((question) => [question.id, question]));
+  const answeredAt = new Date().toISOString();
+  for (const answer of answers) questions.get(answer.questionId)!.answer = { choice: answer.choice, answeredBy, answeredAt };
+}
+
+/** The order names every hunk of the review exactly once. */
+function checkOrder(report: ReviewReport, itemIds: readonly string[]): void {
+  const known = new Set(report.items.map((item) => item.id));
+  const seen = new Set<string>();
+  itemIds.forEach((id, index) => {
+    if (!known.has(id)) throw new Error(`order[${index}] names a hunk this review does not have.`);
+    if (seen.has(id)) throw new Error(`order[${index}] repeats a hunk; name each hunk once.`);
+    seen.add(id);
+  });
+  const missing = report.items.filter((item) => !seen.has(item.id)).map((item) => item.id);
+  if (missing.length > 0) throw new Error(`order leaves out ${missing.length} of ${known.size} hunks, starting with ${missing[0]}; name every hunk once.`);
+}
+
+function applyOrder(report: ReviewReport, itemIds: readonly string[], orderedBy: string): void {
+  const diffninjaIds = report.agentOrder?.diffninjaIds ?? report.items.map((item) => item.id);
+  const position = new Map(itemIds.map((id, index) => [id, index]));
+  report.items.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
+  report.agentOrder = { itemIds: [...itemIds], orderedBy, orderedAt: new Date().toISOString(), diffninjaIds };
+}
+
+/** Every comment names a line of the diff, one per line, and reads like the reviewer's own. */
+function checkComments(report: ReviewReport, comments: readonly SuggestedComment[]): void {
+  const anchors = new Set<string>();
+  for (const item of report.items) anchorsOf(item, anchors);
+  const seen = new Set<string>();
+  comments.forEach((comment, index) => {
+    const key = anchorKey(comment.path, comment.side, comment.line);
+    if (!anchors.has(key)) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
+    if (seen.has(key)) throw new Error(`comments[${index}] is a second comment on the same line; combine them into one.`);
+    const problem = commentProblem(comment.body);
+    if (problem !== undefined) throw new Error(`comments[${index}] ${problem}.`);
+    seen.add(key);
+  });
+}
+
+function applyComments(report: ReviewReport, comments: readonly SuggestedComment[], suggestedBy: string): void {
+  report.agentComments = {
+    comments: comments.map(({ path, line, side, body }) => ({ path, line, side, body: body.trim() })),
+    suggestedBy,
+    suggestedAt: new Date().toISOString(),
+  };
 }
 
 /** Map key of one commentable line. */
@@ -157,92 +235,84 @@ export class ReportPages {
   }
 
   /**
-   * Record answers to one review's questions and re-render its page. Every
-   * answer is checked before any is kept — a question this review asked, one of
-   * that question's options, each question at most once per call — so a call
-   * with one bad answer changes nothing. A later answer replaces an earlier one.
+   * Accept the reviewing agent's whole reading of a review at once: an answer
+   * to every question, the reading order of every hunk, and the line comments
+   * it suggests (an empty list says it has none). Everything is checked before
+   * anything is kept, so one gap or bad entry refuses the call and changes
+   * nothing. Only a finished review's page addresses are handed out: an agent
+   * cannot give the human a page it has not finished reading.
    */
-  record(reviewId: string, answers: readonly AnswerInput[], answeredBy: string): RecordedAnswers {
+  finish(reviewId: string, input: FinishInput, by: string): FinishedReview {
     const { token, page, report } = this.review(reviewId);
-    const questions = new Map(report.questions.map((question) => [question.id, question]));
-    const seen = new Set<string>();
-    answers.forEach((answer, index) => {
-      const question = questions.get(answer.questionId);
-      if (question === undefined) throw new Error(`answers[${index}] names a question this review did not ask.`);
-      if (seen.has(answer.questionId)) throw new Error(`answers[${index}] answers the same question twice in one call.`);
-      if (!question.options.includes(answer.choice)) {
-        throw new Error(`answers[${index}] is not one of that question's options: ${question.options.join(", ")}.`);
-      }
-      seen.add(answer.questionId);
-    });
-    const answeredAt = new Date().toISOString();
-    for (const answer of answers) questions.get(answer.questionId)!.answer = { choice: answer.choice, answeredBy, answeredAt };
+    checkAnswers(report, input.answers);
+    const answeredIds = new Set(input.answers.map((answer) => answer.questionId));
+    const unanswered = report.questions.filter((question) => !answeredIds.has(question.id));
+    if (unanswered.length > 0) {
+      throw new Error(`answers leave out ${unanswered.length} of ${report.questions.length} questions, starting with ${unanswered[0].id}; answer every question, cannot-tell when the code does not settle it.`);
+    }
+    checkOrder(report, input.order);
+    checkComments(report, input.comments);
+    applyAnswers(report, input.answers, by);
+    applyOrder(report, input.order, by);
+    applyComments(report, input.comments, by);
+    page.finished = true;
     this.rerender(page, report);
-    const answered = report.questions.filter((question) => question.answer !== undefined).length;
     return {
       reviewId,
-      recorded: answers.length,
-      answered,
-      unanswered: report.questions.length - answered,
+      answered: input.answers.length,
+      ordered: input.order.length,
+      suggested: input.comments.length,
       reportUrl: `${this.origin}/report/${token}`,
     };
   }
 
-  /**
-   * Record the reading order the reviewing agent recommends: the report's items
-   * are reordered to it, so every page and the connected analysis list hunks in
-   * the agent's order, and the page is re-rendered. diffninja's own order is kept
-   * beside it; statuses and priorities never change. The order must name every
-   * hunk of the review exactly once; anything else refuses the whole call and
-   * keeps the previous order. A later order replaces an earlier one.
-   */
-  recordOrder(reviewId: string, itemIds: readonly string[], orderedBy: string): RecordedOrder {
-    const { token, page, report } = this.review(reviewId);
-    const known = new Set(report.items.map((item) => item.id));
-    const seen = new Set<string>();
-    itemIds.forEach((id, index) => {
-      if (!known.has(id)) throw new Error(`order[${index}] names a hunk this review does not have.`);
-      if (seen.has(id)) throw new Error(`order[${index}] repeats a hunk; name each hunk once.`);
-      seen.add(id);
-    });
-    const missing = report.items.filter((item) => !seen.has(item.id)).map((item) => item.id);
-    if (missing.length > 0) throw new Error(`order leaves out ${missing.length} of ${known.size} hunks, starting with ${missing[0]}; name every hunk once.`);
-    const diffninjaIds = report.agentOrder?.diffninjaIds ?? report.items.map((item) => item.id);
-    const position = new Map(itemIds.map((id, index) => [id, index]));
-    report.items.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
-    report.agentOrder = { itemIds: [...itemIds], orderedBy, orderedAt: new Date().toISOString(), diffninjaIds };
-    this.rerender(page, report);
-    return { reviewId, ordered: itemIds.length, reportUrl: `${this.origin}/report/${token}` };
+  /** Whether finish_review accepted this review, so its addresses may be handed out again. */
+  isFinished(reviewId: string): boolean {
+    return this.review(reviewId).page.finished === true;
   }
 
   /**
-   * Record the line comments the reviewing agent suggests. The human sees them
-   * under their lines on the pull request page and adds each to their own review,
-   * or not; nothing here posts anything. Every comment must name a line of this
-   * review's diff, at most one per line, and read like a reviewer's own short
-   * comment. Any bad comment refuses the whole call and keeps the previous set;
-   * a later call replaces it, and an empty list clears it.
+   * Update the answers of a review. Every answer is checked before any is kept
+   * — a question this review asked, one of that question's options, each
+   * question at most once per call — so a call with one bad answer changes
+   * nothing. A later answer replaces an earlier one.
+   */
+  record(reviewId: string, answers: readonly AnswerInput[], answeredBy: string): RecordedAnswers {
+    const { page, report } = this.review(reviewId);
+    checkAnswers(report, answers);
+    applyAnswers(report, answers, answeredBy);
+    this.rerender(page, report);
+    const answered = report.questions.filter((question) => question.answer !== undefined).length;
+    return { reviewId, recorded: answers.length, answered, unanswered: report.questions.length - answered };
+  }
+
+  /**
+   * Update the reading order the reviewing agent recommends: the report's items
+   * are reordered to it, so every page and the connected analysis list hunks in
+   * the agent's order. diffninja's own order is kept beside it; statuses and
+   * priorities never change. The order must name every hunk exactly once;
+   * anything else refuses the call and keeps the previous order.
+   */
+  recordOrder(reviewId: string, itemIds: readonly string[], orderedBy: string): RecordedOrder {
+    const { page, report } = this.review(reviewId);
+    checkOrder(report, itemIds);
+    applyOrder(report, itemIds, orderedBy);
+    this.rerender(page, report);
+    return { reviewId, ordered: itemIds.length };
+  }
+
+  /**
+   * Update the line comments the reviewing agent suggests. The human sees them
+   * under their lines on the pull request page and adds each to their own
+   * review, or not; nothing here posts anything. Any bad comment refuses the
+   * call and keeps the previous set; an empty list clears it.
    */
   suggestComments(reviewId: string, comments: readonly SuggestedComment[], suggestedBy: string): RecordedComments {
-    const { token, page, report } = this.review(reviewId);
-    const anchors = new Set<string>();
-    for (const item of report.items) anchorsOf(item, anchors);
-    const seen = new Set<string>();
-    comments.forEach((comment, index) => {
-      const key = anchorKey(comment.path, comment.side, comment.line);
-      if (!anchors.has(key)) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
-      if (seen.has(key)) throw new Error(`comments[${index}] is a second comment on the same line; combine them into one.`);
-      const problem = commentProblem(comment.body);
-      if (problem !== undefined) throw new Error(`comments[${index}] ${problem}.`);
-      seen.add(key);
-    });
-    report.agentComments = {
-      comments: comments.map(({ path, line, side, body }) => ({ path, line, side, body: body.trim() })),
-      suggestedBy,
-      suggestedAt: new Date().toISOString(),
-    };
+    const { page, report } = this.review(reviewId);
+    checkComments(report, comments);
+    applyComments(report, comments, suggestedBy);
     this.rerender(page, report);
-    return { reviewId, suggested: comments.length, reportUrl: `${this.origin}/report/${token}` };
+    return { reviewId, suggested: comments.length };
   }
 
   private review(reviewId: string): ReviewedPage {

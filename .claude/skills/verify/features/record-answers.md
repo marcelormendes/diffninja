@@ -1,10 +1,10 @@
 # Answer review questions
 
-After `review_diff`, the agent answers the report's questions with `record_answers`, choosing only from each question's listed options. Accepted answers appear on the report page beside their hunk, attributed to the MCP client's name and version. They never change status, priority, or order.
+The agent's first answers arrive inside `finish_review` (see [finish-review.md](./finish-review.md)); `record_answers` updates them, choosing only from each question's listed options. Accepted answers appear on the report page beside their hunk, attributed to the MCP client's name and version. They never change status, priority, or order.
 
 ## Sub-features
 
-- `answers-accept` records valid answers and returns `recorded` and `reportUrl`.
+- `answers-accept` records valid answers and returns `recorded` and `next`, never a page link.
 - `answers-refuse` refuses the whole call when any answer names an unknown question, repeats one, or uses an unlisted option. Nothing is kept.
 - `answers-replace` lets a later answer to the same question replace the earlier one.
 - `answers-attribution` shows the client's `name version` on the re-rendered page.

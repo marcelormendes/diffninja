@@ -1,13 +1,13 @@
 ---
 name: verify
-description: Drive the real diffninja MCP server (dist/review/mcp-cli.js over stdio) the way an agent host does, call review_diff, record_answers, and record_order, fetch the loopback report pages, and capture evidence. Use to prove a change to diffninja's review output, report page, answers, agent reading order, connected PR review, or `diffninja setup` works in the built artifact, not just in vitest.
+description: Drive the real diffninja MCP server (dist/review/mcp-cli.js over stdio) the way an agent host does, call review_diff and finish_review, fetch the loopback report pages, and capture evidence. Use to prove a change to diffninja's review output, report page, answers, agent reading order, connected PR review, or `diffninja setup` works in the built artifact, not just in vitest.
 ---
 
 # Verify diffninja
 
 diffninja has no UI of its own. Its users touch four surfaces:
 
-- **Primary:** the stdio MCP server `diffninja-mcp` (`dist/review/mcp-cli.js`). An agent host calls its tools `review_diff`, `record_answers`, and `record_order`.
+- **Primary:** the stdio MCP server `diffninja-mcp` (`dist/review/mcp-cli.js`). An agent host calls `review_diff`, then `finish_review` for the page links; `record_answers`, `record_order`, and `suggest_comments` update a review afterwards.
 - **Report pages:** loopback HTTP pages the server returns as `reportUrl` (static reviews) or `url` (connected PR reviews). Humans read them in a browser. They live in server memory and close when the MCP connection closes.
 - **Setup CLI:** `node dist/review/cli.js setup` registers the server with Claude Code, Codex, OMP, or pi. It has no other command.
 - **Library:** `dist/index.js`, the calldiff engine. It is not user-facing here.
@@ -42,7 +42,7 @@ It checks:
 - Node is at least 22.18.
 - The build exists and is newer than every file in `src/`.
 - The server refuses arguments, exiting 1 with an error on stderr and nothing on stdout. stdout is reserved for the protocol.
-- `tools/list` returns exactly `record_answers`, `record_order`, and `review_diff`.
+- `tools/list` returns exactly `finish_review`, `record_answers`, `record_order`, `review_diff`, and `suggest_comments`.
 - `gh auth status`. This is reported as INFO only, because only connected PR review needs `gh`.
 
 Any `FAIL` makes the exit code 1. On "build is newer than src/", run `npm run build`.
@@ -50,12 +50,16 @@ Any `FAIL` makes the exit code 1. On "build is newer than src/", run `npm run bu
 ## Drive
 
 ```sh
-node .claude/skills/verify/drive.mjs review --args '<json>' [--answer cannot-tell|first] [--order reverse] [--hold SECONDS] [--out DIR]
+node .claude/skills/verify/drive.mjs review --args '<json>' [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]
 ```
 
 - `--args`: the exact `review_diff` arguments. It is a strict schema: `diff`, `repo`, `from`, `to`, `pr`, `input`, `mode`, `expectedOutcome {title, description}`, and `referenceProject`. Any other key is an error.
-- `--answer`: answers every returned question through `record_answers` with `cannot-tell` or with each question's first option. Then it checks that an unlisted option is refused and that the re-fetched page shows answers attributed to the `diffninja-verify` client.
-- `--order reverse`: sends the reverse of the report's order through `record_order`, then checks that a partial order is refused, that the report page lists the hunks in that order attributed to `diffninja-verify`, that diffninja's own order is still offered, and, for a connected review, that the pull request page's `/api/analysis` reports the agent's order.
+- The drive always finishes the review the way an agent must. It checks that `review_diff` hands out no page link, sends `finish_review`, and takes the page links from its result.
+  - It first checks that a reading that leaves a question out is refused.
+  - The answers are `cannot-tell`, or with `--answer first` each question's first option.
+  - The order is the report's own, or its reverse with `--order reverse`.
+  - The comments are `[]`, or with `--suggest` one short comment on the first added line of each of the first three hunks. With comments, it also checks that a report-style comment ("Finding 1: …") is refused.
+  - Then it checks that the report page shows the answers and the order attributed to `diffninja-verify`. For a connected review, it also checks that `/api/analysis` has the agent's order, every answer, and the comments.
 - `--hold N`: keeps the connection, and so the pages, alive for N seconds, and prints the URLs. Use it to open a page in a browser while the drive waits (see `features/report-page.md`).
 - `--out`: the evidence directory. The default is `<os tmpdir>/diffninja-verify/<ISO timestamp>/`, and the path is printed on the first line.
 
@@ -88,10 +92,11 @@ Each drive writes these files to its evidence directory:
 | `review_diff.json` | The full tool result: `content` and `structuredContent`. |
 | `reportUrl.html`, `reportUrl.headers.json` | The report page and its response headers. |
 | `url.html`, `url.headers.json` | The connected PR page and its headers (connected reviews only). |
-| `record_answers.json` | The result of recording the answers (with `--answer`). |
-| `record_answers.refused.json` | The refused call with an unlisted option (with `--answer`). |
-| `record_order.json`, `record_order.refused.json`, `reportUrl.after-order.html` | The accepted order, the refused partial order, and the page after it (with `--order`). |
-| `reportUrl.after-answers.html` | The page re-fetched after the answers (with `--answer`). |
+| `finish_review.json` | The accepted reading and the page links it returned. |
+| `finish_review.refused.json` | The refused reading that left a question out. |
+| `finish_review.labelled.json` | The refused report-style comment (with `--suggest`). |
+| `reportUrl.finished.html` | The report page right after `finish_review`. |
+| `url.analysis.json` | The connected page's `/api/analysis` after `finish_review` (connected reviews only). |
 | `server-stderr.txt` | Server diagnostics. |
 | `checks.json` | Every PASS/FAIL line. |
 

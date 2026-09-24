@@ -820,7 +820,7 @@ describe("review HTML", () => {
     expect(html.indexOf('cf-mode cf-mode-tree')).toBeLessThan(html.indexOf("<template"));
     // The mode switch is script-only, so its anchors cannot be dead links, and
     // the page says which renderings a reader without scripts is missing.
-    // The diagram opens full screen from a script-only button rather than a tab.
+    // The diagram opens across the window from a script-only button rather than a tab.
     expect(html).toContain('<button type="button" class="cf-diagram-btn enhanced" data-cf-diagram');
     expect(html).not.toContain('data-cf-mode="graph"');
     expect(html).toContain('<a class="cf-mode-link enhanced" data-cf-mode="sequence"');
