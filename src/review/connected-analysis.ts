@@ -18,27 +18,30 @@ import type { ReviewItem, ReviewReport, ReviewStatus, SuggestedComment } from ".
 /** Most agenda entries the page lists; the full report has the rest. */
 export const CONNECTED_AGENDA_LIMIT = 5;
 
+/** Short tags: each names what to check on the line it points at. */
 const FACT_LABEL = {
-  comparisonChanged: "comparison changed",
-  limitChanged: "limit changed",
-  validationChanged: "input check changed",
-  failurePropagated: "failure handed to the caller",
-  failureDeferred: "failure deferred or retried",
-  failureDiscarded: "failure discarded",
-  contractChanged: "public contract or declaration changed",
-  dataChanged: "schema or stored data changed",
-  queryChanged: "database query changed",
-  instructionChanged: "instruction to readers changed",
-  referenceChanged: "link or reference changed",
+  comparisonChanged: "Comparison",
+  limitChanged: "Limit",
+  validationChanged: "Input check",
+  failurePropagated: "Throws to caller",
+  failureDeferred: "Retry or deferral",
+  failureDiscarded: "Swallowed error",
+  contractChanged: "Public API",
+  dataChanged: "Schema or data",
+  queryChanged: "SQL query",
+  instructionChanged: "Instructions",
+  referenceChanged: "Link",
   gateWeakened: "CI gate weakened",
-  permissionChanged: "permission or secret access changed",
-  pinChanged: "version pin changed",
+  permissionChanged: "Permissions",
+  pinChanged: "Version pin",
 } satisfies Record<ChangeFactQuestion, string>;
 
 export interface ConnectedFact {
   readonly label: string;
   readonly side: "added" | "removed";
   readonly text: string;
+  /** Where the cited line is in the diff, so the page can jump to it; absent when it cannot be placed. */
+  at?: HunkLanding;
 }
 
 export interface ConnectedQuestion {
@@ -108,6 +111,28 @@ interface HunkLanding {
   readonly side: "LEFT" | "RIGHT";
 }
 
+/** The diff line a fact cites: the first changed row on its side whose text is the evidence. */
+function lineOf(item: ReviewItem, side: "added" | "removed", text: string): HunkLanding | undefined {
+  const marker = side === "added" ? "+" : "-";
+  const truncated = text.endsWith("\u2026");
+  const stem = truncated ? text.slice(0, -1) : text;
+  let oldLine = item.oldStart;
+  let newLine = item.newStart;
+  for (const row of item.diff.split("\n").slice(1)) {
+    if (row.startsWith(marker)) {
+      const body = row.slice(1).trim();
+      if (truncated ? body.startsWith(stem) : body === stem) return side === "added" ? { line: newLine, side: "RIGHT" } : { line: oldLine, side: "LEFT" };
+    }
+    if (row.startsWith("+")) newLine += 1;
+    else if (row.startsWith("-")) oldLine += 1;
+    else if (row.startsWith(" ")) {
+      oldLine += 1;
+      newLine += 1;
+    }
+  }
+  return undefined;
+}
+
 /** The first line a reader should land on: the first changed line, on its own side. */
 function landingOf(item: ReviewItem): HunkLanding {
   let oldLine = item.oldStart;
@@ -168,7 +193,10 @@ export function connectedAnalysisOf(
     for (const question of CHANGE_FACT_QUESTIONS) {
       const evidence = item.facts?.evidence[question];
       if (item.facts?.answers[question] === "yes" && evidence !== undefined) {
-        facts.push({ label: FACT_LABEL[question], side: evidence.side, text: evidence.text });
+        const fact: ConnectedFact = { label: FACT_LABEL[question], side: evidence.side, text: evidence.text };
+        const at = lineOf(item, evidence.side, evidence.text);
+        if (at !== undefined) fact.at = at;
+        facts.push(fact);
       }
     }
     const landing = landingOf(item);
