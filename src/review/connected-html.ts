@@ -1872,14 +1872,6 @@ function script(csrf: string): string {
     if (lead.status === 'attention' || lead.status === 'uncertain') head.appendChild(statusTag(lead.status));
     var tools = make('span', 'file-tools');
     if (hasCallFlow(stop.path)) tools.appendChild(flowButton(stop.path, 'Call flow'));
-    var inFile = make('button', 'btn btn-quiet', 'Show in file');
-    inFile.type = 'button';
-    inFile.dataset.action = 'show-in-file';
-    inFile.dataset.path = stop.path;
-    inFile.dataset.line = String(lead.line);
-    inFile.dataset.side = lead.side === 'LEFT' ? 'LEFT' : 'RIGHT';
-    inFile.setAttribute('aria-label', 'Show change ' + stop.rank + ' in the whole diff of ' + stop.path);
-    tools.appendChild(inFile);
     head.appendChild(tools);
     section.appendChild(head);
     for (var h = 0; h < stop.hunks.length; h += 1) {
@@ -2305,7 +2297,6 @@ function script(csrf: string): string {
     if (action === 'goto') { event_.preventDefault(); gotoLine(node); return; }
     if (action === 'goto-stop') { event_.preventDefault(); gotoStop(Number(node.getAttribute('data-rank'))); return; }
     if (action === 'view') { event_.preventDefault(); setView(node.getAttribute('data-view') || ''); return; }
-    if (action === 'show-in-file') { event_.preventDefault(); setView('file'); gotoLine(node); return; }
     if (action === 'show-load') { event_.preventDefault(); showLoad = true; render(); el.prUrl.focus(); return; }
   }
 

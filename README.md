@@ -72,8 +72,8 @@ does a test exercise it, does it serve the stated goal) and the facts to look
 at above its code. Hunks outside the order follow under **Other changes**.
 Press `j` and `k` to step through the changes. A rail beside the diff lists
 them, marks the one you are reading, and fills in as you read. **By file**
-switches to one block per file, with each change's number where it starts, and
-**Show in file** opens a change there. When the agent works inside your local
+switches to one block per file, with each change's number where it starts,
+and keeps you on the change you were reading. When the agent works inside your local
 clone it passes it as `repo`; once the clone has the pull request's commits,
 the analysis adds definitions and call flows, and the page opens a file's call
 flow in a drawer beside the diff. diffninja never fetches or writes in the
