@@ -1526,8 +1526,9 @@ function script(csrf: string): string {
       all.disabled = disabled;
       bar.appendChild(all);
     } else {
-      bar.appendChild(make('p', '', adopted + (adopted === 1 ? ' suggested comment is' : ' suggested comments are')
-        + ' in your draft. Read them over, then check and submit below.'));
+      bar.appendChild(make('p', '', adopted === 1
+        ? '1 suggested comment is in your draft. Read it over, then check and submit below.'
+        : adopted + ' suggested comments are in your draft. Read them over, then check and submit below.'));
       var go = make('a', 'bar-link', 'Review and submit \u2193');
       go.href = '#compose-heading';
       bar.appendChild(go);
