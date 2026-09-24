@@ -1171,10 +1171,13 @@ function script(csrf: string): string {
   /**
    * Mark the station whose hunk the reader is looking at: the last hunk whose
    * first line has scrolled past the top third of the window. Stations are in
-   * reading order, not file order, so every one is measured.
+   * reading order, not file order, so every one is measured. The rail's list
+   * is left where the reader put it: stations of one file sit far apart in the
+   * reading order, so following them would swing the list up and down.
    */
   function markCurrentStation() {
     spyQueued = false;
+    fitRail();
     var stations = el.analysisBody.querySelectorAll('.order-item');
     var line = window.innerHeight * 0.33;
     var best = null;
@@ -1191,13 +1194,15 @@ function script(csrf: string): string {
       if (on) stations[j].setAttribute('aria-current', 'step');
       else stations[j].removeAttribute('aria-current');
     }
-    if (best) {
-      var rail = el.analysisBody;
-      var box = best.getBoundingClientRect();
-      var frame = rail.getBoundingClientRect();
-      if (box.top < frame.top) rail.scrollTop -= frame.top - box.top + 8;
-      else if (box.bottom > frame.bottom) rail.scrollTop += box.bottom - frame.bottom + 8;
-    }
+  }
+
+  /** Keep the whole rail, its finish button included, inside the window before it pins below the masthead. */
+  function fitRail() {
+    var rail = el.analysisSection;
+    if (rail.hidden) return;
+    if (window.getComputedStyle(rail).position !== 'sticky') { rail.style.maxHeight = ''; return; }
+    var top = Math.max(16, rail.getBoundingClientRect().top);
+    rail.style.maxHeight = Math.max(240, window.innerHeight - top - 16) + 'px';
   }
 
   function queueStationMark() {
@@ -1323,7 +1328,6 @@ function script(csrf: string): string {
 
   /* ---------------------------------------------------------------- diff -- */
 
-  /** Files in the reading order: the first hunk each file has in the analysis, then any file it does not list. */
   /* ------------------------------------------------------------ call flow -- */
 
   function hasCallFlow(path) {
