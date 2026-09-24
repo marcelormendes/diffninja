@@ -565,7 +565,7 @@ describe("review HTML", () => {
     expect(rendered).toMatch(/href="#view-diff"[^>]*>Diff</);
     expect(rendered).toMatch(/href="#view-call-flow"[^>]*>Call flow</);
     expect(rendered).toContain("Tree");
-    expect(rendered).toContain("Graph");
+    expect(rendered).toContain("Diagram");
     expect(rendered).toContain("Sequence");
     expect(rendered).toMatch(/<svg\b/);
     expect(rendered).toContain("authorize");
@@ -820,8 +820,11 @@ describe("review HTML", () => {
     expect(html.indexOf('cf-mode cf-mode-tree')).toBeLessThan(html.indexOf("<template"));
     // The mode switch is script-only, so its anchors cannot be dead links, and
     // the page says which renderings a reader without scripts is missing.
-    expect(html).toContain('<a class="cf-mode-link enhanced" data-cf-mode="graph"');
-    expect(html).toMatch(/<noscript class="cf-noscript">.*Graph and Sequence are alternate renderings/s);
+    // The diagram opens full screen from a script-only button rather than a tab.
+    expect(html).toContain('<button type="button" class="cf-diagram-btn enhanced" data-cf-diagram');
+    expect(html).not.toContain('data-cf-mode="graph"');
+    expect(html).toContain('<a class="cf-mode-link enhanced" data-cf-mode="sequence"');
+    expect(html).toMatch(/<noscript class="cf-noscript">.*The diagram and Sequence are alternate renderings/s);
     expect(html).toContain("The diff holds every changed line.");
     // The markup is still all there for a reader without the script.
     expect(html).toContain("charge");

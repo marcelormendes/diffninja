@@ -257,7 +257,7 @@ describe("call-flow controls", () => {
     // Without the script the graph draws every serialized call, so the control
     // is not offered at all.
     expect(html).toContain('class="cf-depth enhanced"');
-    expect(html).toContain('aria-label="Graph depth below the focused call"');
+    expect(html).toContain('aria-label="Diagram depth below the focused call"');
   });
 
 
