@@ -620,9 +620,12 @@ function assertEdited(
   }
 }
 
-/** Objects and dates are the only TOML values that can hold subtables. */
+/**
+ * A table is any object that is not an array or a date. smol-toml 1.9 builds
+ * tables without a prototype, so `instanceof Object` would miss them.
+ */
 function isTomlTable(node: TomlNode): node is TomlTableNode {
-  return node instanceof Object && !Array.isArray(node);
+  return Object(node) === node && !Array.isArray(node) && !(node instanceof Date);
 }
 
 function tableAt(root: TomlTableNode, path: readonly string[]): TomlNode | undefined {

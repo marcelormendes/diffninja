@@ -2,7 +2,7 @@
 // Exercise the actual global-install layout without touching the user's prefix.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -78,6 +78,20 @@ try {
     : run(join(binDir, "diffninja"), ["--help"]);
   assert.match(help, /diffninja setup/);
 
+  // Registration edits a user's existing config through the dependencies npm
+  // resolves today, not the lockfile's: smol-toml 1.9 once broke the Codex
+  // TOML edit on every fresh install while the repository's tests passed.
+  const setupHome = join(sandbox, "setup home");
+  const codexHome = join(setupHome, "codex home");
+  mkdirSync(codexHome, { recursive: true });
+  writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5"\n\n[mcp_servers.other]\ncommand = "other"\n');
+  run(process.execPath, [join(packageDir, manifest.bin.diffninja), "setup", "--cli", "codex", "--no-install"], {
+    env: { ...isolatedEnv, HOME: setupHome, USERPROFILE: setupHome, CODEX_HOME: codexHome },
+  });
+  const codexConfig = readFileSync(join(codexHome, "config.toml"), "utf8");
+  assert.match(codexConfig, /\[mcp_servers\.diffninja\]/);
+  assert.match(codexConfig, /\[mcp_servers\.other\]/);
+
   // Native DLLs stay locked while loaded on Windows. Use a child that exits
   // before removing the sandbox, just like the CLI and MCP checks below.
   // On-demand grammar installation runs on every platform: on Windows it
@@ -133,7 +147,7 @@ try {
   } finally {
     await client.close();
   }
-  console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, both command shims, setup-only CLI, native TypeScript/Python, MCP stdio`);
+  console.log(`PASS ${process.platform}/${process.arch} Node ${process.version}: clean global install, pack layout, both command shims, setup-only CLI, Codex registration, native TypeScript/Python, MCP stdio`);
 } finally {
   removeDir(sandbox);
 }

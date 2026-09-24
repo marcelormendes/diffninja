@@ -1,6 +1,6 @@
 {
   "name": "diffninja",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local, deterministic PR review for coding agents over MCP: call flows, change facts, and a human review workspace",
   "type": "module",
   "exports": {
@@ -62,7 +62,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "incur": "^0.4.26",
     "picocolors": "^1.1.1",
-    "smol-toml": "^1.8.0",
+    "smol-toml": "^1.9.0",
     "tree-sitter": "^0.25.1",
     "tree-sitter-javascript": "^0.25.0",
     "zod": "^4.6.5"
