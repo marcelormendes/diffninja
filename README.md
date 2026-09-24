@@ -54,8 +54,11 @@ checkout (`npm install && npm run build`) and point your agent at
 ## Review a pull request
 
 Ask your agent to review `https://github.com/OWNER/REPO/pull/123`. It calls
-`review_diff` with the link and gives you a loopback review page, loaded from
-the canonical GitHub patch through your `gh` authentication. Select diff lines,
+`review_diff` with the link, reads the pull request, sends its reading with
+`finish_review`, and then gives you a loopback review page, loaded from the
+canonical GitHub patch through your `gh` authentication. The link arrives
+once the agent has read the change, so the page opens complete: the agent's
+reading order, its answers, and its suggested comments. Select diff lines,
 write single-line inline comments and a review body, pick Comment, Approve, or
 Request changes, preview the exact payload, and submit. Comments your agent
 suggests wait under their lines until you add them; every word you submit is one
@@ -85,9 +88,10 @@ expected outcome when supplied (`expectedOutcome`), a short reading agenda,
 bounded automatic findings, explicit check coverage, and every hunk, ranked as
 **attention**, **uncertain**, **low**, or **passed**; git ranges add call flows
 and snapshot-bound source. Claims in a description are not proof that the code
-fulfills them. The result also carries `reportUrl`: a read-only page on
-`127.0.0.1` with the same report for you to read — the agenda, call-flow graphs,
-and every hunk — served from memory for as long as the agent's session lasts.
+fulfills them. Once the agent has sent its reading (below), it gets `reportUrl`:
+a read-only page on `127.0.0.1` with the same report for you to read (the
+agenda, call-flow graphs, and every hunk), served from memory for as long as
+the agent's session lasts.
 The tool writes no report files. Arguments and examples:
 [docs/mcp-setup.md](docs/mcp-setup.md). Trying it on real reviews:
 [docs/pilot.md](docs/pilot.md).
@@ -138,21 +142,22 @@ The tool writes no report files. Arguments and examples:
    syntax, the report asks the agent that requested it — does this hunk change
    what callers observe, does a test exercise it, does a test change weaken it,
    do the docs match the code, does the hunk serve the stated goal. Questions
-   are fixed templates with closed options (always including `cannot-tell`);
-   the agent answers through `record_answers`, and the answers appear on the
-   report page attributed to that agent, never reordering anything. diffninja
-   itself still calls no model.
-   After reading the hunks, the agent sends the reading order it recommends
-   through `record_order` (every hunk id once, most important first). From
-   then on the report page and the pull request page list every hunk in the
-   agent's order, attributed to it; diffninja's own order stays available one
-   click away, and statuses stay diffninja's. On 159 held-out open-source
+   are fixed templates with closed options (always including `cannot-tell`).
+   diffninja itself still calls no model.
+   The agent sends its whole reading in one `finish_review` call: an answer to
+   every question, the reading order of every hunk (most important first),
+   and the line comments it would leave (or none). diffninja checks all of it
+   and only then hands out the page link, so every page you open already
+   carries the agent's answers, its order, and its comment decision; an agent
+   cannot give you a half-read page. The pages list every hunk in the agent's
+   order, attributed to it; diffninja's own order stays available one click
+   away, and statuses stay diffninja's. `record_answers`, `record_order`, and
+   `suggest_comments` update a review afterwards. On 159 held-out open-source
    pull requests, weighted by the severity of maintainers' actual review
    comments, a host model that read diffninja's report put the serious
    comments earlier than diffninja's deterministic order did.
-   On a pull request, the agent can also suggest the line comments it would
-   leave, through `suggest_comments`: short, in the reviewer's own voice, no
-   "Finding 1:" scaffolding. The page shows each under its line; you add one
+   On a pull request, the suggested line comments are short, in the reviewer's
+   own voice, with no "Finding 1:" scaffolding. The page shows each under its line; you add one
    or all of them to your draft with a click, edit or dismiss them, and submit
    the review yourself. Nothing is posted without you.
 5. **Project context (git ranges only).** What a diff does not show is often

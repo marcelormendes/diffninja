@@ -1,15 +1,16 @@
 # diffninja
 
 `diffninja` runs inside agent CLIs (Claude Code, Codex, OMP, pi, …) through
-`diffninja-mcp`, a stdio MCP server exposing `review_diff`, `record_answers`, `record_order`, and
-`suggest_comments`. The
+`diffninja-mcp`, a stdio MCP server exposing `review_diff`, `finish_review`,
+`record_answers`, `record_order`, and `suggest_comments`. The
 `diffninja` bin only registers that server (`diffninja setup`); there is no
 terminal review mode. PR links select a connected, human-authored GitHub review
-via `gh`, and the tool returns its loopback URL. Static diff/range analysis is
+via `gh`. Page links come only from `finish_review`: the agent gets them once it
+has sent its whole reading, so every page a human opens carries it. Static diff/range analysis is
 local and deterministic: no model is called and no source leaves the machine.
 Each hunk gets lexical change facts (`change-facts.ts`: code, prose, and config
-questions) with the changed line each rests on, and is ranked in code. No review writes report files: a static
-result adds `reportUrl`, a read-only loopback page (`report-pages.ts`) serving
+questions) with the changed line each rests on, and is ranked in code. No review writes report files: a finished
+review's `reportUrl` is a read-only loopback page (`report-pages.ts`) serving
 the `html.ts` report from memory. The call-flow
 engine underneath is forked from `calldiff` (Tanishq Kancharla, MIT, see
 LICENSE and the attribution section in README.md). See `README.md` for usage.
@@ -67,13 +68,26 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     Static analysis requires exactly one of `diff` or `from`+`to`; `repo` must
     be absolute for a range. In auto, `pr`/`input` require a PR link.
   - Static success returns `structuredContent` equal to the `ReviewReport` plus
-    `reportUrl` and `reviewId`; the report carries `questions` (`questions.ts`,
+    `reviewId` and `nextSteps`, and no page link; the report carries `questions` (`questions.ts`,
     deterministic templates, closed options incl. `cannot-tell`, at most 36; import-only hunks are not asked about).
     A git-range report also carries `project` (`history.ts`): line origins per
     hunk (`items[].history`, blame at the base), related reverts, applicable
     guideline paths, and new-file sibling conventions, all from local git only,
     code-point sorted, and never affecting status, priority, or order; a shallow
     clone reports `history: "shallow"` and counts cut lines as unknown.
+  - `finish_review`: strict `{ reviewId, answers, order, comments }`, the only
+    source of page links. `answers` must answer every question of the review
+    (checked like `record_answers`), `order` must name every item once (as
+    `record_order`), and `comments` follows the `suggest_comments` rules and
+    may be `[]`. Everything is checked before anything is kept; any gap or bad
+    entry refuses the whole call with what to fix and hands out no link. On
+    success it applies all three, marks the review finished, and returns
+    `{ reviewId, answered, ordered, suggested, reportUrl, url? (connected), next }`.
+    A later `review_diff` of a finished pull request returns its `url` and
+    `reportUrl` again.
+  - `record_answers`, `record_order`, `suggest_comments` update a review
+    before or after it is finished; they return counts and `next`, never a
+    link.
   - `record_answers`: strict `{ reviewId, answers: [{ questionId, choice }] }`,
     no free text; any invalid answer refuses the whole call and keeps nothing;
     answers are attributed to the MCP client's own name/version, re-render the
@@ -95,14 +109,14 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     the connected pull request page (`/api/analysis` `order`), and every rank
     follow it, attributed to the MCP client; diffninja's own order is kept in
     `agentOrder.diffninjaIds` and stays one disclosure away. Status and priority
-    never change, and a later call replaces an earlier one. Until an order
-    arrives, the pages show diffninja's order and the connected page keeps
-    polling for one. Reviews are reachable only
+    never change, and a later call replaces an earlier one. Reviews are reachable only
     from the connection that created them. Report pages are `GET /report/<256-bit token>` only, Host-checked,
     CSP-pinned by hash, no-store, at most 20 per connection, and close with it.
-    Connected success returns `{ mode: "connected", url, pr, snapshot }` plus,
-    for exactly that snapshot, the local analysis: `reviewId`, `reportUrl`,
-    `analysisScope`, and `report` (or `analysisUnavailable`). The page reads it
+    Connected success returns `{ mode: "connected", pr, snapshot }` plus, for
+    exactly that snapshot, the local analysis: `reviewId`, `analysisScope`,
+    `report`, and `nextSteps`, with no link until `finish_review` (a finished
+    review adds `url` and `reportUrl`). With `analysisUnavailable` there is
+    nothing to finish, and the result carries the page `url` directly. The page reads it
     from `GET /api/analysis` (same Host/Origin checks) and polls for answers.
     With a PR link, `repo` is an optional absolute local clone used only when it
     already has the PR's base and head commits: never fetched, checked out, or

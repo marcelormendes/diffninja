@@ -77,7 +77,7 @@ async function doctor() {
   check("server refuses arguments", bad.status === 1 && bad.stderr.includes("accepts no arguments") && bad.stdout === "", `exit ${bad.status}`);
   const { client } = await connect();
   const tools = (await client.listTools()).tools.map(tool => tool.name).sort();
-  check("tools are review_diff, record_answers, record_order, suggest_comments", tools.join(",") === "record_answers,record_order,review_diff,suggest_comments", tools.join(","));
+  check("tools are review_diff, finish_review, record_answers, record_order, suggest_comments", tools.join(",") === "finish_review,record_answers,record_order,review_diff,suggest_comments", tools.join(","));
   await client.close();
   let gh = "not installed";
   try { execFileSync("gh", ["auth", "status"], { stdio: "pipe", timeout: 20_000 }); gh = "authenticated"; } catch (error) { gh = error.code === "ENOENT" ? gh : "not authenticated"; }
@@ -98,10 +98,56 @@ async function review() {
     const result = await client.callTool({ name: "review_diff", arguments: args }, undefined, { timeout: 900_000 });
     save("review_diff.json", result);
     if (!check("review_diff succeeded", !result.isError, result.isError ? result.content[0].text : "")) return;
-    const report = result.structuredContent;
-    reportUrl = report.reportUrl;
-    check("text content is the same JSON as structuredContent", JSON.stringify(JSON.parse(result.content[0].text)) === JSON.stringify(report));
-    const pages = { reportUrl: report.reportUrl, url: report.url };
+    const payload = result.structuredContent;
+    check("text content is the same JSON as structuredContent", JSON.stringify(JSON.parse(result.content[0].text)) === JSON.stringify(payload));
+    const report = payload.report ?? payload;
+    const items = report.items ?? [];
+    const questions = report.questions ?? [];
+    console.log(`INFO ${JSON.stringify({ mode: payload.mode ?? "static", items: items.length, questions: questions.length, unavailable: payload.analysisUnavailable ?? null })}`);
+    let pages = { reportUrl: payload.reportUrl, url: payload.url };
+    if (payload.reviewId) {
+      // The diff itself may mention loopback addresses; only the link fields matter.
+      check("review_diff hands out no page link before finish_review", !("url" in payload) && !("reportUrl" in payload));
+      const answers = questions.map(q => ({ questionId: q.id, choice: values.answer === "first" ? q.options[0] : "cannot-tell" }));
+      const order = items.map(item => item.id);
+      if (values.order === "reverse") order.reverse();
+      const comments = [];
+      if (values.suggest) {
+        // One comment on the first added line of each of the first three hunks, in a reviewer's voice.
+        for (const item of items.slice(0, 3)) {
+          let line = item.newStart;
+          for (const text of item.diff.split("\n").slice(1)) {
+            if (text.startsWith("+")) { comments.push({ path: item.file, line, side: "RIGHT", body: `Could we cover ${item.file.split("/").pop()} line ${line} with a test?` }); break; }
+            if (!text.startsWith("-")) line += 1;
+          }
+        }
+      }
+      if (questions.length > 0) {
+        const partial = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers: answers.slice(1), order, comments } });
+        save("finish_review.refused.json", partial);
+        check("finish_review refuses a reading that leaves a question out", partial.isError === true && !/127\.0\.0\.1/.test(partial.content[0].text));
+      }
+      const labelled = comments.length > 0
+        ? await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments: [{ ...comments[0], body: "Finding 1: missing test" }] } })
+        : null;
+      if (labelled) { save("finish_review.labelled.json", labelled); check("finish_review refuses report-style comments", labelled.isError === true); }
+      const finished = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments } });
+      save("finish_review.json", finished);
+      if (!check("finish_review accepted the whole reading", !finished.isError, finished.isError ? finished.content[0].text : "")) return;
+      pages = { reportUrl: finished.structuredContent.reportUrl, url: finished.structuredContent.url };
+      check("finish_review hands out the page links", Boolean(pages.reportUrl) && (payload.mode !== "connected" || Boolean(pages.url)), JSON.stringify(pages));
+      const reportPage = await get(pages.reportUrl);
+      save("reportUrl.finished.html", reportPage.body);
+      check("report page shows the answers and order attributed to this client", reportPage.body.includes(CLIENT.name) && reportPage.body.includes(`reading order recommended by ${CLIENT.name}`));
+      if (pages.url) {
+        const view = JSON.parse((await get(new URL("api/analysis", pages.url).href)).body);
+        save("url.analysis.json", view);
+        check("pull request page has the agent's order", view.order?.source === "agent" && view.hunks.map(h => h.id).join(",") === order.join(","), JSON.stringify(view.order));
+        check("pull request page has every answer", view.questions?.answered === questions.length, JSON.stringify(view.questions));
+        check("pull request page has the suggested comments", (view.suggestions?.comments.length ?? 0) === comments.length && (comments.length === 0 || view.suggestions.suggestedBy.startsWith(CLIENT.name)));
+      }
+    }
+    reportUrl = pages.reportUrl;
     for (const [name, url] of Object.entries(pages)) {
       if (!url) continue;
       const origin = new URL(url);
@@ -112,69 +158,6 @@ async function review() {
       check(`${name} is no-store with a CSP`, /no-store/.test(page.headers["cache-control"] ?? "") && Boolean(page.headers["content-security-policy"]));
       const foreign = await get(url, "evil.example");
       check(`${name} refuses a foreign Host`, foreign.status === 403, `status ${foreign.status}`);
-    }
-    const summary = report.items ? { items: report.items.length, statuses: report.items.map(item => item.status), questions: report.questions?.length ?? 0 }
-      : { mode: report.mode, questions: report.report?.questions?.length ?? 0 };
-    console.log(`INFO ${JSON.stringify(summary)}`);
-    const questions = report.questions ?? report.report?.questions ?? [];
-    if (values.answer && questions.length > 0) {
-      const answers = questions.map(q => ({ questionId: q.id, choice: values.answer === "first" ? q.options[0] : "cannot-tell" }));
-      const recorded = await client.callTool({ name: "record_answers", arguments: { reviewId: report.reviewId, answers } });
-      save("record_answers.json", recorded);
-      check("record_answers accepted every answer", !recorded.isError && recorded.structuredContent?.recorded === answers.length, recorded.isError ? recorded.content[0].text : "");
-      const refused = await client.callTool({ name: "record_answers", arguments: { reviewId: report.reviewId, answers: [{ questionId: questions[0].id, choice: "not-an-option" }] } });
-      save("record_answers.refused.json", refused);
-      check("record_answers refuses an unlisted option", refused.isError === true);
-      const after = await get(report.reportUrl, new URL(report.reportUrl).host);
-      save("reportUrl.after-answers.html", after.body);
-      check("page shows the answers attributed to this client", after.body.includes(CLIENT.name));
-    }
-    const items = report.items ?? report.report?.items ?? [];
-    if (values.order === "reverse" && items.length > 1) {
-      const before = await get(report.reportUrl);
-      const ids = items.map(item => item.id).reverse();
-      const ordered = await client.callTool({ name: "record_order", arguments: { reviewId: report.reviewId, order: ids } });
-      save("record_order.json", ordered);
-      check("record_order accepted the full order", !ordered.isError && ordered.structuredContent?.ordered === ids.length, ordered.isError ? ordered.content[0].text : "");
-      const partial = await client.callTool({ name: "record_order", arguments: { reviewId: report.reviewId, order: ids.slice(1) } });
-      save("record_order.refused.json", partial);
-      check("record_order refuses an order that leaves a hunk out", partial.isError === true);
-      const after = await get(report.reportUrl);
-      save("reportUrl.after-order.html", after.body);
-      const cards = body => [...body.matchAll(/<span class="path mono">([^<]*)<\/span>/g)].map(match => match[1]).join("|");
-      check("page lists the hunks in the agent's order, attributed to this client",
-        after.body.includes(`reading order recommended by ${CLIENT.name}`) && cards(after.body) === cards(before.body).split("|").reverse().join("|"));
-      const list = /<ol class="agent-order-list">([\s\S]*?)<\/ol>/.exec(after.body)?.[1] ?? "";
-      const ranks = [...list.matchAll(/href="#item-(\d+)"/g)].map(match => Number(match[1]));
-      check("page still offers diffninja's own order", ranks.join(",") === items.map((_, k) => k + 1).reverse().join(","), ranks.join(","));
-      if (report.url) {
-        const view = await get(new URL("api/analysis", report.url).href);
-        const analysis = JSON.parse(view.body);
-        save("url.analysis.after-order.json", analysis);
-        check("pull request page's reading order is the agent's", analysis.order?.source === "agent" && analysis.order?.orderedBy?.startsWith(CLIENT.name)
-          && analysis.hunks.map(h => h.id).join(",") === ids.join(","), JSON.stringify(analysis.order));
-      }
-    }
-    if (values.suggest && items.length > 0) {
-      // One comment on the first added line of each of the first three hunks, in a reviewer's voice.
-      const comments = [];
-      for (const item of items.slice(0, 3)) {
-        let line = item.newStart;
-        for (const text of item.diff.split("\n").slice(1)) {
-          if (text.startsWith("+")) { comments.push({ path: item.file, line, side: "RIGHT", body: `Could we cover ${item.file.split("/").pop()} line ${line} with a test?` }); break; }
-          if (!text.startsWith("-")) line += 1;
-        }
-      }
-      const suggested = await client.callTool({ name: "suggest_comments", arguments: { reviewId: report.reviewId, comments } });
-      save("suggest_comments.json", suggested);
-      check("suggest_comments accepted every comment", !suggested.isError && suggested.structuredContent?.suggested === comments.length, suggested.isError ? suggested.content[0].text : "");
-      const labelled = await client.callTool({ name: "suggest_comments", arguments: { reviewId: report.reviewId, comments: [{ ...comments[0], body: "Finding 1: missing test" }] } });
-      save("suggest_comments.refused.json", labelled);
-      check("suggest_comments refuses report-style text", labelled.isError === true);
-      if (report.url) {
-        const view = JSON.parse((await get(new URL("api/analysis", report.url).href)).body);
-        check("pull request page carries the suggestions, attributed to this client", view.suggestions?.suggestedBy?.startsWith(CLIENT.name) && view.suggestions.comments.length === comments.length);
-      }
     }
     if (values.hold) {
       console.log(`HOLD ${values.hold}s — open now: ${Object.values(pages).filter(Boolean).join(" ")}`);

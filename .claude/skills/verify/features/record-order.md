@@ -1,10 +1,10 @@
 # Record the agent's reading order
 
-After `review_diff`, the agent that requested the review reads the hunks and sends the order it recommends with `record_order`, naming every `items[].id` exactly once, most important first. The report is reordered to it: the report page lists every hunk in the agent's order under "Hunks are in the reading order recommended by <client name version>", every rank (#) is the agent's, and diffninja's own order sits in a collapsed "diffninja's own order" list. The connected pull request page's Reading order panel follows the same order. Statuses and priorities never change.
+The agent sends its first order inside `finish_review` (see [finish-review.md](./finish-review.md)); `record_order` updates it afterwards, naming every `items[].id` exactly once, most important first. The report is reordered to it: the report page lists every hunk in the agent's order under "Hunks are in the reading order recommended by <client name version>", every rank (#) is the agent's, and diffninja's own order sits in a collapsed "diffninja's own order" list. The connected pull request page's Reading order panel follows the same order. Statuses and priorities never change.
 
 ## Sub-features
 
-- `order-accept` records a full permutation and returns `{ reviewId, ordered, reportUrl }`.
+- `order-accept` records a full permutation and returns `{ reviewId, ordered, next }`, never a page link.
 - `order-refuse` refuses an unknown id, a repeated id, a missing id, or an extra key, and keeps the previous order.
 - `order-replace` lets a later order replace an earlier one; the page shows one list.
 - `order-attribution` shows the MCP client's name and version on the page.

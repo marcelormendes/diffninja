@@ -32,6 +32,7 @@ Each feature file starts with an H1 title and one paragraph about the user-visib
 
 - [Static review of an inline diff](./static-inline-review.md) covers ranking, statuses, change facts, questions, and the report URL for pasted diff text.
 - [Static review of a git range](./git-range-review.md) covers repository ranges, call flows, and project context from local git.
+- [Finish a review and get its page](./finish-review.md) covers the page-link gate: no link from `review_diff`, and a complete, checked reading through `finish_review`.
 - [Answer review questions](./record-answers.md) covers `record_answers` acceptance, refusal, replacement, and attribution on the page.
 - [Record the agent's reading order](./record-order.md) covers `record_order` acceptance, refusal, replacement, and the attributed list on the page.
 - [Report page](./report-page.md) covers the loopback page a human reads: agenda, views, filters, and its security headers.
