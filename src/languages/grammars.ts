@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
+import { z } from "zod";
 
 /**
  * Loaded tree-sitter grammar package surface.
@@ -47,20 +48,36 @@ function packageInstalled(cacheDir: string, npmPackage: string): boolean {
   return existsSync(join(cacheDir, "node_modules", npmPackage));
 }
 
-function ensureCachePackageJson(cacheDir: string): void {
+const cacheManifestSchema = z
+  .object({ allowScripts: z.record(z.string(), z.unknown()).optional() })
+  .catchall(z.unknown());
+
+/**
+ * The cache's own package.json, which also allows the grammar's install
+ * script: npm 12 blocks dependency install scripts unless `allowScripts`
+ * names them, and rejects `--allow-scripts` in a project install like this
+ * one. Earlier npm ignores the field. A cache written before this keeps its
+ * other fields and gains the entry.
+ */
+export function ensureCachePackageJson(cacheDir: string, npmPackage: string): void {
   mkdirSync(cacheDir, { recursive: true });
   const pkgPath = join(cacheDir, "package.json");
-  if (!existsSync(pkgPath)) {
-    writeFileSync(
-      pkgPath,
-      JSON.stringify({
-        name: "calldiff-grammar-cache",
-        private: true,
-        description: "On-demand tree-sitter grammars for calldiff",
-      }),
-      "utf8",
-    );
+  let pkg: z.infer<typeof cacheManifestSchema> = {
+    name: "calldiff-grammar-cache",
+    private: true,
+    description: "On-demand tree-sitter grammars for calldiff",
+  };
+  if (existsSync(pkgPath)) {
+    try {
+      const parsed = cacheManifestSchema.safeParse(JSON.parse(readFileSync(pkgPath, "utf8")));
+      if (parsed.success) pkg = parsed.data;
+    } catch {
+      // An unreadable cache manifest is replaced; the grammars beside it stay.
+    }
   }
+  if (pkg.allowScripts?.[npmPackage] === true && existsSync(pkgPath)) return;
+  pkg.allowScripts = { ...pkg.allowScripts, [npmPackage]: true };
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
 }
 
 /**
@@ -369,7 +386,7 @@ export function loadGrammarPackage(npmPackage: string): GrammarModule {
 
   const cacheDir = grammarCacheDir();
   if (!packageInstalled(cacheDir, npmPackage)) {
-    ensureCachePackageJson(cacheDir);
+    ensureCachePackageJson(cacheDir, npmPackage);
     installGrammarPackage(cacheDir, npmPackage);
   }
 

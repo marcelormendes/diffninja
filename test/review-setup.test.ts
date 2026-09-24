@@ -131,12 +131,23 @@ describe("createNpm", () => {
       const bin = join(home, "bin dir");
       mkdirSync(bin, { recursive: true });
       const root = join(home, "global root");
-      writeFileSync(join(bin, "npm"), `#!/bin/sh\nif [ "$1" = "root" ]; then printf '%s\\n' '${root}'; fi\n`, {
-        mode: 0o755,
-      });
+      const argsFile = join(home, "install-args");
+      writeFileSync(
+        join(bin, "npm"),
+        `#!/bin/sh\nif [ "$1" = "root" ]; then printf '%s\\n' '${root}'; fi\nif [ "$1" = "install" ]; then printf '%s\\n' "$@" > '${argsFile}'; fi\n`,
+        { mode: 0o755 },
+      );
       const npm = createNpm({ env: { HOME: home, CODEX_HOME: "", PATH: `${bin}${delimiter}/usr/bin${delimiter}/bin` } });
       expect(await npm.rootG()).toBe(root);
       expect(await npm.installG()).toBe(true);
+      // npm 12 skips dependency install scripts unless named: tree-sitter's native
+      // builds and diffninja's grammar repair must be allowed by name.
+      expect(readFileSync(argsFile, "utf8").trim().split("\n")).toEqual([
+        "install",
+        "-g",
+        "--allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript",
+        "diffninja",
+      ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

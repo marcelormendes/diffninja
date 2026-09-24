@@ -151,10 +151,17 @@ export function createNpm(overrides: { platform?: NodeJS.Platform; env?: NodeJS.
       return (await exitCode(child)) === 0 ? out.trim() : "";
     },
     async installG(): Promise<boolean> {
-      return (await exitCode(run(["install", "-g", "diffninja"], true))) === 0;
+      return (await exitCode(run(["install", "-g", `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(",")}`, "diffninja"], true))) === 0;
     },
   };
 }
+
+/**
+ * Packages whose install scripts the global install needs: tree-sitter's
+ * native builds and diffninja's own grammar repair. npm 12 blocks dependency
+ * install scripts unless named; earlier npm accepts the flag and ignores it.
+ */
+export const INSTALL_SCRIPT_PACKAGES = ["diffninja", "tree-sitter", "tree-sitter-javascript", "tree-sitter-typescript"] as const;
 
 /** Wait for a child's exit code; a child that never starts counts as failure. */
 async function exitCode(child: ChildProcess): Promise<number> {

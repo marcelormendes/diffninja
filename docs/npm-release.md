@@ -363,6 +363,25 @@ prerequisite (toolchain, network, libstdc++) instead of npm's raw stderr.
 Verified locally with a deliberately broken `npm`: a mock git-range Ruby review
 exited 0, wrote both report files, and warned per revision.
 
+### 7. npm 12: dependency install scripts are blocked by default
+
+npm 12 skips every dependency's `preinstall`/`install`/`postinstall` unless it
+is allowed by name, and only warns. Where tree-sitter has a prebuild for the
+platform nothing visible breaks, but the Linux ARM64 repair (finding 3) and any
+grammar that compiles from source or downloads at install (finding 6, Swift)
+would silently not run. Two install paths name what they need:
+
+- `diffninja setup` runs `npm install -g --allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript diffninja`.
+  The names match a registry install's identity; a local tarball install
+  matches by file path instead, so the consumer matrix cannot prove this part.
+- The on-demand grammar install is a project-scoped install into the cache,
+  where npm 12 rejects `--allow-scripts` (flag, environment and all) with
+  `EALLOWSCRIPTS`. The cache's `package.json` gains an `allowScripts` entry
+  for each grammar before it is installed instead.
+
+npm 10.9 and 11.5.1 accept the flag and ignore the field; both were checked
+with the same commands.
+
 ## Native prebuild inventory
 
 Enumerated from the installed packages and registry tarballs on Linux x64, then
