@@ -101,7 +101,7 @@ const STATUS_MARK = {
 
 const MODE_LABEL = {
   tree: "Tree",
-  graph: "Graph",
+  graph: "Diagram",
   sequence: "Sequence",
 } as const;
 
@@ -226,7 +226,9 @@ function renderSummary(files: readonly FileView[], totalFiles: number): string {
  * counts call levels below the focused call, and the focus itself resets it.
  */
 function renderControls(): string {
-  const links = MODES.map(
+  // The diagram is not a tab: it needs room to pan and zoom, so a button opens
+  // it across the whole screen and closing it returns to the tab it left.
+  const links = MODES.filter((mode) => mode !== "graph").map(
     (mode) =>
       `<a class="cf-mode-link enhanced" data-cf-mode="${mode}" href="#cf-f1-${mode}">${MODE_LABEL[mode]}</a>`,
   ).join("");
@@ -240,8 +242,10 @@ function renderControls(): string {
   return [
     '<div class="cf-controls">',
     `<div class="cf-modes" role="group" aria-label="Call flow mode">${links}</div>`,
-    '<div class="cf-depth enhanced" role="group" aria-label="Graph depth below the focused call">',
-    '<span class="cf-depth-label">Graph depth</span>',
+    '<button type="button" class="cf-diagram-btn enhanced" data-cf-diagram aria-label="Open the call diagram full screen">Diagram</button>',
+    '<button type="button" class="cf-diagram-close" data-cf-diagram-close hidden>Close diagram</button>',
+    '<div class="cf-depth enhanced" role="group" aria-label="Diagram depth below the focused call">',
+    '<span class="cf-depth-label">Depth</span>',
     depths,
     "</div>",
     "</div>",
@@ -332,7 +336,7 @@ function renderModes(view: FileView, at: number): string {
 function modesNote(): string {
   return (
     `<noscript class="cf-noscript"><p class="cf-note">` +
-    `Graph and Sequence are alternate renderings of these same calls, drawn by the page script, ` +
+    `The diagram and Sequence are alternate renderings of these same calls, drawn by the page script, ` +
     `so they are not shown here. Tree lists every call with its source location and each call's ` +
     `resolved definition opens on its own. The diff holds every changed line.` +
     `</p></noscript>`
@@ -504,9 +508,9 @@ function renderGraphMode(view: FileView, at: number): string {
         .join("");
       return [
         `<div class="cf-graph-frame" data-cf-graph="${at}:${root}">`,
-        '<div class="cf-camera-tools enhanced" role="group" aria-label="Graph framing">',
+        '<div class="cf-camera-tools enhanced" role="group" aria-label="Diagram framing">',
         '<button type="button" data-cf-camera="out" aria-label="Zoom out">−</button>',
-        '<output class="cf-scale" aria-label="Graph scale">100%</output>',
+        '<output class="cf-scale" aria-label="Diagram scale">100%</output>',
         '<button type="button" data-cf-camera="in" aria-label="Zoom in">+</button>',
         '<button type="button" data-cf-camera="overview" title="Fit all retained calls. Labels may be small.">Overview</button>',
         '<button type="button" data-cf-camera="readable" title="Readable size at the selected function">Readable</button>',
@@ -985,6 +989,26 @@ export const CALL_FLOW_STYLES = `
 }
 .cf-svg { display: block; max-width: none; }
 .cf-ready .cf-svg-wrap { height: clamp(220px, 42vh, 400px); overflow: hidden; touch-action: none; cursor: grab; }
+.cf-diagram-btn, .cf-diagram-close {
+  display: inline-flex; align-items: center; gap: 6px; height: 29px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+  font: 500 12px/1 var(--sans, inherit); color: var(--ink); cursor: pointer;
+}
+.cf-diagram-btn { color: var(--cursor); border-color: var(--cursor); }
+.cf-diagram-btn::after { content: "\\2197"; font-size: 12px; }
+.cf-diagram-btn:hover, .cf-diagram-close:hover { background: var(--sunken); }
+.cf-diagram-close { margin-left: auto; }
+.cf.cf-diagram-open .cf-head { display: none; }
+/* The full-screen diagram: the call-flow view fills the screen (or the window,
+   where full screen is refused), and each graph gets nearly all of its height. */
+#view-call-flow:fullscreen { background: var(--bg); overflow: auto; }
+.cf.cf-diagram-open {
+  position: fixed; inset: 0; z-index: 50; margin: 0; padding: 12px 20px 20px;
+  background: var(--bg); overflow: auto; overscroll-behavior: contain;
+}
+.cf.cf-diagram-open .cf-controls { position: sticky; top: -12px; z-index: 5; background: var(--bg); padding: 10px 0; }
+.cf.cf-diagram-open .cf-modes, .cf.cf-diagram-open .cf-diagram-btn { display: none !important; }
+.cf.cf-diagram-open .cf-svg-wrap { height: calc(100vh - 190px); min-height: 320px; }
 .cf-ready .cf-svg-wrap:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
 .cf-ready .cf-svg-wrap.cf-dragging { cursor: grabbing; user-select: none; }
 .cf-ready .cf-svg { width: 100%; height: 100%; }
@@ -1622,6 +1646,47 @@ export const CALL_FLOW_SCRIPT = `
     reveal();
   }
 
+  // Mode to return to when the full-screen diagram closes; null while it is closed.
+  var diagramReturn = null;
+  var diagramClose = host.querySelector('[data-cf-diagram-close]');
+
+  // Inside the pull request page's drawer, ask the page to widen the drawer to
+  // the whole window too, so a refused full screen still gets all the room.
+  function tellEmbedder(open) {
+    if (window.parent !== window) window.parent.postMessage({ type: 'diffninja-diagram', open: open }, window.location.origin);
+  }
+
+  function openDiagram() {
+    if (diagramReturn !== null) return;
+    diagramReturn = state.mode === 'graph' ? 'tree' : state.mode;
+    host.classList.add('cf-diagram-open');
+    tellEmbedder(true);
+    if (diagramClose) diagramClose.hidden = false;
+    setMode('graph');
+    // The browser's full screen when it allows it; the class alone fills the window otherwise.
+    if (view.requestFullscreen) view.requestFullscreen().catch(function () {});
+    window.requestAnimationFrame(frameGraphs);
+    if (diagramClose) diagramClose.focus({ preventScroll: true });
+  }
+
+  function closeDiagram() {
+    if (diagramReturn === null) return;
+    var back = diagramReturn;
+    diagramReturn = null;
+    host.classList.remove('cf-diagram-open');
+    tellEmbedder(false);
+    if (diagramClose) diagramClose.hidden = true;
+    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
+    setMode(back);
+    var opener = host.querySelector('[data-cf-diagram]');
+    if (opener) opener.focus({ preventScroll: true });
+  }
+
+  document.addEventListener('fullscreenchange', function () {
+    if (document.fullscreenElement) window.requestAnimationFrame(frameGraphs);
+    else closeDiagram();
+  });
+
   function setDepth(value) {
     var change = cfNav.setDepth(state, value);
     if (change === state) return;
@@ -1661,6 +1726,16 @@ export const CALL_FLOW_SCRIPT = `
       focusOn(Number(zoom.getAttribute('data-cf-file')), zoom.getAttribute('data-cf-path'));
       return;
     }
+    if (event.target.closest('[data-cf-diagram]')) {
+      event.preventDefault();
+      openDiagram();
+      return;
+    }
+    if (event.target.closest('[data-cf-diagram-close]')) {
+      event.preventDefault();
+      closeDiagram();
+      return;
+    }
     var modeLink = event.target.closest('[data-cf-mode]');
     if (modeLink) {
       event.preventDefault();
@@ -1677,6 +1752,11 @@ export const CALL_FLOW_SCRIPT = `
   });
 
   document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && diagramReturn !== null && !event.defaultPrevented) {
+      event.preventDefault();
+      closeDiagram();
+      return;
+    }
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     if (view.hidden) return;
     if (!event.target.closest) return;

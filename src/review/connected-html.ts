@@ -151,7 +151,7 @@ export function renderConnectedPage(csrf: string): string {
     '<h2 id="flow-title" class="flow-title">Call flow</h2>',
     '<button type="button" id="flow-close" class="btn btn-quiet btn-sm" data-action="close-flow" aria-label="Close the call flow">Close</button>',
     "</div>",
-    '<iframe id="flow-frame" class="flow-frame" title="Call flow"></iframe>',
+    '<iframe id="flow-frame" class="flow-frame" title="Call flow" allow="fullscreen"></iframe>',
     "</aside>",
     `<script nonce="${nonce}">${script(csrf)}</script>`,
     "</body>",
@@ -1358,7 +1358,7 @@ function script(csrf: string): string {
   function closeFlow() {
     if (el.flowDrawer.hidden) return;
     show(el.flowDrawer, false);
-    document.body.classList.remove('flow-open');
+    document.body.classList.remove('flow-open', 'flow-full');
     // The opener may have been re-rendered meanwhile: return to its replacement.
     var back = flowReturn && flowReturn.isConnected ? flowReturn : null;
     if (!back && flowReturn && flowReturn.dataset && flowReturn.dataset.action === 'open-flow') {
@@ -1370,7 +1370,17 @@ function script(csrf: string): string {
     flowReturn = null;
   }
 
+  /** The diagram in the drawer opened or closed: the drawer takes the whole window while it is open. */
+  function onFlowMessage(event_) {
+    if (event_.origin !== window.location.origin || event_.source !== el.flowFrame.contentWindow) return;
+    var data = event_.data;
+    if (!data || data.type !== 'diffninja-diagram') return;
+    document.body.classList.toggle('flow-full', data.open === true);
+  }
+
   function onFlowKey(event_) {
+    // The diagram inside the drawer handles its own Escape first.
+    if (event_.defaultPrevented || document.fullscreenElement) return;
     if (event_.key === 'Escape' && !el.flowDrawer.hidden) { event_.preventDefault(); closeFlow(); }
   }
 
@@ -2065,6 +2075,7 @@ function script(csrf: string): string {
       try { el.flowFrame.contentDocument.addEventListener('keydown', onFlowKey); } catch (error) { /* not ours to reach */ }
     });
     document.addEventListener('keydown', onFlowKey);
+    window.addEventListener('message', onFlowMessage);
     window.addEventListener('scroll', queueStationMark, { passive: true });
     window.addEventListener('resize', queueStationMark);
     document.addEventListener('click', onClick);
@@ -2459,6 +2470,8 @@ form { display: flex; flex-direction: column; gap: 12px; align-items: flex-start
 /* Beside the diff only when both still have room; otherwise it lies over the page. */
 @media (min-width: 1760px) { body.flow-open .wrap { margin-right: min(760px, 44vw); } }
 @media (max-width: 1099px) { .flow-drawer { width: 100%; } }
+body.flow-full .flow-drawer { width: 100%; box-shadow: none; border-left: 0; }
+body.flow-full .flow-bar { display: none; }
 
 @media (max-width: 960px) {
   .wrap:has(> #analysis-section:not([hidden])) { grid-template-columns: minmax(0, 1fr); }
