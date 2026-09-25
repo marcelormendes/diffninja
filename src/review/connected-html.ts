@@ -37,6 +37,16 @@ export function renderConnectedPage(csrf: string): string {
     `<p class="brand">${BRAND_MARK}<span>diffninja</span></p>`,
     '<h1 id="page-title">Pull request review</h1>',
     '<p id="page-meta" class="page-meta" hidden></p>',
+    '<section id="pr-goal" class="pr-goal" aria-labelledby="pr-goal-heading" hidden>',
+    '<h2 id="pr-goal-heading" class="pr-goal-heading">Goal</h2>',
+    '<p id="pr-goal-text" class="pr-goal-text"></p>',
+    '<p id="pr-goal-by" class="pr-goal-by" hidden></p>',
+    "</section>",
+    '<details id="pr-description" class="pr-description" hidden>',
+    '<summary>Original PR description</summary>',
+    '<p class="note">The author’s own words, as written, including any generated notes. Raw HTML is shown as text, images as links, and nothing here is loaded from another host. It is the author’s claim, not evidence that the changes achieve it.</p>',
+    '<div id="pr-description-body" class="pr-description-body"></div>',
+    "</details>",
     '<p id="lede" class="lede">Load a GitHub pull request, read its diff in a recommended order, and post your own review through the <span class="mono">gh</span> CLI. Nothing is posted until you press Submit.</p>',
     '<p id="message-note" class="note" role="status" aria-live="polite" hidden></p>',
     "</header>",
@@ -842,6 +852,8 @@ function script(csrf: string): string {
     show(el.lede, !snap);
     show(el.loadSection, !snap || showLoad);
     show(el.pageMeta, Boolean(snap));
+    show(el.prDescription, Boolean(snap));
+    renderDescription();
     el.pageMeta.textContent = '';
     el.snapshotBody.textContent = '';
     if (!snap) {
@@ -856,10 +868,6 @@ function script(csrf: string): string {
     el.pageMeta.appendChild(make('span', 'meta-item sha', shortSha(snap.headSha)));
     var login = reviewerLogin();
     if (login !== '') el.pageMeta.appendChild(make('span', 'meta-item', 'Reviewing as ' + login));
-    var description = make('details', '');
-    description.appendChild(make('summary', '', 'Description (the author\u2019s claims)'));
-    description.appendChild(make('pre', '', typeof snap.body === 'string' && snap.body ? snap.body : 'No description.'));
-    el.snapshotBody.appendChild(description);
     var dl = make('dl', 'facts');
     addLinkFact(dl, 'Pull request', snap.url, typeof snap.url === 'string' ? snap.url : 'unknown');
     addFact(dl, 'GitHub state', typeof snap.state === 'string' ? snap.state : 'unknown');
@@ -907,6 +915,224 @@ function script(csrf: string): string {
     return wrap;
   }
 
+  /* ---------------------------------------------------------- description -- */
+
+  /**
+   * The author's description, rendered from the node tree the server parsed out
+   * of their Markdown. This page may not set markup directly, so every node
+   * becomes a whitelisted element and every string a text node: raw HTML
+   * arrives as text, an image arrives as a link, and an anchor is created only
+   * for an http(s) URL. The body is never summarized, shortened or rewritten
+   * here — the snapshot's own body text stays the untouched source, and the
+   * goal above it is the agent's sentence about the goal, not a rewrite of
+   * this text.
+   */
+  function inlineNodesInto(host, nodes, depth) {
+    if (!Array.isArray(nodes) || depth > 16) return;
+    for (var i = 0; i < nodes.length; i += 1) {
+      var node = nodes[i];
+      if (!node || typeof node !== 'object') continue;
+      var type = typeof node.t === 'string' ? node.t : '';
+      if (type === 'text') {
+        if (typeof node.v === 'string') host.appendChild(document.createTextNode(node.v));
+        continue;
+      }
+      if (type === 'code') {
+        host.appendChild(make('code', 'pr-inline-code', typeof node.v === 'string' ? node.v : ''));
+        continue;
+      }
+      if (type === 'br') { host.appendChild(document.createElement('br')); continue; }
+      if (type === 'strong' || type === 'em' || type === 'del') {
+        var wrapper = document.createElement(type);
+        inlineNodesInto(wrapper, node.c, depth + 1);
+        host.appendChild(wrapper);
+        continue;
+      }
+      if (type === 'link') {
+        var inner = document.createDocumentFragment();
+        inlineNodesInto(inner, node.c, depth + 1);
+        // The URL is checked here too: no anchor is built for anything but http(s).
+        if (typeof node.href === 'string' && /^https?:\\/\\//i.test(node.href)) {
+          var link = document.createElement('a');
+          link.href = node.href;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.appendChild(inner);
+          host.appendChild(link);
+        } else {
+          host.appendChild(inner);
+        }
+        continue;
+      }
+      // Anything this page does not know is shown as its own text.
+      if (typeof node.v === 'string') host.appendChild(document.createTextNode(node.v));
+    }
+  }
+
+  function blockNodesInto(host, nodes, depth) {
+    if (!Array.isArray(nodes) || depth > 16) return;
+    for (var i = 0; i < nodes.length; i += 1) {
+      var node = nodes[i];
+      if (!node || typeof node !== 'object') continue;
+      var type = typeof node.t === 'string' ? node.t : '';
+      if (type === 'para') {
+        var para = document.createElement('p');
+        inlineNodesInto(para, node.c, depth + 1);
+        host.appendChild(para);
+        continue;
+      }
+      if (type === 'heading') {
+        // Demoted: the page owns h1 and h2, so a description's headings stay below them.
+        var level = typeof node.d === 'number' && isFinite(node.d) ? Math.min(Math.max(Math.floor(node.d) + 2, 3), 6) : 3;
+        var heading = document.createElement('h' + String(level));
+        inlineNodesInto(heading, node.c, depth + 1);
+        host.appendChild(heading);
+        continue;
+      }
+      if (type === 'quote') {
+        var quote = document.createElement('blockquote');
+        blockNodesInto(quote, node.c, depth + 1);
+        host.appendChild(quote);
+        continue;
+      }
+      if (type === 'code') {
+        var lang = typeof node.lang === 'string' ? node.lang : '';
+        var pre = make('pre', 'pr-code', typeof node.v === 'string' ? node.v : '');
+        if (lang !== '') pre.setAttribute('data-lang', lang);
+        host.appendChild(pre);
+        continue;
+      }
+      if (type === 'raw') {
+        // Markup in the description is shown verbatim, as text.
+        host.appendChild(make('pre', 'pr-raw', typeof node.v === 'string' ? node.v : ''));
+        continue;
+      }
+      if (type === 'rule') { host.appendChild(document.createElement('hr')); continue; }
+      if (type === 'list') {
+        var ordered = node.ordered === true;
+        var list = document.createElement(ordered ? 'ol' : 'ul');
+        if (ordered && typeof node.start === 'number' && isFinite(node.start) && node.start > 1) list.start = Math.floor(node.start);
+        var items = Array.isArray(node.items) ? node.items : [];
+        for (var j = 0; j < items.length; j += 1) {
+          var item = items[j] && typeof items[j] === 'object' ? items[j] : {};
+          var entry = document.createElement('li');
+          if (item.task === true) {
+            entry.className = 'pr-task';
+            var box = document.createElement('input');
+            box.type = 'checkbox';
+            box.disabled = true;
+            box.checked = item.checked === true;
+            box.setAttribute('aria-label', item.checked === true ? 'Task done' : 'Task not done');
+            entry.appendChild(box);
+          }
+          blockNodesInto(entry, item.c, depth + 1);
+          list.appendChild(entry);
+          if (!entry.hasChildNodes()) entry.appendChild(document.createTextNode('(empty)'));
+        }
+        host.appendChild(list);
+        continue;
+      }
+      if (type === 'table') {
+        var align = Array.isArray(node.align) ? node.align : [];
+        var table = make('table', 'pr-table');
+        var head = Array.isArray(node.head) ? node.head : [];
+        if (head.length > 0) {
+          var headRow = document.createElement('tr');
+          for (var h = 0; h < head.length; h += 1) {
+            var th = make('th', 'pr-align-' + (align[h] === 'center' || align[h] === 'right' ? align[h] : 'left'));
+            inlineNodesInto(th, head[h], depth + 1);
+            headRow.appendChild(th);
+          }
+          var thead = document.createElement('thead');
+          thead.appendChild(headRow);
+          table.appendChild(thead);
+        }
+        var rows = Array.isArray(node.rows) ? node.rows : [];
+        var body = document.createElement('tbody');
+        for (var r = 0; r < rows.length; r += 1) {
+          var row = Array.isArray(rows[r]) ? rows[r] : [];
+          var rowElement = document.createElement('tr');
+          for (var c = 0; c < row.length; c += 1) {
+            var td = make('td', 'pr-align-' + (align[c] === 'center' || align[c] === 'right' ? align[c] : 'left'));
+            inlineNodesInto(td, row[c], depth + 1);
+            rowElement.appendChild(td);
+          }
+          body.appendChild(rowElement);
+        }
+        table.appendChild(body);
+        host.appendChild(table);
+        continue;
+      }
+      // An unknown block that carries children or text is still readable as that.
+      if (Array.isArray(node.c)) { blockNodesInto(host, node.c, depth + 1); continue; }
+      if (typeof node.v === 'string' && node.v !== '') host.appendChild(make('p', null, node.v));
+    }
+  }
+
+  function renderDescription() {
+    var snap = snapshot();
+    var host = el.prDescriptionBody;
+    host.textContent = '';
+    var blocks = snap && Array.isArray(snap.bodyBlocks) ? snap.bodyBlocks : null;
+    var plain = snap && typeof snap.body === 'string' ? snap.body.trim() : '';
+    host.className = 'pr-description-body';
+    if (blocks && blocks.length > 0) { blockNodesInto(host, blocks, 0); return; }
+    // No parsed form in this response, or one this server would not hold in full:
+    // the author's own bytes, unwrapped, rather than a cut-off rendering.
+    if (plain !== '') {
+      host.appendChild(make('div', 'pr-plain', plain));
+      if (snap.bodyTooLarge === true) {
+        host.appendChild(make('p', 'note', 'This description is longer than this page will format, so it is shown as the author wrote it, in full and unformatted.'));
+      }
+      return;
+    }
+    setText(host, 'The author has not provided a PR description. No expected outcome was stated.');
+  }
+
+  /**
+   * The goal the reviewing agent recorded for this revision, at the top of the
+   * page: the reading the review was done against, in the agent's own words. It
+   * belongs to the revision on screen — an analysis of another revision shows
+   * nothing rather than a stale goal — and when none was recorded the block
+   * says so instead of describing the pull request itself.
+   */
+  function renderGoal() {
+    var snap = snapshot();
+    // A revision that cannot be reviewed gets no goal block: there is nothing to aim the reading at.
+    var reviewable = Boolean(snap) && !(typeof snap.unavailableReason === 'string' && snap.unavailableReason !== '');
+    show(el.prGoal, reviewable);
+    if (!reviewable) return;
+    var current = currentAnalysis();
+    var source = current && current.summary && typeof current.summary === 'object' ? current.summary : null;
+    var text = source && typeof source.text === 'string' ? source.text.trim() : '';
+    setText(el.prGoalText, '');
+    setText(el.prGoalBy, '');
+    show(el.prGoalBy, false);
+    if (text !== '') {
+      el.prGoal.className = 'pr-goal';
+      el.prGoalText.className = 'pr-goal-text';
+      setText(el.prGoalText, text);
+      var by = typeof source.summarizedBy === 'string' ? source.summarizedBy.trim() : '';
+      setText(el.prGoalBy, 'Recorded by ' + (by === '' ? 'your review agent' : by) + ' from the pull request title and description. It is the agent\u2019s reading of the goal, not a check that the changes reach it.');
+      show(el.prGoalBy, true);
+      return;
+    }
+    el.prGoal.className = 'pr-goal is-empty';
+    el.prGoalText.className = 'pr-goal-note';
+    setText(el.prGoalText, goalAbsentReason(snap));
+  }
+
+  /** Why no goal is on screen: the analysis is still coming, is of another revision, or recorded none. */
+  function goalAbsentReason(snap) {
+    if (!analysis || analysisFor !== snap.id) return 'Waiting for the local analysis of this revision\u2026';
+    if (analysis.available !== true) {
+      var reason = typeof analysis.reason === 'string' && analysis.reason !== '' ? analysis.reason : 'no local analysis is attached to this session.';
+      return 'No agent-stated goal for this revision: ' + reason;
+    }
+    if (analysis.snapshotId !== snap.id) return 'The pull request changed; waiting for the analysis of this revision before any goal is shown.';
+    return 'No goal was recorded for this revision. The reviewing agent records one when it finishes its review; the original description below is the author\u2019s own words.';
+  }
+
   /* ------------------------------------------------------------ analysis -- */
 
   var STATUS_ORDER = ['attention', 'uncertain', 'low', 'passed'];
@@ -917,17 +1143,12 @@ function script(csrf: string): string {
     return analysis;
   }
 
-  function worstStatusFor(path) {
+  function fileHasUncertainty(path) {
     var current = currentAnalysis();
-    if (!current || !Array.isArray(current.hunks)) return '';
-    var best = STATUS_ORDER.length;
-    for (var i = 0; i < current.hunks.length; i += 1) {
-      var hunk = current.hunks[i];
-      if (!hunk || hunk.file !== path) continue;
-      var rank = STATUS_ORDER.indexOf(hunk.status);
-      if (rank >= 0 && rank < best) best = rank;
-    }
-    return best < STATUS_ORDER.length ? STATUS_ORDER[best] : '';
+    if (!current || !Array.isArray(current.hunks)) return false;
+    return current.hunks.some(function (hunk) {
+      return hunk && hunk.file === path && hunk.status === 'uncertain';
+    });
   }
 
   function scheduleAnalysis(delay) {
@@ -958,7 +1179,9 @@ function script(csrf: string): string {
       var pendingAnswers = analysis && analysis.available === true && analysis.questions && analysis.questions.answered < analysis.questions.total;
       var pendingOrder = analysis && analysis.available === true && !(analysis.order && analysis.order.source === 'agent');
       var pendingSuggestions = analysis && analysis.available === true && !analysis.suggestions;
-      if (pendingAnswers || pendingOrder || pendingSuggestions) scheduleAnalysis(10000);
+      // The goal of the revision is recorded when the agent finishes, which can be after its order arrived.
+      var pendingGoal = analysis && analysis.available === true && !analysis.summary;
+      if (pendingAnswers || pendingOrder || pendingSuggestions || pendingGoal) scheduleAnalysis(10000);
     });
   }
 
@@ -981,12 +1204,8 @@ function script(csrf: string): string {
     return out;
   }
 
-  var STATUS_LABEL = { attention: 'Attention', uncertain: 'Uncertain', low: 'Low', passed: 'Passed' };
-
-  /** A status as a small tinted label; the word is the text, the tint only repeats it. */
-  function statusTag(status) {
-    var known = STATUS_ORDER.indexOf(status) >= 0 ? status : 'uncertain';
-    return make('span', 'status-tag status-' + known, STATUS_LABEL[known]);
+  function uncertaintyTag() {
+    return make('span', 'status-tag status-uncertain', 'Uncertain');
   }
 
   /** A path with its directory muted, so the file name reads first. */
@@ -1015,7 +1234,7 @@ function script(csrf: string): string {
     return go;
   }
 
-  /** One station of the rail: where the change is and whether it asks for attention; what to look at lives beside the code. */
+  /** One station of the rail: where the change is; what to look at lives beside the code. */
   function renderHunkEntry(hunk, rank) {
     var entry = make('li', 'order-item');
     entry.dataset.action = 'goto-stop';
@@ -1030,8 +1249,7 @@ function script(csrf: string): string {
     where.appendChild(make('span', 'path-line', ':' + String(hunk.line)));
     main.appendChild(where);
     var meta = make('div', 'order-meta');
-    // Only a status that asks for something is shown; low and passed stay quiet.
-    if (hunk.status === 'attention' || hunk.status === 'uncertain') meta.appendChild(statusTag(hunk.status));
+    if (hunk.status === 'uncertain') meta.appendChild(uncertaintyTag());
     meta.appendChild(sizeNode(hunk.added, hunk.removed));
     main.appendChild(meta);
     var jump = make('a', 'sr-only', 'Go to change ' + rank + ', ' + hunk.file + ' line ' + hunk.line);
@@ -1119,6 +1337,8 @@ function script(csrf: string): string {
 
   function renderAnalysis() {
     var snap = snapshot();
+    // The goal rides on the analysis, so it re-renders wherever the analysis does — every poll included.
+    renderGoal();
     show(el.analysisSection, Boolean(snap) && !(typeof snap.unavailableReason === 'string' && snap.unavailableReason !== ''));
     el.analysisBody.textContent = '';
     el.analysisActions.textContent = '';
@@ -1869,7 +2089,7 @@ function script(csrf: string): string {
     where.appendChild(make('span', 'path-line', ':' + String(lead.line)));
     head.appendChild(where);
     head.appendChild(sizeOf([stop.segment]));
-    if (lead.status === 'attention' || lead.status === 'uncertain') head.appendChild(statusTag(lead.status));
+    if (lead.status === 'uncertain') head.appendChild(uncertaintyTag());
     var tools = make('span', 'file-tools');
     if (hasCallFlow(stop.path)) tools.appendChild(flowButton(stop.path, 'Call flow'));
     head.appendChild(tools);
@@ -1893,8 +2113,7 @@ function script(csrf: string): string {
     var head = make('summary', 'file-head');
     head.appendChild(pathNode(group.path, 'file-path'));
     head.appendChild(sizeOf(segments));
-    var worst = worstStatusFor(group.path);
-    if (worst === 'attention' || worst === 'uncertain') head.appendChild(statusTag(worst));
+    if (fileHasUncertainty(group.path)) head.appendChild(uncertaintyTag());
     var tools = make('span', 'file-tools');
     if (hasCallFlow(group.path)) tools.appendChild(flowButton(group.path, 'Call flow'));
     head.appendChild(tools);
@@ -2336,6 +2555,11 @@ function script(csrf: string): string {
     el.refreshButton = byId('refresh-button');
     el.pageTitle = byId('page-title');
     el.pageMeta = byId('page-meta');
+    el.prGoal = byId('pr-goal');
+    el.prGoalText = byId('pr-goal-text');
+    el.prGoalBy = byId('pr-goal-by');
+    el.prDescription = byId('pr-description');
+    el.prDescriptionBody = byId('pr-description-body');
     el.lede = byId('lede');
     el.loadSection = byId('load-section');
     el.detailsSection = byId('details-section');
@@ -2454,6 +2678,48 @@ ${BRAND_MARK_STYLES}
 .brand .brand-mark { width: 20px; height: 20px; }
 .page-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; color: var(--ink-soft); }
 .page-meta a { font-weight: 600; }
+/* The agent's stated goal, first thing under the masthead: one sentence, with its attribution. */
+.pr-goal { margin-top: 6px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--panel); }
+.pr-goal.is-empty { border-left-color: var(--line-strong); background: var(--sunken); }
+.pr-goal-heading { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
+.pr-goal-text { margin: 6px 0 0; font-size: 15.5px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; max-width: 90ch; }
+.pr-goal-note { margin: 6px 0 0; font-size: 13px; color: var(--ink-soft); overflow-wrap: anywhere; max-width: 90ch; }
+.pr-goal-by { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-faint); overflow-wrap: anywhere; max-width: 90ch; }
+.pr-description { margin-top: 6px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.pr-description > summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+.pr-description > .note { margin-top: 10px; }
+.pr-description-body { margin-top: 10px; overflow-wrap: anywhere; font: 14px/1.6 var(--sans); max-width: 90ch; }
+/* No parsed form in the response, or one too large to hold: the author's own bytes, unwrapped. */
+.pr-description-body .pr-plain { white-space: pre-wrap; }
+/* The author's Markdown, laid out as the document it is; every size stays below the page's own headings. */
+.pr-description-body > *:first-child { margin-top: 0; }
+.pr-description-body > *:last-child { margin-bottom: 0; }
+.pr-description-body p, .pr-description-body blockquote, .pr-description-body table, .pr-description-body pre, .pr-description-body ul, .pr-description-body ol { margin: 0 0 10px; }
+.pr-description-body h3, .pr-description-body h4, .pr-description-body h5, .pr-description-body h6 { margin: 16px 0 6px; line-height: 1.3; }
+.pr-description-body h3 { font-size: 15px; }
+.pr-description-body h4 { font-size: 14px; }
+.pr-description-body h5, .pr-description-body h6 { font-size: 13px; color: var(--ink-soft); }
+.pr-description-body ul, .pr-description-body ol { padding-left: 22px; }
+.pr-description-body li { margin: 2px 0; }
+.pr-description-body li > ul, .pr-description-body li > ol { margin: 2px 0 0; }
+.pr-description-body li > p { margin: 0 0 6px; }
+.pr-description-body blockquote { padding: 2px 0 2px 12px; border-left: 3px solid var(--line-strong); color: var(--ink-soft); }
+.pr-description-body hr { margin: 14px 0; border: 0; border-top: 1px solid var(--line); }
+.pr-description-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.pr-description-body code { font: 12.5px var(--mono); background: var(--sunken); border: 1px solid var(--line-soft); border-radius: 4px; padding: 1px 4px; }
+.pr-description-body pre { padding: 9px 11px; background: var(--sunken); border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; font: 12.5px/1.5 var(--mono); white-space: pre; }
+.pr-description-body pre code { padding: 0; border: 0; background: none; font: inherit; }
+/* Raw HTML in a description is shown, not run: dimmed, so it reads as text the author wrote. */
+.pr-description-body .pr-raw { color: var(--ink-soft); white-space: pre-wrap; }
+.pr-description-body .pr-task { list-style: none; }
+.pr-description-body .pr-task input { margin-right: 6px; vertical-align: baseline; }
+/* The marker sits beside the item's first line, not above the paragraph it labels. */
+.pr-description-body .pr-task > p:first-of-type { display: inline; margin: 0; }
+.pr-description-body table.pr-table { width: 100%; border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; }
+.pr-description-body .pr-table th, .pr-description-body .pr-table td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.pr-description-body .pr-table th { background: var(--panel-head, var(--sunken)); font-weight: 650; }
+.pr-description-body .pr-align-center { text-align: center; }
+.pr-description-body .pr-align-right { text-align: right; }
 .meta-item.sha { font: 12px var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--neutral-soft); color: var(--ink); }
 .state-badge {
   display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 999px;
@@ -2532,7 +2798,6 @@ body.is-busy button { cursor: progress; }
   font-size: 11.5px; font-weight: 600; white-space: nowrap;
   color: var(--ink-soft); background: var(--neutral-soft);
 }
-.status-tag.status-attention { color: var(--alarm); background: var(--alarm-bg); }
 .status-tag.status-uncertain { color: var(--warn); background: var(--warn-soft); }
 .tag-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .tag {

@@ -50,10 +50,11 @@ Any `FAIL` makes the exit code 1. On "build is newer than src/", run `npm run bu
 ## Drive
 
 ```sh
-node .claude/skills/verify/drive.mjs review --args '<json>' [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]
+node .claude/skills/verify/drive.mjs review --args '<json>' [--summary '<plain-English PR goal>'] [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]
 ```
 
 - `--args`: the exact `review_diff` arguments. It is a strict schema: `diff`, `repo`, `from`, `to`, `pr`, `input`, `mode`, `expectedOutcome {title, description}`, and `referenceProject`. Any other key is an error.
+- `--summary`: required for a connected review with analysis. Supply your own reading of the PR's stated goal, one plain-English paragraph (at most 80 words and 600 characters), not a fabricated fixture or a truncated description. The drive checks that omitting it refuses completion and that the accepted text appears in `/api/analysis` attributed to this client. Static reviews can omit it.
 - The drive always finishes the review the way an agent must. It checks that `review_diff` hands out no page link, sends `finish_review`, and takes the page links from its result.
   - It first checks that a reading that leaves a question out is refused.
   - The answers are `cannot-tell`, or with `--answer first` each question's first option.

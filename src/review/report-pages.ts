@@ -22,8 +22,20 @@ export const MAX_REPORT_PAGES = 20;
 export const MAX_SUGGESTED_COMMENTS = 30;
 /** Longest suggested comment: a sentence or two, the way a reviewer writes one. */
 export const MAX_SUGGESTED_CHARS = 280;
+/** Longest goal summary: one short paragraph a maintainer reads before the diff. */
+export const MAX_SUMMARY_CHARS = 600;
+/** Longest goal summary by words: the same paragraph, kept short on purpose. */
+export const MAX_SUMMARY_WORDS = 80;
 
 const CONTROL_CHARACTERS = /[^\P{Cc}]/u;
+/**
+ * Report scaffolding a person would not write as a goal summary. The summary is
+ * one paragraph with no line breaks, so a heading, quote, or list marker can
+ * only open it; bold, code spans, links, tables, and tags are caught anywhere.
+ * Ordinary prose stays untouched: a sentence that ends in a number ("a fixed
+ * 10.") or a hyphen inside a phrase is not scaffolding.
+ */
+const SUMMARY_SCAFFOLDING = /^\s*(?:#{1,6}\s|>|```|~~~|[-*+]\s|\d+[.)]\s|\|)|(?:\*\*|__|\||```|~~~|`|<\/?[a-z][^>]*>|!?\[[^\]]*\]\()/i;
 /** Report scaffolding a person would not write in a review comment: "Finding 1:", "Attention -", "**Error**", "## Bug". */
 const REPORT_LABEL = /^\s*(?:#|>|[-*+]\s|\d+[.)]\s|\*\*|\[)|^\s*(?:findings?|issues?|attention|errors?|warnings?|bugs?|problems?|severity|critical|major|minor|high|medium|low|concerns?|risks?|suggestions?|observations?|summary)\b\s*#?\d*\s*[:\-\u2013\u2014.]|\*\*/i;
 
@@ -93,11 +105,17 @@ export interface RecordedComments {
   readonly suggested: number;
 }
 
-/** Everything the reviewing agent owes a review before its pages are handed out. */
+/**
+ * Everything the reviewing agent owes a review before its pages are handed out.
+ * `summary` is the agent's own plain-English paragraph on what the pull request
+ * does and why, taken from the pull request's own title and description; a
+ * connected review must send it, a static report need not.
+ */
 export interface FinishInput {
   readonly answers: readonly AnswerInput[];
   readonly order: readonly string[];
   readonly comments: readonly SuggestedComment[];
+  readonly summary?: string;
 }
 
 export interface FinishedReview {
@@ -105,6 +123,8 @@ export interface FinishedReview {
   readonly answered: number;
   readonly ordered: number;
   readonly suggested: number;
+  /** Characters of the goal summary kept, or 0 when none was sent. */
+  readonly summarized: number;
   readonly reportUrl: string;
 }
 
@@ -172,6 +192,24 @@ function applyComments(report: ReviewReport, comments: readonly SuggestedComment
   };
 }
 
+/**
+ * The goal paragraph the agent sent, trimmed and validated, or undefined when it
+ * sent none. The bounds are mechanical — one non-empty paragraph of plain prose
+ * within {@link MAX_SUMMARY_CHARS} characters and {@link MAX_SUMMARY_WORDS}
+ * words, with no control characters and no Markdown scaffolding. Nothing here
+ * judges the writing itself, and a bad paragraph refuses the whole call.
+ */
+function checkSummary(summary: string | undefined): string | undefined {
+  if (summary === undefined) return undefined;
+  const text = summary.trim();
+  if (text === "") throw new Error("summary is empty; write one short paragraph on what the pull request does and why, from its own title and description.");
+  if (CONTROL_CHARACTERS.test(text)) throw new Error("summary must be one paragraph of plain text: no line breaks, tabs, or other control characters.");
+  if (text.length > MAX_SUMMARY_CHARS) throw new Error(`summary is longer than ${MAX_SUMMARY_CHARS} characters; write one short paragraph.`);
+  if (text.split(/\s+/).length > MAX_SUMMARY_WORDS) throw new Error(`summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph.`);
+  if (SUMMARY_SCAFFOLDING.test(text)) throw new Error("summary uses Markdown or HTML formatting (a heading, list, bold, code, quote, link, table, or tag); write plain prose.");
+  return text;
+}
+
 /** Map key of one commentable line. */
 function anchorKey(path: string, side: "LEFT" | "RIGHT", line: number): string {
   return JSON.stringify([path, side, line]);
@@ -236,11 +274,17 @@ export class ReportPages {
 
   /**
    * Accept the reviewing agent's whole reading of a review at once: an answer
-   * to every question, the reading order of every hunk, and the line comments
-   * it suggests (an empty list says it has none). Everything is checked before
+   * to every question, the reading order of every hunk, the line comments it
+   * suggests (an empty list says it has none), and, for a connected pull
+   * request, one short paragraph on the goal. Everything is checked before
    * anything is kept, so one gap or bad entry refuses the call and changes
    * nothing. Only a finished review's page addresses are handed out: an agent
    * cannot give the human a page it has not finished reading.
+   *
+   * `summary` is checked here like any other field, so a bad paragraph refuses
+   * the answers and the order with it; whether a connected review *owes* one is
+   * the caller's decision (see mcp.ts), because only it knows which reviews are
+   * pull request reviews.
    */
   finish(reviewId: string, input: FinishInput, by: string): FinishedReview {
     const { token, page, report } = this.review(reviewId);
@@ -252,9 +296,11 @@ export class ReportPages {
     }
     checkOrder(report, input.order);
     checkComments(report, input.comments);
+    const summary = checkSummary(input.summary);
     applyAnswers(report, input.answers, by);
     applyOrder(report, input.order, by);
     applyComments(report, input.comments, by);
+    if (summary !== undefined) report.agentSummary = { text: summary, summarizedBy: by };
     page.finished = true;
     this.rerender(page, report);
     return {
@@ -262,6 +308,7 @@ export class ReportPages {
       answered: input.answers.length,
       ordered: input.order.length,
       suggested: input.comments.length,
+      summarized: summary?.length ?? 0,
       reportUrl: `${this.origin}/report/${token}`,
     };
   }

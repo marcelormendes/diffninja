@@ -97,6 +97,7 @@ interface Finished {
   answered: number;
   ordered: number;
   suggested: number;
+  summarized: number;
   reportUrl: string;
   url?: string;
   next: string;
@@ -106,14 +107,26 @@ async function finishReview(client: Client, args: NonNullable<CallToolRequest["p
   return CallToolResultSchema.parse(await client.callTool({ name: "finish_review", arguments: args }));
 }
 
-/** The least an agent must send for a page link: every answer cannot-tell, diffninja's own order, no comments. */
-function minimalFinish(reviewId: string, report: Pick<ReviewReport, "questions" | "items">) {
+/**
+ * The least an agent must send for a static report's page: every answer
+ * cannot-tell, diffninja's own order, no comments. A connected review owes a
+ * goal summary on top of this (see the connected summary tests).
+ */
+function staticFinish(reviewId: string, report: Pick<ReviewReport, "questions" | "items">) {
   return {
     reviewId,
     answers: report.questions.map(question => ({ questionId: question.id, choice: "cannot-tell" })),
     order: report.items.map(item => item.id),
     comments: [],
   };
+}
+
+/** The fixture goal paragraph a connected finish owes: plain prose, no scaffolding. */
+const GOAL_SUMMARY = "Checkout now compares the count against the limit instead of a fixed 10, so a limit that is raised in config takes effect without another release. The author states this is meant to replace the hardcoded guard; the removed warning log is not mentioned, so treat the change in logging as unexplained.";
+
+/** The least an agent must send for a page link: the above plus the goal summary. */
+function minimalFinish(reviewId: string, report: Pick<ReviewReport, "questions" | "items">) {
+  return { ...staticFinish(reviewId, report), summary: GOAL_SUMMARY };
 }
 
 async function finished(client: Client, reviewId: string, report: Pick<ReviewReport, "questions" | "items">): Promise<Finished> {
@@ -242,6 +255,28 @@ describe("review_diff over the MCP protocol", () => {
     const result = await review(client, { diff: patch, mock: true });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toMatch(/unrecognized key|invalid arguments/i);
+  });
+
+  test("a static report's finish needs no goal summary and still serves its page", async () => {
+    blockNetwork();
+    const client = await connectReview();
+    const report = reportOf(await review(client, { diff: patch }));
+
+    const done = await finishReview(client, staticFinish(report.reviewId, report));
+    expect(done.isError, textOf(done)).toBeFalsy();
+    // SAFETY: finish_review answers with the finished shape; its fields are asserted here.
+    const finishedStatic = JSON.parse(textOf(done)) as Finished;
+    expect(finishedStatic).toMatchObject({ reviewId: report.reviewId, summarized: 0 });
+    expect(finishedStatic.reportUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/report\/[a-f0-9]{64}$/);
+    expect(finishedStatic.url).toBeUndefined();
+    expect((await loopback(finishedStatic.reportUrl))?.status).toBe(200);
+
+    // A summary is accepted for a static report too, and replaces the earlier reading.
+    const withGoal = await finishReview(client, { ...staticFinish(report.reviewId, report), summary: GOAL_SUMMARY });
+    expect(withGoal.isError, textOf(withGoal)).toBeFalsy();
+    // SAFETY: finish_review answers with the finished shape; the field asserted here is its own.
+    expect(JSON.parse(textOf(withGoal)) as Finished).toMatchObject({ summarized: GOAL_SUMMARY.length });
+    expect(fetchAttempts).toEqual([]);
   });
 
   test("ranks a git range and keeps the removed authorize call in the call flow", async () => {
@@ -394,6 +429,7 @@ interface AnalysisView {
   questions?: { total: number; answered: number };
   callFlowFiles?: string[];
   suggestions?: { suggestedBy: string; comments: unknown[] };
+  summary?: { text: string; summarizedBy: string };
 }
 
 async function connectedAnalysis(url: string): Promise<AnalysisView | null> {
@@ -899,6 +935,8 @@ describe("review_diff connected pull request mode", () => {
       expect(view?.questions).toEqual({ total: report.questions.length, answered: report.questions.length });
       expect(view?.order).toEqual({ source: "agent", orderedBy: "diffninja-mcp-test 0.1.0" });
       expect(view?.suggestions).toEqual({ suggestedBy: "diffninja-mcp-test 0.1.0", comments: [comment] });
+      // The goal paragraph the agent sent is handed back as the agent's own reading.
+      expect(view?.summary).toEqual({ text: GOAL_SUMMARY, summarizedBy: "diffninja-mcp-test 0.1.0" });
       // A patch-only analysis has no call flows to show, and says why.
       expect(view?.callFlowFiles).toEqual([]);
       expect((await loopback(`${url}flow?snapshot=${payload.snapshot.id}`))?.status).toBe(404);
@@ -916,6 +954,75 @@ describe("review_diff connected pull request mode", () => {
       const again = connectedOf(await review(client, { pr: GH_URL }));
       expect(again.reviewId).toBe(reviewId);
       expect(again.url).toBe(url);
+      expect(fetchAttempts).toEqual([]);
+    });
+  });
+
+  test("a connected finish owes a plain-English goal summary; a missing or malformed one refuses the whole call, and the one kept is shown attributed", async () => {
+    await withFakeGh(async ({ log }) => {
+      blockNetwork();
+      const client = await connectReview();
+
+      const payload = connectedOf(await review(client, { pr: GH_URL }));
+      const reviewId = payload.reviewId!;
+      const report = payload.report!;
+      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?" };
+      // Every refused call sends answers and a comment the accepted one does not,
+      // so a finish that partly applied before refusing would show up on the page.
+      const substitute = {
+        ...staticFinish(reviewId, report),
+        answers: report.questions.map(question => ({ questionId: question.id, choice: question.options[0] })),
+        comments: [comment],
+      };
+      expect(substitute.answers.map(answer => answer.choice)).not.toContain("cannot-tell");
+      const refused: Array<{ summary?: string; expected: RegExp }> = [
+        { expected: /must send summary: one short paragraph/ },
+        { summary: "   ", expected: /summary is empty/ },
+        { summary: "Two lines\nof text", expected: /one paragraph of plain text/ },
+        { summary: "One line,\tthen a tab.", expected: /one paragraph of plain text/ },
+        { summary: "x".repeat(601), expected: /longer than 600 characters/ },
+        { summary: Array.from({ length: 81 }, () => "word").join(" "), expected: /longer than 80 words/ },
+        { summary: "# Goal: charge the right amount", expected: /Markdown or HTML formatting/ },
+        { summary: "- charge the right amount", expected: /Markdown or HTML formatting/ },
+        { summary: "**Goal:** charge the right amount", expected: /Markdown or HTML formatting/ },
+        { summary: "See `charge()` for the limit", expected: /Markdown or HTML formatting/ },
+      ];
+      for (const { summary, expected } of refused) {
+        const result = await finishReview(client, summary === undefined ? substitute : { ...substitute, summary });
+        expect(result.isError, JSON.stringify(summary)).toBe(true);
+        expect(textOf(result)).toMatch(expected);
+        // No link, not even a page address, and no structured success payload.
+        expect(textOf(result)).not.toMatch(/127\.0\.0\.1/);
+        expect(result.structuredContent).toBeUndefined();
+      }
+      // The refusals kept nothing: the review is still unfinished, so the same
+      // pull request asks for the whole reading again and hands out no link.
+      const stillOpen = connectedOf(await review(client, { pr: GH_URL }));
+      expect(stillOpen.url).toBeUndefined();
+      expect(stillOpen.nextSteps?.join(" ")).toMatch(/finish_review/);
+
+      // The whole reading, summary included, is accepted and shown attributed.
+      const done = await finished(client, reviewId, report);
+      expect(done.summarized).toBe(GOAL_SUMMARY.length);
+      const url = done.url!;
+      const view = await connectedAnalysis(url);
+      expect(view?.summary).toEqual({ text: GOAL_SUMMARY, summarizedBy: "diffninja-mcp-test 0.1.0" });
+      // The refused calls' answers and comments were never applied.
+      expect(view?.hunks?.flatMap(hunk => hunk.questions).map(entry => entry.choice)).toEqual(report.questions.map(() => "cannot-tell"));
+      expect(view?.suggestions?.comments).toEqual([]);
+
+      // An update owes a summary too, and a later one replaces the earlier text.
+      const withoutSummary = await finishReview(client, staticFinish(reviewId, report));
+      expect(withoutSummary.isError).toBe(true);
+      expect(textOf(withoutSummary)).toMatch(/must send summary/);
+      const updated = "Checkout now reads the limit from config instead of a fixed 10. The author gives no reason for dropping the warning log, so that part stays unexplained.";
+      const replaced = await finishReview(client, { ...staticFinish(reviewId, report), summary: updated });
+      expect(replaced.isError, textOf(replaced)).toBeFalsy();
+      // SAFETY: finish_review answers with the finished shape; the field asserted here is its own.
+      expect(JSON.parse(textOf(replaced)) as Finished).toMatchObject({ summarized: updated.length });
+      expect((await connectedAnalysis(url))?.summary).toEqual({ text: updated, summarizedBy: "diffninja-mcp-test 0.1.0" });
+      // Nothing here posts to GitHub, and no other access left the machine.
+      expect(ghCalls(log).some(line => /reviews|comments/.test(line))).toBe(false);
       expect(fetchAttempts).toEqual([]);
     });
   });

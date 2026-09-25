@@ -4,7 +4,7 @@
 // returns, and write every request, result, and page to an evidence directory.
 //
 //   node .claude/skills/verify/drive.mjs doctor
-//   node .claude/skills/verify/drive.mjs review --args '<review_diff JSON>' [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]
+//   node .claude/skills/verify/drive.mjs review --args '<review_diff JSON>' [--summary '<plain-English PR goal>'] [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]
 //
 // The server lives only as long as this process: closing the client closes the
 // server's stdin, which ends the session and its pages. Evidence stays on disk.
@@ -27,7 +27,7 @@ const { StdioClientTransport } = await import(require.resolve("@modelcontextprot
 const [command, ...rest] = process.argv.slice(2);
 const { values } = parseArgs({
   args: rest,
-  options: { args: { type: "string" }, answer: { type: "string" }, order: { type: "string" }, suggest: { type: "boolean" }, hold: { type: "string" }, out: { type: "string" } },
+  options: { args: { type: "string" }, summary: { type: "string" }, answer: { type: "string" }, order: { type: "string" }, suggest: { type: "boolean" }, hold: { type: "string" }, out: { type: "string" } },
 });
 
 const checks = [];
@@ -122,16 +122,24 @@ async function review() {
           }
         }
       }
+      const summary = values.summary;
+      if (payload.mode === "connected") {
+        if (!summary) throw new Error("connected review needs --summary with your own concise plain-English reading of the PR goal");
+        const missing = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments } });
+        save("finish_review.missing-summary.json", missing);
+        check("finish_review refuses a connected reading without a summary", missing.isError === true && !missing.structuredContent?.reportUrl);
+      }
+      const summaryInput = summary === undefined ? {} : { summary };
       if (questions.length > 0) {
-        const partial = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers: answers.slice(1), order, comments } });
+        const partial = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers: answers.slice(1), order, comments, ...summaryInput } });
         save("finish_review.refused.json", partial);
         check("finish_review refuses a reading that leaves a question out", partial.isError === true && !/127\.0\.0\.1/.test(partial.content[0].text));
       }
       const labelled = comments.length > 0
-        ? await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments: [{ ...comments[0], body: "Finding 1: missing test" }] } })
+        ? await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments: [{ ...comments[0], body: "Finding 1: missing test" }], ...summaryInput } })
         : null;
       if (labelled) { save("finish_review.labelled.json", labelled); check("finish_review refuses report-style comments", labelled.isError === true); }
-      const finished = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments } });
+      const finished = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments, ...summaryInput } });
       save("finish_review.json", finished);
       if (!check("finish_review accepted the whole reading", !finished.isError, finished.isError ? finished.content[0].text : "")) return;
       pages = { reportUrl: finished.structuredContent.reportUrl, url: finished.structuredContent.url };
@@ -145,6 +153,7 @@ async function review() {
         check("pull request page has the agent's order", view.order?.source === "agent" && view.hunks.map(h => h.id).join(",") === order.join(","), JSON.stringify(view.order));
         check("pull request page has every answer", view.questions?.answered === questions.length, JSON.stringify(view.questions));
         check("pull request page has the suggested comments", (view.suggestions?.comments.length ?? 0) === comments.length && (comments.length === 0 || view.suggestions.suggestedBy.startsWith(CLIENT.name)));
+        check("pull request page has the attributed PR goal", view.summary?.text === summary && view.summary?.summarizedBy === `${CLIENT.name} ${CLIENT.version}`);
       }
     }
     reportUrl = pages.reportUrl;
@@ -177,7 +186,7 @@ async function review() {
 try {
   if (command === "doctor") await doctor();
   else if (command === "review") await review();
-  else throw new Error("usage: drive.mjs doctor | drive.mjs review --args '<json>' [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]");
+  else throw new Error("usage: drive.mjs doctor | drive.mjs review --args '<json>' [--summary '<plain-English PR goal>'] [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]");
 } catch (error) {
   console.error(`drive.mjs: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 2;

@@ -145,6 +145,18 @@ export interface AgentComments {
   suggestedBy: string;
   suggestedAt: string;
 }
+/**
+ * The reviewing agent's own plain-English description of what the pull request
+ * does and why, written for the human before they read the diff. It is the
+ * agent's reading, never diffninja's and never a claim that the changes achieve
+ * the goal: the page shows it attributed, as a description.
+ */
+export interface AgentSummary {
+  /** One short paragraph: the goal, why it matters, and the limits a reviewer should know. */
+  text: string;
+  /** The MCP client that wrote it, as it names itself. */
+  summarizedBy: string;
+}
 export interface ReviewReport {
   title: string;
   source: string;
@@ -167,6 +179,13 @@ export interface ReviewReport {
   agentOrder?: AgentOrder;
   /** Line comments the reviewing agent suggested; nothing is posted until the human submits them. */
   agentComments?: AgentComments;
+  /**
+   * The reviewing agent's own paragraph on the pull request's goal, written
+   * from the author's title and description. Only finish_review's accepted
+   * reading stores it, so an unfinished report never carries one, and it is the
+   * agent's reading rather than a verified claim.
+   */
+  agentSummary?: AgentSummary;
   /**
    * Local repository context for a git-range review: prior reverts, contributor
    * guidelines, and sibling-file conventions. Absent for a patch.

@@ -70,10 +70,21 @@ The tool writes no report files. Arguments and examples:
    diffninja itself still calls no model.
    The agent sends its whole reading in one `finish_review` call: an answer to
    every question, the reading order of every hunk (most important first),
-   and the line comments it would leave (or none). diffninja checks all of it
-   and only then hands out the page link, so every page you open already
-   carries the agent's answers, its order, and its comment decision; an agent
-   cannot give you a half-read page. The pages list every hunk in the agent's
+   and the line comments it would leave (or none). Connected PR reviews also
+   require `summary`: one plain-English paragraph, at most 80 words and 600
+   characters, with no Markdown or control characters. The agent explains the
+   stated goal, why it matters when known, and important limits, without jargon,
+   templates, or a file-by-file changelog. If the title and description do not
+   establish a goal, it must say so instead of inventing one. diffninja enforces
+   the format and size; wording and meaning remain the host agent's responsibility.
+   No extra model call is made by diffninja.
+   Everything is checked before anything is kept or a link is returned.
+   The connected page leads with this attributed goal and keeps the original
+   description collapsed, rendered as Markdown. Raw HTML remains text and
+   images become links, so opening the description loads nothing remotely.
+   A later `finish_review` can replace the summary; a new snapshot must get
+   its own. Static reviews may omit `summary`.
+   The pages list every hunk in the agent's
    order, attributed to it; diffninja's own order stays available one click
    away, and statuses stay diffninja's. `record_answers`, `record_order`, and
    `suggest_comments` update a review afterwards. On 159 held-out open-source

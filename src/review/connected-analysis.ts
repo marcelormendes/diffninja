@@ -13,7 +13,7 @@
 
 import { CHANGE_FACT_QUESTIONS, type ChangeFactQuestion } from "./change-facts.js";
 import { verdictOf, type QuestionKind, type Verdict } from "./questions.js";
-import type { ReviewItem, ReviewReport, ReviewStatus, SuggestedComment } from "./types.js";
+import type { AgentSummary, ReviewItem, ReviewReport, ReviewStatus, SuggestedComment } from "./types.js";
 
 /** Most agenda entries the page lists; the full report has the rest. */
 export const CONNECTED_AGENDA_LIMIT = 5;
@@ -90,10 +90,18 @@ export interface ConnectedAnalysis {
   /** Every hunk, in report order. */
   readonly hunks: readonly ConnectedHunk[];
   readonly questions: { readonly total: number; readonly answered: number };
-  /** Line comments the reviewing agent suggested, for the human to add to their review or not. */
   /** Changed files that have call-flow diagrams, for the page's "Call flow" buttons; empty for a patch-only analysis. */
   readonly callFlowFiles: readonly string[];
+  /** Line comments the reviewing agent suggested, for the human to add to their review or not. */
   suggestions?: { readonly suggestedBy: string; readonly comments: readonly SuggestedComment[] };
+  /**
+   * The reviewing agent's own short paragraph on what the pull request does and
+   * why, attributed to the client that wrote it. Absent when no finish_review
+   * accepted one, which the page must say instead of showing a goal of its own:
+   * diffninja generates no summary, and this one is the agent's reading of the
+   * author's stated intent, not a claim that the changes achieve it.
+   */
+  summary?: AgentSummary;
 }
 
 export type ConnectedOrder = { readonly source: "agent"; readonly orderedBy: string } | { readonly source: "diffninja" };
@@ -237,5 +245,9 @@ export function connectedAnalysisOf(
   if (report.agentComments !== undefined) {
     analysis.suggestions = { suggestedBy: report.agentComments.suggestedBy, comments: report.agentComments.comments };
   }
+  // Only finish_review stores a summary, so this is present exactly when the
+  // agent's whole reading was accepted for this snapshot's report; it is copied
+  // verbatim, attributed, and never synthesized here.
+  if (report.agentSummary !== undefined) analysis.summary = report.agentSummary;
   return analysis;
 }
