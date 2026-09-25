@@ -75,14 +75,21 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     guideline paths, and new-file sibling conventions, all from local git only,
     code-point sorted, and never affecting status, priority, or order; a shallow
     clone reports `history: "shallow"` and counts cut lines as unknown.
-  - `finish_review`: strict `{ reviewId, answers, order, comments }`, the only
-    source of page links. `answers` must answer every question of the review
-    (checked like `record_answers`), `order` must name every item once (as
-    `record_order`), and `comments` follows the `suggest_comments` rules and
-    may be `[]`. Everything is checked before anything is kept; any gap or bad
-    entry refuses the whole call with what to fix and hands out no link. On
-    success it applies all three, marks the review finished, and returns
-    `{ reviewId, answered, ordered, suggested, reportUrl, url? (connected), next }`.
+  - `finish_review`: strict `{ reviewId, answers, order, comments, summary? }`, the only
+    source of page links. Connected reviews require `summary`: nonempty plain
+    English, one paragraph, at most 600 characters and 80 words, no control
+    characters or Markdown scaffolding. The host summarizes stated intent from
+    the title/body, not verified fulfillment; unclear goals stay explicit.
+    Static reviews may omit it. The report keeps attributed `agentSummary`,
+    exposed as `summary: { text, summarizedBy }` in connected analysis.
+    `answers` must answer every question (as `record_answers`), `order` must
+    name every item once (as `record_order`), and `comments` follows
+    `suggest_comments` and may be `[]`. Everything is checked before anything
+    is kept; any gap refuses the whole call and hands out no link. Success
+    marks the review finished and returns `{ reviewId, answered, ordered,
+    suggested, summarized, reportUrl, url? (connected), next }`; `summarized`
+    counts characters sent. Connected pages lead with the agent's goal and
+    fold the safely formatted original Markdown description below it.
     A later `review_diff` of a finished pull request returns its `url` and
     `reportUrl` again.
   - `record_answers`, `record_order`, `suggest_comments` update a review

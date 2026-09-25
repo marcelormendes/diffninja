@@ -58,8 +58,13 @@ Review https://github.com/OWNER/REPO/pull/123 with diffninja
 The agent reads the PR, then gives you a link to the review page (it runs on
 your machine at `127.0.0.1`). On the page:
 
-1. Read the changes in order. `j` and `k` move to the next and previous change,
-   and the list on the left shows where you are.
+1. Start with **Goal**: the reviewing agent's short, plain-English explanation
+   of what the PR is meant to do and its important limits. The full
+   **Original PR description** stays one click away, with Markdown formatting.
+   The goal is stated intent, not proof the code fulfills it.
+   `j` and `k` move to the next and previous change, and the list on the left
+   shows where you are. The agent sets the reading order; the connected page
+   does not label changes “Attention”.
 2. Hover a line and press **+** to write a comment, or add the agent's
    suggestions.
 3. Write a summary, choose **Comment**, **Approve**, or **Request changes**.

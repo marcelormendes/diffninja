@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { connectedAnalysisOf } from "../src/review/connected-analysis.js";
-import type { ReviewItem, ReviewReport } from "../src/review/types.js";
+import type { AgentSummary, ReviewItem, ReviewReport } from "../src/review/types.js";
 
-function report(item: ReviewItem): ReviewReport {
-  return { title: "t", source: "s", createdAt: "2026-09-23T00:00:00Z", items: [item], callFlow: [], callFlows: [], callFlowAvailability: "no-changes", warnings: [], questions: [] };
+function report(item: ReviewItem, agentSummary?: AgentSummary): ReviewReport {
+  return { title: "t", source: "s", createdAt: "2026-09-23T00:00:00Z", items: [item], callFlow: [], callFlows: [], callFlowAvailability: "no-changes", warnings: [], questions: [], agentSummary };
 }
 
 const base = {
@@ -31,5 +31,23 @@ describe("connected analysis facts", () => {
     const facts = connectedAnalysisOf(report(item), "snap", "r".repeat(32), "http://127.0.0.1:1/report/x", { source: "patch", note: "" }).hunks[0].facts;
     expect(facts.find(fact => fact.label === "Comparison")?.at).toEqual({ line: 11, side: "RIGHT" });
     expect(facts.find(fact => fact.label === "Public API")?.at).toBeUndefined();
+  });
+});
+
+describe("connected analysis goal summary", () => {
+  const analysis = (item: ReviewItem, agentSummary?: AgentSummary) =>
+    connectedAnalysisOf(report(item, agentSummary), "snap", "r".repeat(32), "http://127.0.0.1:1/report/x", { source: "patch", note: "" });
+
+  test("hands back the paragraph the agent's finish kept, attributed to that client", () => {
+    const summary = { text: "Charge the limit the config states instead of a fixed ten. Dropping the warning log is not explained by the author.", summarizedBy: "agent 1.0" };
+    expect(analysis(base, summary).summary).toEqual(summary);
+  });
+
+  test("has no goal to show when the review kept none, rather than inventing one", () => {
+    // An unfinished report carries no summary, so the page has nothing to display
+    // above the diff and must say so: diffninja generates no goal of its own.
+    const view = analysis(base);
+    expect(view.summary).toBeUndefined();
+    expect("summary" in view).toBe(false);
   });
 });

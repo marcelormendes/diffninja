@@ -1,17 +1,17 @@
 # Publishing diffninja to npm
 
-**Status: prepared, not published.** `diffninja@0.1.0` is packaged and its
-release pipeline is written, but nothing has been published to the npm registry,
-and no npm credentials were created, used or stored while preparing this.
-(`https://registry.npmjs.org/diffninja` answered 404 when checked: no public
-package metadata was available. This does not guarantee the name is publishable.)
+**Status: publishing through GitHub Actions.** `diffninja@0.1.1` is published
+on npm. Version `0.2.0` adds the concise agent-written PR goal, safely formatted
+original descriptions, and removes misleading Attention badges from connected
+pages. Connected `finish_review` calls now require `summary`; static calls may
+omit it. Restart agent sessions after upgrading so they discover the new schema.
 
 Publishing requires an explicit maintainer action: the manual bootstrap below,
 then the trusted-publisher configuration, then tags. Two consequences follow:
 
-- **Preparation is not publication.** `package.json`, the packed tarball, the
-  release workflow and the verification script describe what a release *would*
-  do. They do not mean `npm install -g diffninja` works today.
+- **A version bump is not publication.** A merged release becomes available
+  only after its matching `vX.Y.Z` tag passes the release workflow and npm
+  accepts the tarball.
 - **Platforms are verified by CI.** `.github/workflows/consumer-matrix.yml`
   packs once and runs `scripts/verify-package.mjs` against a real global
   install on Ubuntu x64 and ARM64, macOS x64 and ARM64, and Windows x64, on
@@ -21,7 +21,7 @@ then the trusted-publisher configuration, then tags. Two consequences follow:
 
 | Piece | State |
 |---|---|
-| `package.json` | `diffninja@0.1.0`, `publishConfig.access: public`, `engines.node: >=22.18.0`, bins `diffninja` and `diffninja-mcp` (no `calldiff` bin), `files: ["dist/**/*.js", "dist/**/*.d.ts"]`, no `bundleDependencies` |
+| `package.json` | `diffninja@0.2.0`, `publishConfig.access: public`, `engines.node: >=22.18.0`, bins `diffninja` and `diffninja-mcp` |
 | Packed tarball contents | `dist` JavaScript + declarations, `package.json`, `README.md`, `LICENSE`; no `src`, `test`, `scripts`, `tsconfig.json`, `vitest.config.ts` or lockfile, and no `node_modules` |
 | `.github/workflows/release.yml` | one workflow: metadata gate, tag gate on tag pushes, build/lint/test/pack, four-runner install matrix, minimum-toolchain job, OIDC publish job |
 | `.github/workflows/consumer-matrix.yml` | pack once, then a 5-OS x 2-Node consumer matrix (Ubuntu x64/ARM64, macOS x64/ARM64, Windows x64; Node 22/24) that globally installs the tarball and runs `scripts/verify-package.mjs`; runs on PRs and on demand |
@@ -152,11 +152,12 @@ exists, so the tag that would publish `0.1.0` must not be the one that starts CI
       publish step fails because `0.1.0` already exists.
 3. **Configure the trusted publisher** as described above — now that the package
    exists, both the settings page and `npm trust` work.
-4. **Release the next version through the workflow:** bump `version` in
-   `package.json` (and the lockfile), commit to `main`, then tag and push:
+4. **Release later versions through the workflow:** bump `version` in
+   `package.json` and the lockfile, merge through a PR with all required checks,
+   then tag that merged commit and push:
 
    ```bash
-   git tag v0.1.1 && git push origin v0.1.1
+   git tag v0.2.0 && git push origin v0.2.0
    ```
 
 The workflow's guarantee is stronger than a local build: it publishes the exact

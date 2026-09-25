@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { ConnectedReview, type ConnectedState, type ReviewPayload } from "./github.js";
+import { ConnectedReview, type ConnectedSnapshot, type ConnectedState, type ReviewPayload } from "./github.js";
 import { renderConnectedPage } from "./connected-html.js";
+import { markdownBlocks, type MarkdownBlock } from "./markdown.js";
 import type { ConnectedAnalysisView } from "./connected-analysis.js";
 import { reportPolicy } from "./report-pages.js";
 
@@ -17,6 +18,42 @@ const tokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export interface ConnectedSession { server: Server; url: string }
 interface ErrorResponse { error: string; state?: ConnectedState }
 type ApiResponse = ConnectedState | ReviewPayload | ErrorResponse | ConnectedAnalysisView;
+
+/**
+ * What `GET /api/state` adds to the snapshot: the author's description already
+ * parsed into the nodes the page renders. The snapshot's own `body` is left
+ * exactly as GitHub returned it; these nodes are how the page shows it.
+ */
+export interface ConnectedDescription {
+  /** The description as nodes. Absent when the body is empty, or too large to hold in full. */
+  readonly bodyBlocks?: readonly MarkdownBlock[];
+  /** The body was larger than this parser will hold: the page shows it as plain text rather than cut off. */
+  readonly bodyTooLarge?: true;
+}
+
+/**
+ * The state the page reads: the review state, with the author's description
+ * already parsed into the nodes the page renders it from. Every response that
+ * carries a state gets one, so a load, a refresh and a poll all describe the
+ * same way.
+ */
+type PageState = ConnectedState & { snapshot?: ConnectedSnapshot & ConnectedDescription };
+
+function described(state: ConnectedState): PageState {
+  const snap = state.snapshot;
+  if (snap === undefined) return state;
+  const body = snap.body;
+  if (body === undefined || body.trim() === "") return state;
+  const parsed = markdownBlocks(body);
+  if (parsed.truncated) return { ...state, snapshot: { ...snap, bodyTooLarge: true } };
+  return { ...state, snapshot: { ...snap, bodyBlocks: parsed.blocks } };
+}
+
+function withDescription(response: ApiResponse): ApiResponse {
+  if ("status" in response) return described(response);
+  if ("state" in response && response.state !== undefined) return { ...response, state: described(response.state) };
+  return response;
+}
 
 /** Read-only extras a connected session can serve beside the review itself. */
 export interface ConnectedOptions {
@@ -72,7 +109,7 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${csrf}'; style-src 'nonce-${csrf}'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
-    const json = (code: number, value: ApiResponse) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(value)); };
+    const json = (code: number, value: ApiResponse) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(withDescription(value))); };
     if (!requestIsTrusted(req, origin)) { json(403, { error: "Untrusted Host or Origin." }); return; }
     if (req.method === "GET" && req.url === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); res.end(renderConnectedPage(csrf)); return;
