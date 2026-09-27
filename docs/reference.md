@@ -10,13 +10,15 @@ through MCP; tool arguments and call examples are in
 A static review (diff text or a git range) returns one `ReviewReport`: the exact
 expected outcome when supplied, intent cross-checks, a short reading agenda,
 automatic findings, checked/not-checked scope, and every hunk with its status,
-priority, reasons, and judgment. Navigation matches do not establish that an
+priority, reasons, and lexical facts. Agent answers remain separately
+attributed. Navigation matches do not establish that an
 author or generated claim is fulfilled.
 
 ## The report page
 
-Every static review also returns `reportUrl`, a read-only page on
-`127.0.0.1` that serves the same report as one self-contained HTML document.
+`finish_review` returns `reportUrl` only after accepting the agent's complete
+reading. It is a read-only `127.0.0.1` page serving that report as one
+self-contained HTML document.
 It makes no external requests and has no frontend dependencies. Hunks
 start folded; full diffs and native folding remain available with JavaScript
 disabled. Light/dark colors follow your system preference.
@@ -79,9 +81,9 @@ invented diagrams. `callFlowAvailability` distinguishes `available`,
 
 Hunk reasons, local change facts (each `yes` with the changed line it rests
 on), warnings, and priorities are fields of the report. The analysis is local
-and deterministic: no model is called and the same input gives the same report.
-Facts point at what to read; they are not a verdict. See the
-[analysis policy](../README.md#how-static-analysis-works).
+and deterministic: no AI model is called and the same input gives the same
+report. Facts point at what to read; they are not a verdict. See
+[how the analysis works](how-it-works.md).
 
 ### Automatic-check boundaries
 
@@ -170,8 +172,8 @@ package globally first so each entry points at a permanent `node` plus
 entries (on Windows, npm's JS entry point run by `node`, since a client that
 spawns without a shell cannot launch `npx.cmd`). `--dry-run` previews and
 changes nothing, not even the global install; `--no-install` skips the global
-install; `--uninstall` removes the entries. The API key is referenced from the
-launching environment, never stored in the files.
+install; `--uninstall` removes the entries. No API key is required or stored
+in the configuration.
 
 ## Install-time notes
 

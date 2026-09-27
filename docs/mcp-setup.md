@@ -1,7 +1,8 @@
 # MCP setup
 
-`diffninja-mcp` is a stdio MCP server exposing two tools: `review_diff`, and
-`record_answers` for the agent's answers to a review's questions. The process takes no arguments and reads/writes only JSON-RPC
+`diffninja-mcp` is a stdio MCP server exposing `review_diff`, `finish_review`,
+`record_answers`, `record_order`, and `suggest_comments`.
+The process takes no arguments and reads/writes only JSON-RPC
 on stdin/stdout, so the client must launch it directly — anything else
 writing to its stdout corrupts the stream. It never writes report files; the
 report comes back as the tool result. This server is the only way to run a
@@ -50,7 +51,7 @@ The sections below are the manual equivalents, one CLI at a time.
 |---|---|---|
 | `mode` | `"auto"` / `"connected"` / `"static"` | Optional; defaults to auto. Connected requires a PR link; static treats diff/range strings literally and rejects pr/input. |
 | `diff` | string | Inline unified diff text. Empty string is valid and yields an empty review. |
-| `repo` | string | Absolute path to the git repository. Only valid together with `from` and `to`. |
+| `repo` | string | Absolute local repository path: required for `from`/`to`; with a PR link, an optional clone containing both snapshot commits, used only for local enrichment and never fetched or written. |
 | `from` | string | Base ref or commit for a range review. |
 | `to` | string | Head ref or commit for a range review. Endpoints are compared directly, not the merge base. |
 | `pr` | string | GitHub PR link; starts a connected review. |
@@ -84,24 +85,46 @@ Rules enforced by the schema and the tool:
   [check boundaries](reference.md#automatic-check-boundaries).
 
 For static inputs, `structuredContent` **is** the `ReviewReport` plus
-`reportUrl` and `reviewId`, with `content` carrying the same object as JSON
-text. The report's `questions` ask the agent's own model about specific hunks
-(see [`record_answers`](#record_answers)). `reportUrl`
-is a read-only `127.0.0.1` page with the same report for the human reviewer;
-it lives in memory for this MCP connection (see
-[the report page](reference.md#the-report-page)). For PR inputs, both carry
-`{ "mode": "connected", "url": "http://127.0.0.1:PORT/", "pr":
-"https://github.com/OWNER/REPO/pull/N", "snapshot": ... }` plus the local
-analysis of that snapshot: `reviewId`, `reportUrl`, `analysisScope` (whether a
-local clone given as `repo` supplied call flows), and `report`, whose
-`questions` are answered with `record_answers` like a static review's. Open `url` in a
-browser; MCP does not launch one or submit a review itself. Pages live for
-the MCP connection and close on disconnect. Failures return `isError: true`,
-an error message, and no partial report.
+`reviewId` and `nextSteps`, with `content` carrying the same object as JSON
+text. No page link is returned until `finish_review` accepts the agent's
+whole reading. The report's `questions` have closed choices, including
+`cannot-tell`.
+
+Connected success returns `{ mode: "connected", pr, snapshot }` plus
+`reviewId`, `analysisScope` and `report` for exactly that snapshot, also
+without a link until finishing. A later call for an already finished PR
+returns its links again. With `analysisUnavailable`, there is nothing to
+finish, and the result carries the connected page URL directly. Open the page
+in a browser; MCP does not launch one or submit a review itself. Pages live
+for the MCP connection and close on disconnect. Failures return
+`isError: true`, an error message, and no partial report.
+
+## `finish_review`, ordering and comments
+
+`finish_review` takes `{ reviewId, answers, order, comments, summary? }`.
+Answer every question with one listed choice; name every item id exactly once
+in `order`; use `comments: []` when there is nothing worth leaving.
+Connected reviews require `summary`: the agent's plain-English reading of
+the author's stated goal, one paragraph, at most 600 characters and 80 words,
+not a claim of verified fulfillment. Static reviews may omit it.
+
+The call validates everything before keeping anything. Success returns
+`{ reviewId, answered, ordered, suggested, summarized, reportUrl, url?, next }`;
+`url` is the connected review page. These are the first page links an agent
+can give the user.
+
+`record_order` replaces the order with `{ reviewId, order }`, naming all
+items exactly once. `suggest_comments` replaces suggestions with
+`{ reviewId, comments: [{ path, line, side, body }] }`: at most 30, one per
+commentable diff line, `side` LEFT or RIGHT, one plain line of at most
+280 characters per body. An empty list clears them. Suggestions appear on
+the connected page and join the human's draft only when they add them.
+Nothing is posted by these tools. Both return counts and `next`, never a
+page link, and work before or after finishing.
 
 ## `record_answers`
 
-diffninja calls no model. Judgments that need meaning rather than syntax are
+diffninja calls no AI model. Judgments that need meaning rather than syntax are
 asked of the agent that requested the review, as `questions` in the static
 result: does a hunk change what callers or users observe, does a test in (or
 outside) the diff exercise it, does a test change weaken what it checks, does
@@ -111,7 +134,7 @@ question is bound to hunks and has a closed set of options that always includes
 
 | Argument | Type | Meaning |
 | --- | --- | --- |
-| `reviewId` | string | The `reviewId` a static `review_diff` result returned on this connection. |
+| `reviewId` | string | The `reviewId` a static or connected `review_diff` result returned on this connection. |
 | `answers` | array | 1–100 `{ "questionId": "q1", "choice": "cannot-tell" }` objects, each choice one of that question's options. No free text. |
 
 The whole call is refused, keeping nothing, if any answer names an unknown
@@ -119,7 +142,7 @@ question, repeats one, or uses an option the question does not list. A later
 answer replaces an earlier one. Answers appear on the report page beside their
 hunk, attributed to the MCP client that recorded them (its own name and
 version, not a model identity), and never change any status, priority, or the
-order. The result is `{ reviewId, recorded, answered, unanswered, reportUrl }`.
+order. The result is `{ reviewId, recorded, answered, unanswered, next }`, never a page link.
 
 ```json
 { "reviewId": "4f1c…", "answers": [{ "questionId": "q1", "choice": "changes-behavior" }, { "questionId": "q2", "choice": "cannot-tell" }] }
