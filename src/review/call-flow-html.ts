@@ -12,6 +12,7 @@ import {
   CALL_FLOW_NAV_SOURCE,
 } from "./call-flow-nav.js";
 import { escapeHtml } from "./escape-html.js";
+import { nodeFunctionId, purposesOf, wrapPurpose } from "./explanation.js";
 import type { FlowMode } from "./call-flow-nav.js";
 import type {
   CallFlowAvailability,
@@ -46,13 +47,16 @@ import type {
  * removed, or contains a change, and plain dimmed text for an unchanged call.
  */
 export function renderCallFlows(report: ReviewReport): string {
-  const files = collectFiles(report.callFlows, report.items);
+  const purposes = purposesOf(report);
+  const files = collectFiles(report.callFlows, report.items, purposes);
   if (files.length === 0) {
     return `<p class="cf-note cf-absence">${escapeHtml(AVAILABILITY_NOTE[report.callFlowAvailability])}</p>`;
   }
+  const plumbing = purposes.size === 0 ? 0 : files.reduce((total, view) => total + countPlumbing(view.trees, purposes), 0);
   return [
     '<div class="cf">',
     renderSummary(files, new Set(report.items.map(item => item.file)).size),
+    renderPlumbingToggle(plumbing, report.agentExplanation?.explainedBy),
     renderControls(),
     renderJump(files),
     '<nav class="cf-crumbs" id="cf-crumbs" aria-label="Visited call trail" hidden></nav>',
@@ -134,6 +138,10 @@ const GRAPH_CHAR = 7.4;
 const GRAPH_LOC_CHAR = 6.2;
 const GRAPH_MIN_WIDTH = 132;
 const GRAPH_MAX_WIDTH = 300;
+/** The agent's purpose leads an explained box: up to three lines of 12px sans text. */
+const GRAPH_PURPOSE_LINES = 3;
+const GRAPH_PURPOSE_HEIGHT = 16;
+const GRAPH_PURPOSE_CHAR = 7.2;
 
 interface FileView {
   readonly file: string;
@@ -143,6 +151,47 @@ interface FileView {
   readonly rank: number;
   readonly trees: readonly CallFlowNode[];
   readonly truncated: boolean;
+  /** The reviewing agent's purpose per function id; empty without an explanation. */
+  readonly purposes: ReadonlyMap<string, string>;
+}
+
+/** The agent's purpose for the function a node resolved to, if it wrote one. */
+function purposeOf(node: CallFlowNode, purposes: ReadonlyMap<string, string>): string | undefined {
+  const id = nodeFunctionId(node);
+  return id === undefined ? undefined : purposes.get(id);
+}
+
+/**
+ * Whether a node and everything below it is plumbing: no call in the subtree
+ * resolved to a function the agent explained. Library and framework calls are
+ * the usual case; hiding them leaves the calls the product itself makes.
+ */
+function isPlumbing(node: CallFlowNode, purposes: ReadonlyMap<string, string>): boolean {
+  return purposeOf(node, purposes) === undefined && node.children.every((child) => isPlumbing(child, purposes));
+}
+
+/** Plumbing subtrees that the toggle hides, counted at their topmost node. */
+function countPlumbing(trees: readonly CallFlowNode[], purposes: ReadonlyMap<string, string>): number {
+  let total = 0;
+  for (const tree of trees) total += isPlumbing(tree, purposes) ? 1 : countPlumbing(tree.children, purposes);
+  return total;
+}
+
+/**
+ * A native checkbox, so hiding plumbing needs no script: while it is unchecked
+ * the stylesheet hides every plumbing call in Tree and Sequence. The Diagram
+ * keeps every box, because hiding one would leave its edges pointing at nothing.
+ */
+function renderPlumbingToggle(plumbing: number, explainedBy: string | undefined): string {
+  if (explainedBy === undefined) return "";
+  return [
+    '<div class="cf-business">',
+    `<p class="cf-business-note">Each call shows what it does for the product first, as ${escapeHtml(explainedBy)} explained it, and its code name under it.</p>`,
+    plumbing === 0
+      ? ""
+      : `<label class="cf-plumbing-toggle"><input type="checkbox" class="cf-show-plumbing"> Show ${escapeHtml(plural(plumbing, "library or framework call"))} with no product code below</label>`,
+    "</div>",
+  ].join("");
 }
 
 
@@ -164,6 +213,7 @@ function hunkRanks(items: readonly ReviewItem[]): Map<string, { status: ReviewSt
 function collectFiles(
   callFlows: readonly CallFlowFile[],
   items: readonly ReviewItem[],
+  purposes: ReadonlyMap<string, string>,
 ): FileView[] {
   const ranks = hunkRanks(items);
   const views: FileView[] = [];
@@ -179,6 +229,7 @@ function collectFiles(
       rank: hunk.rank,
       trees,
       truncated: entry.truncated === true,
+      purposes,
     });
   }
   // Most severe file first; ties keep report order.
@@ -360,7 +411,7 @@ function lazyMode(mode: FlowMode, at: number, section: string): string {
 
 function renderTreeMode(view: FileView, at: number): string {
   const trees = view.trees
-    .map((tree, root) => renderTreeNode(tree, [root], at, view.file))
+    .map((tree, root) => renderTreeNode(tree, [root], at, view.file, view.purposes))
     .join("\n");
   return modeSection("tree", at, `<ul class="cf-tree">${trees}</ul>`);
 }
@@ -423,11 +474,13 @@ function renderTreeNode(
   path: readonly number[],
   at: number,
   changedFile: string,
+  purposes: ReadonlyMap<string, string>,
 ): string {
   const id = path.join("-");
   const status = node.status;
   const inFile = node.file === changedFile;
   const loc = locationText(node);
+  const purpose = purposeOf(node, purposes);
   // The label is the zoom target. It stays a plain span without JavaScript (a
   // dead button would be worse) and the script upgrades it into a real button.
   const zoom =
@@ -439,7 +492,9 @@ function renderTreeNode(
     loc === ""
       ? '<span class="cf-loc cf-loc-none">no source location</span>'
       : `<span class="cf-loc mono">${escapeHtml(loc)}</span>`,
-    node.description ? `<span class="cf-desc">${escapeHtml(node.description)}</span>` : "",
+    purpose !== undefined
+      ? `<span class="cf-purpose">${escapeHtml(purpose)}</span>`
+      : node.description ? `<span class="cf-desc">${escapeHtml(node.description)}</span>` : "",
     // An anchor, not a button: it reaches the disclosure below without the script.
     `<a class="cf-src-link" href="#cf-f${at}-src-${id}" data-cf-source` +
       ` data-cf-file="${at}" data-cf-path="${id}">${node.source ? "source" : "details"}</a>`,
@@ -448,13 +503,15 @@ function renderTreeNode(
     .join("");
   const classes = ["cf-node", `cf-st-${status}`];
   if (inFile) classes.push("cf-infile");
+  if (purpose !== undefined) classes.push("cf-explained");
+  else if (purposes.size > 0 && isPlumbing(node, purposes)) classes.push("cf-plumbing");
   const kids = node.children;
   const source = renderSource(node, id, at);
   if (kids.length === 0) {
     return `<li class="${classes.join(" ")} cf-leaf"${nodeAttrs(node, id, at)}><span class="cf-row">${row}</span>${source}</li>`;
   }
   const children = kids
-    .map((child, childAt) => renderTreeNode(child, path.concat([childAt]), at, changedFile))
+    .map((child, childAt) => renderTreeNode(child, path.concat([childAt]), at, changedFile, purposes))
     .join("\n");
   return [
     `<li class="${classes.join(" ")}"${nodeAttrs(node, id, at)}>`,
@@ -500,7 +557,7 @@ function locationText(node: CallFlowNode): string {
 function renderGraphMode(view: FileView, at: number): string {
   const figures = view.trees
     .map((tree, root) => {
-      const layout = layoutTree(tree, [root]);
+      const layout = layoutTree(tree, [root], view.purposes);
       const edges = layout.edges
         .map((edge, index) => renderGraphEdge(edge, index + 1, layout.edges.length, at))
         .join("");
@@ -543,6 +600,8 @@ interface GraphBox {
   readonly labelChars: number;
   readonly locChars: number;
   readonly descChars: number;
+  /** The agent's purpose, wrapped to the box; empty when it wrote none for this call. */
+  readonly purposeLines: readonly string[];
 }
 
 interface GraphLayout {
@@ -559,15 +618,16 @@ interface GraphLayout {
  * The enhanced viewport frames these coordinates without shrinking text.
  * Without JavaScript the native-size diagram scrolls inside its container.
  */
-function layoutTree(root: CallFlowNode, rootPath: readonly number[]): GraphLayout {
+function layoutTree(root: CallFlowNode, rootPath: readonly number[], purposes: ReadonlyMap<string, string>): GraphLayout {
   const levels: GraphBox[][] = [];
   const boxes: GraphBox[] = [];
   const edges: Array<{ from: GraphBox; to: GraphBox }> = [];
   const walk = (node: CallFlowNode, path: readonly number[], parent: GraphBox | null): void => {
     const loc = locationText(node);
-    const description = node.description ?? "";
+    const purpose = purposeOf(node, purposes);
+    const description = purpose === undefined ? node.description ?? "" : "";
     const labelChars = Math.max(1, node.label.length + (node.status === "same" ? 0 : 2));
-    const width = Math.ceil(
+    const width = purpose !== undefined ? GRAPH_MAX_WIDTH : Math.ceil(
       Math.min(
         GRAPH_MAX_WIDTH,
         Math.max(
@@ -581,16 +641,18 @@ function layoutTree(root: CallFlowNode, rootPath: readonly number[]): GraphLayou
         ),
       ),
     );
+    const purposeLines = purpose === undefined ? [] : wrapPurpose(purpose, Math.floor((width - 48) / GRAPH_PURPOSE_CHAR), GRAPH_PURPOSE_LINES);
     const box: GraphBox = {
       node,
       path,
       x: 0,
       y: 0,
       width,
-      height: description === "" ? GRAPH_NODE_HEIGHT : GRAPH_NODE_HEIGHT + GRAPH_DESC_HEIGHT,
+      height: GRAPH_NODE_HEIGHT + (description === "" ? 0 : GRAPH_DESC_HEIGHT) + purposeLines.length * GRAPH_PURPOSE_HEIGHT,
       labelChars: Math.floor((width - 48) / GRAPH_CHAR),
       locChars: Math.floor((width - 24) / GRAPH_LOC_CHAR),
       descChars: Math.floor((width - 24) / GRAPH_LOC_CHAR),
+      purposeLines,
     };
     const depth = path.length - 1;
     const level = levels[depth];
@@ -660,12 +722,14 @@ function renderGraphNode(box: GraphBox, at: number, changedFile: string): string
   const status = node.status;
   const loc = locationText(node);
   const source = node.source;
-  const description = node.description ?? "";
+  // The agent's purpose replaces the docstring line: one explanation per box.
+  const description = box.purposeLines.length > 0 ? "" : node.description ?? "";
   const desc = description === "" ? "" : clip(description, box.descChars);
   const inFile = node.file === changedFile;
   const action = `href="#cf-f${at}-src-${path}" data-cf-source`;
   const title = [
     node.label,
+    box.purposeLines.join(" "),
     loc === "" ? "no source location" : loc,
     STATUS_WORD[status],
     description,
@@ -675,17 +739,23 @@ function renderGraphNode(box: GraphBox, at: number, changedFile: string): string
     .join(" · ");
   const mark = STATUS_MARK[status];
   const label = clip(mark ? `${mark} ${node.label}` : node.label, box.labelChars);
+  // An explained box leads with what the call does; its code name and place follow.
+  const lead = box.purposeLines.length * GRAPH_PURPOSE_HEIGHT;
+  const purposeLines = box.purposeLines
+    .map((line, index) => `<text class="cf-gpurpose" x="${box.x + 12}" y="${box.y + 19 + index * GRAPH_PURPOSE_HEIGHT}">${escapeHtml(line)}</text>`)
+    .join("");
   return [
-    `<a class="cf-gnode cf-st-${status}${inFile ? " cf-infile" : ""}" ${action} data-cf-file="${at}" data-cf-path="${path}">`,
+    `<a class="cf-gnode cf-st-${status}${inFile ? " cf-infile" : ""}${lead > 0 ? " cf-explained" : ""}" ${action} data-cf-file="${at}" data-cf-path="${path}">`,
     `<title>${escapeHtml(title)}</title>`,
     `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="7"></rect>`,
-    `<text class="cf-glabel" x="${box.x + 12}" y="${loc === "" && desc === "" ? box.y + 25 : box.y + 17}">${escapeHtml(label)}</text>`,
+    purposeLines,
+    `<text class="cf-glabel" x="${box.x + 12}" y="${lead + (loc === "" && desc === "" ? box.y + 25 : box.y + 17)}">${escapeHtml(label)}</text>`,
     loc === ""
       ? ""
-      : `<text class="cf-gloc" x="${box.x + 12}" y="${box.y + 31}">${escapeHtml(clip(loc, box.locChars))}</text>`,
+      : `<text class="cf-gloc" x="${box.x + 12}" y="${lead + box.y + 31}">${escapeHtml(clip(loc, box.locChars))}</text>`,
     desc === ""
       ? ""
-      : `<text class="cf-gdesc" x="${box.x + 12}" y="${loc === "" ? box.y + 31 : box.y + 44}">${escapeHtml(desc)}</text>`,
+      : `<text class="cf-gdesc" x="${box.x + 12}" y="${lead + (loc === "" ? box.y + 31 : box.y + 44)}">${escapeHtml(desc)}</text>`,
     "</a>",
     `<a class="cf-gzoom" href="#cf-f${at}-t-${path}" data-cf-zoom data-cf-file="${at}" data-cf-path="${path}" aria-label="Zoom into ${escapeHtml(node.label)}">`,
     `<circle cx="${box.x + box.width - 13}" cy="${box.y + 13}" r="10"></circle>`,
@@ -705,12 +775,17 @@ function clip(text: string, maxChars: number): string {
 function renderSequenceMode(view: FileView, at: number): string {
   const paths: Array<Array<{ node: CallFlowNode; path: readonly number[] }>> = [];
   view.trees.forEach((tree, root) => collectPaths(tree, [root], [], paths));
+  // With an explanation, a path of plumbing alone says nothing about the product.
+  if (view.purposes.size > 0) {
+    const explained = paths.filter((chain) => chain.some((step) => purposeOf(step.node, view.purposes) !== undefined));
+    if (explained.length > 0) paths.splice(0, paths.length, ...explained);
+  }
   const shown = Math.min(paths.length, SEQUENCE_LIMIT);
   const note = `<p class="cf-note cf-omitted"${paths.length <= SEQUENCE_LIMIT ? " hidden" : ""}>Showing ${shown} of ${paths.length} call paths; focus a branch to narrow.</p>`;
   return modeSection(
     "sequence",
     at,
-    `<p class="cf-note">Static call paths, not execution order.</p><ol class="cf-paths" data-cf-path-limit="${SEQUENCE_LIMIT}">${paths.map((chain) => renderPath(chain, at)).join("\n")}</ol>${note}`,
+    `<p class="cf-note">Static call paths, not execution order.</p><ol class="cf-paths" data-cf-path-limit="${SEQUENCE_LIMIT}">${paths.map((chain) => renderPath(chain, at, view.purposes)).join("\n")}</ol>${note}`,
   );
 }
 
@@ -732,19 +807,21 @@ function collectPaths(
 function renderPath(
   chain: ReadonlyArray<{ node: CallFlowNode; path: readonly number[] }>,
   at: number,
+  purposes: ReadonlyMap<string, string>,
 ): string {
   const leaf = chain[chain.length - 1];
   const chips = chain
-    .map((step) => renderChip(step, at))
+    .map((step) => renderChip(step, at, purposes))
     .join('<span class="cf-arrow" aria-hidden="true">→</span>');
   return `<li class="cf-path" data-cf-file="${at}" data-cf-path="${leaf.path.join("-")}">${chips}</li>`;
 }
 
 /** A chip is the step's zoom target plus, when the backend resolved it, its own
  *  source link: without the script both are plain anchors that reach the tree. */
-function renderChip(step: { node: CallFlowNode; path: readonly number[] }, at: number): string {
+function renderChip(step: { node: CallFlowNode; path: readonly number[] }, at: number, purposes: ReadonlyMap<string, string>): string {
   const path = step.path.join("-");
   const node = step.node;
+  const purpose = purposeOf(node, purposes);
   const status = node.status;
   const loc = locationText(node);
   const title = loc === "" ? "" : ` title="${escapeHtml(loc)}"`;
@@ -755,7 +832,9 @@ function renderChip(step: { node: CallFlowNode; path: readonly number[] }, at: n
     `<span class="cf-chip-label mono">${escapeHtml(node.label)}</span>`,
     loc === "" ? "" : `<span class="cf-chip-loc mono">${escapeHtml(loc)}</span>`,
     "</a>",
-    node.description ? `<span class="cf-desc">${escapeHtml(node.description)}</span>` : "",
+    purpose !== undefined
+      ? `<span class="cf-purpose">${escapeHtml(purpose)}</span>`
+      : node.description ? `<span class="cf-desc">${escapeHtml(node.description)}</span>` : "",
     `<a class="cf-src-link" href="#cf-f${at}-src-${path}" data-cf-source` +
       ` data-cf-file="${at}" data-cf-path="${path}">${node.source ? "source" : "details"}</a>`,
     "</span>",
@@ -1108,6 +1187,17 @@ export const CALL_FLOW_STYLES = `
 .cf-arrow { color: var(--ink-soft); font-size: 12px; }
 /* One description line per call, only when the backend attached one. */
 .cf-desc { font-size: 11.5px; color: var(--ink-soft); font-style: italic; overflow-wrap: anywhere; }
+.cf-business { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
+.cf-business-note { font-size: 13px; color: var(--ink-soft); }
+.cf-plumbing-toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-soft); cursor: pointer; width: fit-content; }
+.cf:has(.cf-show-plumbing:not(:checked)) .cf-node.cf-plumbing { display: none; }
+.cf-purpose { font-family: var(--sans); font-size: 13.5px; font-weight: 550; color: var(--ink); overflow-wrap: anywhere; }
+.cf-row > .cf-purpose { flex: 1 0 100%; order: -1; padding-left: 26px; }
+.cf-fold > .cf-row > .cf-purpose { padding-left: 16px; }
+.cf-node.cf-explained > .cf-row .cf-label, .cf-node.cf-explained > .cf-fold > .cf-row .cf-label { font-size: 11.5px; }
+.cf-chip .cf-purpose { font-size: 12.5px; max-width: 34ch; }
+.cf-gpurpose { font-family: var(--sans); font-size: 12px; font-weight: 600; fill: var(--ink); }
+.cf-diagram-nav-name.cf-diagram-nav-purpose { font-family: var(--sans); white-space: normal; }
 .cf-row > .cf-desc { flex: 1 0 100%; order: 5; padding-left: 26px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cf-row > .cf-src-link { order: 4; }
 .cf-depth { align-items: center; gap: 4px; }
@@ -1762,6 +1852,16 @@ export const CALL_FLOW_SCRIPT = `
         count.className = 'cf-diagram-nav-count';
         var calls = frames[i].querySelectorAll('a.cf-gnode').length;
         count.textContent = (dot > 0 && label.slice(0, 4) !== 'new ' ? label.slice(0, dot) + ', ' : '') + calls + (calls === 1 ? ' call' : ' calls');
+        // An explained entry point leads with what it does for the product; its name moves under it.
+        var lead = frames[i].querySelector('a.cf-gnode');
+        var said = lead ? lead.querySelectorAll('.cf-gpurpose') : [];
+        if (said.length > 0) {
+          var words = [];
+          for (var w = 0; w < said.length; w++) words.push(said[w].textContent);
+          count.textContent = name.textContent + ' \u00b7 ' + count.textContent;
+          name.textContent = words.join(' ');
+          name.classList.add('cf-diagram-nav-purpose');
+        }
         button.appendChild(name);
         button.appendChild(count);
         item.appendChild(button);

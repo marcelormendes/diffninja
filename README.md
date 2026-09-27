@@ -11,6 +11,11 @@ submit the review to GitHub yourself.
 - **Read the important changes first.** Big PRs are hard to follow file by
   file. diffninja numbers each change, most important first, and lets you step
   through them with `j` and `k`.
+- **See what the change does to the product, not just the code.** Your agent
+  explains the change in business terms: the processes it touches as
+  flowcharts, with new and changed steps highlighted, the business rules it
+  adds or changes (before and after), and one plain sentence on what each
+  function does. Call flows show that sentence above each function's name.
 - **Your agent does the first pass.** For each change, the agent answers simple
   questions: does it change behavior, is it tested, does it match the PR's
   goal. The answers sit above the code.
@@ -62,6 +67,9 @@ your machine at `127.0.0.1`). On the page:
    of what the PR is meant to do and its important limits. The full
    **Original PR description** stays one click away, with Markdown formatting.
    The goal is stated intent, not proof the code fulfills it.
+   Under it, **How it works** draws the business processes the change touches,
+   with its new and changed steps highlighted, and each change in the diff
+   says which step or rule it belongs to.
    `j` and `k` move to the next and previous change, and the list on the left
    shows where you are. The agent sets the reading order; the connected page
    does not label changes “Attention”.

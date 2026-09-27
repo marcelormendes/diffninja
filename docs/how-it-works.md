@@ -95,7 +95,30 @@ The tool writes no report files. Arguments and examples:
    own voice, with no "Finding 1:" scaffolding. The page shows each under its line; you add one
    or all of them to your draft with a click, edit or dismiss them, and submit
    the review yourself. Nothing is posted without you.
-5. **Project context (git ranges only).** What a diff does not show is often
+5. **The business explanation.** Function names and call graphs tell a reader
+   little about what a change does to the product. Every report lists
+   `functions`: each function a reader meets around the hunks and in the call
+   flows (the project's own definitions, not library calls), once, as
+   `<file>#<name>`. The reviewing agent, which read the code, sends
+   `explanation` with its reading: one plain sentence per listed function on
+   what it does for the business, one to four business processes as steps and
+   decisions with the steps this change adds, changes, or removes marked (like
+   a diff laid over the process), and the business rules the change adds,
+   changes, or removes, each changed one with what it was before. It is
+   required for a pull request review. diffninja checks the shape only: every
+   listed function is explained once, every step exit and every function or
+   hunk reference resolves, and every text is one plain line within its bound
+   with nothing that reads like code (calls, snake_case names, source paths,
+   backticks, Markdown). The report opens on **How it works**, which draws each
+   process as a flowchart laid out deterministically (branches side by side,
+   skips and retries in lanes beside the chart, so no arrow crosses a box), a
+   numbered step list with the purpose of the functions behind each step, and
+   the rules as before and after. The call flows put each function's purpose
+   above its code name and fold away calls with no project code below them.
+   The pull request page shows the flowcharts under the goal and tags each hunk
+   with the steps and rules that name it. It is all the agent's reading,
+   attributed to it, never a verdict, and it never changes status or order.
+6. **Project context (git ranges only).** What a diff does not show is often
    the project around it. From the local clone alone — nothing is fetched —
    the report names the commits that last changed each hunk's removed lines
    (`git blame` at the base), earlier revert commits that touched a changed

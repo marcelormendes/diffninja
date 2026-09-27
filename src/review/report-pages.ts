@@ -15,6 +15,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { z } from "zod";
 import type { ReviewItem, ReviewReport, SuggestedComment } from "./types.js";
+import { checkExplanation, explanationCounts, normalizeExplanation, type ExplanationCounts, type ExplanationInput } from "./explanation.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
 export const MAX_REPORT_PAGES = 20;
@@ -105,6 +106,11 @@ export interface RecordedComments {
   readonly suggested: number;
 }
 
+export interface RecordedExplanation {
+  readonly reviewId: string;
+  readonly explained: ExplanationCounts;
+}
+
 /**
  * Everything the reviewing agent owes a review before its pages are handed out.
  * `summary` is the agent's own plain-English paragraph on what the pull request
@@ -116,6 +122,8 @@ export interface FinishInput {
   readonly order: readonly string[];
   readonly comments: readonly SuggestedComment[];
   readonly summary?: string;
+  /** The business explanation: every listed function's purpose, the processes, and the rules. */
+  readonly explanation?: ExplanationInput;
 }
 
 export interface FinishedReview {
@@ -125,6 +133,8 @@ export interface FinishedReview {
   readonly suggested: number;
   /** Characters of the goal summary kept, or 0 when none was sent. */
   readonly summarized: number;
+  /** What the business explanation holds, or absent when none was sent. */
+  explained?: ExplanationCounts;
   readonly reportUrl: string;
 }
 
@@ -297,13 +307,15 @@ export class ReportPages {
     checkOrder(report, input.order);
     checkComments(report, input.comments);
     const summary = checkSummary(input.summary);
+    if (input.explanation !== undefined) checkExplanation(report, input.explanation);
     applyAnswers(report, input.answers, by);
     applyOrder(report, input.order, by);
     applyComments(report, input.comments, by);
     if (summary !== undefined) report.agentSummary = { text: summary, summarizedBy: by };
+    if (input.explanation !== undefined) report.agentExplanation = normalizeExplanation(input.explanation, by);
     page.finished = true;
     this.rerender(page, report);
-    return {
+    const finished: FinishedReview = {
       reviewId,
       answered: input.answers.length,
       ordered: input.order.length,
@@ -311,6 +323,8 @@ export class ReportPages {
       summarized: summary?.length ?? 0,
       reportUrl: `${this.origin}/report/${token}`,
     };
+    if (input.explanation !== undefined) finished.explained = explanationCounts(input.explanation);
+    return finished;
   }
 
   /** Whether finish_review accepted this review, so its addresses may be handed out again. */
@@ -360,6 +374,20 @@ export class ReportPages {
     applyComments(report, comments, suggestedBy);
     this.rerender(page, report);
     return { reviewId, suggested: comments.length };
+  }
+
+  /**
+   * Replace the business explanation of a review: a purpose for every function
+   * the review lists, the processes the change touches, and its business rules.
+   * The whole explanation is checked first; any problem refuses the call and
+   * keeps the previous one.
+   */
+  recordExplanation(reviewId: string, explanation: ExplanationInput, explainedBy: string): RecordedExplanation {
+    const { page, report } = this.review(reviewId);
+    checkExplanation(report, explanation);
+    report.agentExplanation = normalizeExplanation(explanation, explainedBy);
+    this.rerender(page, report);
+    return { reviewId, explained: explanationCounts(explanation) };
   }
 
   private review(reviewId: string): ReviewedPage {

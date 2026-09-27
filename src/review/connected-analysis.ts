@@ -14,6 +14,7 @@
 import { CHANGE_FACT_QUESTIONS, type ChangeFactQuestion } from "./change-facts.js";
 import { verdictOf, type QuestionKind, type Verdict } from "./questions.js";
 import type { AgentSummary, ReviewItem, ReviewReport, ReviewStatus, SuggestedComment } from "./types.js";
+import type { ExplanationChange } from "./explanation.js";
 
 /** Most agenda entries the page lists; the full report has the rest. */
 export const CONNECTED_AGENDA_LIMIT = 5;
@@ -69,6 +70,24 @@ export interface ConnectedHunk {
   /** One fixed sentence when the hunk was not read: a metadata unit or an unread file type. */
   note?: string;
   readonly questions: readonly ConnectedQuestion[];
+  /** The process steps and rules the reviewing agent tied to this hunk, in its words. */
+  business?: readonly ConnectedBusinessLink[];
+}
+
+/** One step or rule of the agent's explanation that names a hunk. */
+export interface ConnectedBusinessLink {
+  /** The process title for a step; absent for a business rule. */
+  readonly process?: string;
+  readonly text: string;
+  readonly change: ExplanationChange;
+}
+
+/** What the page needs to show the business view under the goal; the drawing itself is served by `/flow?view=business`. */
+export interface ConnectedExplanation {
+  readonly explainedBy: string;
+  readonly processes: readonly string[];
+  readonly rules: number;
+  readonly functions: number;
 }
 
 /** Whether the analysis had a local clone's definitions and call flows. */
@@ -102,6 +121,8 @@ export interface ConnectedAnalysis {
    * author's stated intent, not a claim that the changes achieve it.
    */
   summary?: AgentSummary;
+  /** Present once the reviewing agent's business explanation was accepted for this report. */
+  explanation?: ConnectedExplanation;
 }
 
 export type ConnectedOrder = { readonly source: "agent"; readonly orderedBy: string } | { readonly source: "diffninja" };
@@ -194,6 +215,14 @@ export function connectedAnalysisOf(
     list.push(view);
     questionsByUnit.set(owner, list);
   }
+  const business = new Map<string, ConnectedBusinessLink[]>();
+  const link = (hunks: readonly string[] | undefined, entry: ConnectedBusinessLink) => {
+    for (const id of new Set(hunks ?? [])) business.set(id, [...(business.get(id) ?? []), entry]);
+  };
+  for (const process of report.agentExplanation?.processes ?? []) {
+    for (const step of process.steps) link(step.hunks, { process: process.title, text: step.text, change: step.change });
+  }
+  for (const rule of report.agentExplanation?.rules ?? []) link(rule.hunks, { text: rule.text, change: rule.change });
   const counts = { attention: 0, uncertain: 0, low: 0, passed: 0 };
   const hunks = report.items.map((item): ConnectedHunk => {
     counts[item.status] += 1;
@@ -222,6 +251,8 @@ export function connectedAnalysisOf(
     };
     const note = noteOf(item);
     if (note !== undefined) hunk.note = note;
+    const links = business.get(item.id);
+    if (links !== undefined) hunk.business = links;
     return hunk;
   });
   const answered = report.questions.filter((question) => question.answer !== undefined).length;
@@ -249,5 +280,14 @@ export function connectedAnalysisOf(
   // agent's whole reading was accepted for this snapshot's report; it is copied
   // verbatim, attributed, and never synthesized here.
   if (report.agentSummary !== undefined) analysis.summary = report.agentSummary;
+  const explanation = report.agentExplanation;
+  if (explanation !== undefined) {
+    analysis.explanation = {
+      explainedBy: explanation.explainedBy,
+      processes: explanation.processes.map((process) => process.title),
+      rules: explanation.rules.length,
+      functions: explanation.functions.length,
+    };
+  }
   return analysis;
 }

@@ -19,6 +19,10 @@ author or generated claim is fulfilled.
 `finish_review` returns `reportUrl` only after accepting the agent's complete
 reading. It is a read-only `127.0.0.1` page serving that report as one
 self-contained HTML document.
+Once the agent sent a business explanation, the page opens on **How it
+works**: its processes as flowcharts with new, changed, and removed steps
+highlighted, a step list with each step's rule and the functions behind it,
+and the business rules as before and after.
 It makes no external requests and has no frontend dependencies. Hunks
 start folded; full diffs and native folding remain available with JavaScript
 disabled. Light/dark colors follow your system preference.

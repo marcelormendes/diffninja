@@ -42,6 +42,16 @@ export function renderConnectedPage(csrf: string): string {
     '<p id="pr-goal-text" class="pr-goal-text"></p>',
     '<p id="pr-goal-by" class="pr-goal-by" hidden></p>',
     "</section>",
+    '<section id="pr-how" class="pr-how" aria-labelledby="pr-how-heading" hidden>',
+    '<details class="pr-how-fold" open>',
+    '<summary class="pr-how-head"><h2 id="pr-how-heading" class="pr-goal-heading">How it works</h2></summary>',
+    '<div class="pr-how-tools">',
+    '<p id="pr-how-by" class="pr-goal-by"></p>',
+    '<button type="button" id="pr-how-open" class="btn btn-quiet btn-sm" data-action="open-how" aria-label="Open how it works beside the diff">Open beside the diff</button>',
+    "</div>",
+    '<iframe id="pr-how-frame" class="pr-how-frame" title="How it works: the business processes and rules this change touches"></iframe>',
+    "</details>",
+    "</section>",
     '<details id="pr-description" class="pr-description" hidden>',
     '<summary>Original PR description</summary>',
     '<p class="note">The author’s own words, as written, including any generated notes. Raw HTML is shown as text, images as links, and nothing here is loaded from another host. It is the author’s claim, not evidence that the changes achieve it.</p>',
@@ -1122,6 +1132,26 @@ function script(csrf: string): string {
     setText(el.prGoalText, goalAbsentReason(snap));
   }
 
+  /**
+   * The agent's business view under the goal: the processes and rules this
+   * change touches, drawn by the server into a same-origin frame that reports
+   * its own height. Shown only once the agent's explanation was accepted for the
+   * revision on screen; the frame reloads only when that revision changes.
+   */
+  function renderHow() {
+    var snap = snapshot();
+    var current = currentAnalysis();
+    var explanation = current && current.explanation && typeof current.explanation === 'object' ? current.explanation : null;
+    var ready = Boolean(snap) && explanation !== null && current.snapshotId === snap.id;
+    show(el.prHow, ready);
+    if (!ready) { if (el.prHowFrame.getAttribute('src')) el.prHowFrame.removeAttribute('src'); return; }
+    var by = typeof explanation.explainedBy === 'string' && explanation.explainedBy.trim() !== '' ? explanation.explainedBy.trim() : 'your review agent';
+    var processes = Array.isArray(explanation.processes) ? explanation.processes.length : 0;
+    setText(el.prHowBy, 'Explained by ' + by + ' from the code: ' + processes + (processes === 1 ? ' process' : ' processes') + ' and ' + (explanation.rules || 0) + ((explanation.rules || 0) === 1 ? ' business rule' : ' business rules') + '. Its reading, not a verdict; the diff below is the ground truth.');
+    var src = '/flow?snapshot=' + encodeURIComponent(current.snapshotId) + '&view=business';
+    if (el.prHowFrame.getAttribute('src') !== src) el.prHowFrame.setAttribute('src', src);
+  }
+
   /** Why no goal is on screen: the analysis is still coming, is of another revision, or recorded none. */
   function goalAbsentReason(snap) {
     if (!analysis || analysisFor !== snap.id) return 'Waiting for the local analysis of this revision\u2026';
@@ -1136,6 +1166,7 @@ function script(csrf: string): string {
   /* ------------------------------------------------------------ analysis -- */
 
   var STATUS_ORDER = ['attention', 'uncertain', 'low', 'passed'];
+  var CHANGE_WORD = { added: 'New', changed: 'Changed', removed: 'Removed' };
 
   function currentAnalysis() {
     var snap = snapshot();
@@ -1269,7 +1300,8 @@ function script(csrf: string): string {
     var verdicts = answeredVerdicts(hunk);
     var facts = Array.isArray(hunk.facts) ? hunk.facts : [];
     var note = typeof hunk.note === 'string' ? hunk.note : '';
-    if (rank === 0 && verdicts.length === 0 && facts.length === 0 && note === '') return null;
+    var business = Array.isArray(hunk.business) ? hunk.business : [];
+    if (rank === 0 && verdicts.length === 0 && facts.length === 0 && note === '' && business.length === 0) return null;
     var why = make('div', 'stop-why' + (rank > 0 ? ' has-rank' : ''));
     if (rank > 0) {
       var badge = make('span', 'why-rank', String(rank));
@@ -1277,6 +1309,19 @@ function script(csrf: string): string {
       why.appendChild(badge);
     }
     var main = make('div', 'why-main');
+    if (business.length > 0) {
+      var steps = make('div', 'tag-row business-row');
+      steps.appendChild(make('span', 'tag-lead', 'In the business'));
+      for (var b = 0; b < business.length; b += 1) {
+        var link = business[b];
+        var change = typeof link.change === 'string' ? link.change : 'unchanged';
+        var step = make('span', 'business-step change-' + change);
+        if (change !== 'unchanged') step.appendChild(make('span', 'business-change', CHANGE_WORD[change] || change));
+        step.appendChild(make('span', 'business-text', (typeof link.process === 'string' ? link.process + ': ' : 'Rule: ') + String(link.text)));
+        steps.appendChild(step);
+      }
+      main.appendChild(steps);
+    }
     if (verdicts.length > 0) {
       var said = make('div', 'tag-row');
       said.appendChild(make('span', 'sr-only', 'Your agent says: '));
@@ -1339,6 +1384,7 @@ function script(csrf: string): string {
     var snap = snapshot();
     // The goal rides on the analysis, so it re-renders wherever the analysis does — every poll included.
     renderGoal();
+    renderHow();
     show(el.analysisSection, Boolean(snap) && !(typeof snap.unavailableReason === 'string' && snap.unavailableReason !== ''));
     el.analysisBody.textContent = '';
     el.analysisActions.textContent = '';
@@ -1728,8 +1774,9 @@ function script(csrf: string): string {
     var src = '/flow?snapshot=' + encodeURIComponent(current.snapshotId) + (path === '' ? '' : '&file=' + encodeURIComponent(path));
     if (el.flowFrame.getAttribute('src') !== src) el.flowFrame.setAttribute('src', src);
     flowSnapshot = current.snapshotId;
-    setText(el.flowTitle, path === '' ? 'Call flows' : 'Call flow: ' + path);
-    el.flowFrame.title = path === '' ? 'Call flows of every changed file' : 'Call flow of ' + path;
+    var explained = Boolean(current.explanation);
+    setText(el.flowTitle, path === '' ? (explained ? 'How it works and call flows' : 'Call flows') : 'Call flow: ' + path);
+    el.flowFrame.title = path === '' ? (explained ? 'How it works, and the call flows of every changed file' : 'Call flows of every changed file') : 'Call flow of ' + path;
     if (el.flowDrawer.hidden) flowReturn = opener || document.activeElement;
     show(el.flowDrawer, true);
     document.body.classList.add('flow-open');
@@ -1753,7 +1800,16 @@ function script(csrf: string): string {
 
   /** The diagram in the drawer opened or closed: the drawer takes the whole window while it is open. */
   function onFlowMessage(event_) {
-    if (event_.origin !== window.location.origin || event_.source !== el.flowFrame.contentWindow) return;
+    if (event_.origin !== window.location.origin) return;
+    // The inline business view reports its height; nothing else it sends is read.
+    if (event_.source === el.prHowFrame.contentWindow) {
+      var sized = event_.data;
+      if (sized && sized.type === 'diffninja-business-height' && typeof sized.height === 'number' && isFinite(sized.height)) {
+        el.prHowFrame.style.height = Math.max(120, Math.min(20000, Math.ceil(sized.height))) + 'px';
+      }
+      return;
+    }
+    if (event_.source !== el.flowFrame.contentWindow) return;
     var data = event_.data;
     if (!data || data.type !== 'diffninja-diagram') return;
     document.body.classList.toggle('flow-full', data.open === true);
@@ -2501,6 +2557,7 @@ function script(csrf: string): string {
     placeAnchor = action === 'preview' || action === 'submit' || action === 'refresh' ? node : null;
     if (action === 'comment') { event_.preventDefault(); addComment(node); return; }
     if (action === 'open-flow') { event_.preventDefault(); openFlow(node.getAttribute('data-path') || '', node); return; }
+    if (action === 'open-how') { event_.preventDefault(); openFlow('', node); return; }
     if (action === 'close-flow') { event_.preventDefault(); closeFlow(); return; }
     if (action === 'add-suggestion') { event_.preventDefault(); addSuggestion(node); return; }
     if (action === 'add-all-suggestions') { event_.preventDefault(); addAllSuggestions(); return; }
@@ -2558,6 +2615,9 @@ function script(csrf: string): string {
     el.prGoal = byId('pr-goal');
     el.prGoalText = byId('pr-goal-text');
     el.prGoalBy = byId('pr-goal-by');
+    el.prHow = byId('pr-how');
+    el.prHowBy = byId('pr-how-by');
+    el.prHowFrame = byId('pr-how-frame');
     el.prDescription = byId('pr-description');
     el.prDescriptionBody = byId('pr-description-body');
     el.lede = byId('lede');
@@ -2685,6 +2745,21 @@ ${BRAND_MARK_STYLES}
 .pr-goal-text { margin: 6px 0 0; font-size: 15.5px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; max-width: 90ch; }
 .pr-goal-note { margin: 6px 0 0; font-size: 13px; color: var(--ink-soft); overflow-wrap: anywhere; max-width: 90ch; }
 .pr-goal-by { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-faint); overflow-wrap: anywhere; max-width: 90ch; }
+.pr-how { margin-top: 10px; padding: 14px 16px 10px; border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: var(--radius); background: var(--panel); }
+.pr-how-head { cursor: pointer; width: fit-content; }
+.pr-how-head h2 { display: inline; }
+.pr-how-tools { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pr-how-tools .pr-goal-by { flex: 1 1 320px; }
+.pr-how-frame { display: block; width: 100%; height: 480px; margin-top: 10px; border: 0; background: transparent; color-scheme: normal; }
+.business-row { align-items: flex-start; }
+.business-step { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12.5px; color: var(--ink); background: var(--panel); overflow-wrap: anywhere; }
+.business-step.change-added { border-color: var(--ok); background: var(--ok-soft); }
+.business-step.change-changed { border-color: var(--warn); background: var(--warn-soft); }
+.business-step.change-removed { border-color: var(--alarm); background: var(--alarm-bg); }
+.business-change { flex: none; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft); }
+.change-added .business-change { color: var(--ok); }
+.change-changed .business-change { color: var(--warn); }
+.change-removed .business-change { color: var(--alarm); }
 .pr-description { margin-top: 6px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .pr-description > summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .pr-description > .note { margin-top: 10px; }
