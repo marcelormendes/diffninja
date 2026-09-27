@@ -18,6 +18,7 @@ import { moduleResolver } from "./module-resolution.js";
 import { reviewQuestions } from "./questions.js";
 import { readProjectContext } from "./history.js";
 import type { ProjectContext } from "./history.js";
+import { functionsOf } from "./explanation.js";
 
 export type ReviewInput =
   | { diff: string; source: string }
@@ -197,7 +198,8 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
     pr: options.pr,
     evidence: { ...evidence, intent: crossCheckIntent(options.pr, units, evidence.agenda, evidence.findings) },
     ...result, callFlow, callFlows, callFlowAvailability, warnings: [...warnings, ...result.warnings],
-    questions: reviewQuestions(result.items, options.pr, project) };
+    questions: reviewQuestions(result.items, options.pr, project),
+    functions: functionsOf({ items: result.items, callFlows }) };
   if (project !== undefined) report.project = project;
   return report;
 }

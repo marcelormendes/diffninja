@@ -7,7 +7,7 @@ description: Drive the real diffninja MCP server (dist/review/mcp-cli.js over st
 
 diffninja has no UI of its own. Its users touch four surfaces:
 
-- **Primary:** the stdio MCP server `diffninja-mcp` (`dist/review/mcp-cli.js`). An agent host calls `review_diff`, then `finish_review` for the page links; `record_answers`, `record_order`, and `suggest_comments` update a review afterwards.
+- **Primary:** the stdio MCP server `diffninja-mcp` (`dist/review/mcp-cli.js`). An agent host calls `review_diff`, then `finish_review` for the page links; `record_answers`, `record_order`, `suggest_comments`, and `record_explanation` update a review afterwards.
 - **Report pages:** loopback HTTP pages the server returns as `reportUrl` (static reviews) or `url` (connected PR reviews). Humans read them in a browser. They live in server memory and close when the MCP connection closes.
 - **Setup CLI:** `node dist/review/cli.js setup` registers the server with Claude Code, Codex, OMP, or pi. It has no other command.
 - **Library:** `dist/index.js`, the calldiff engine. It is not user-facing here.
@@ -42,7 +42,7 @@ It checks:
 - Node is at least 22.18.
 - The build exists and is newer than every file in `src/`.
 - The server refuses arguments, exiting 1 with an error on stderr and nothing on stdout. stdout is reserved for the protocol.
-- `tools/list` returns exactly `finish_review`, `record_answers`, `record_order`, `review_diff`, and `suggest_comments`.
+- `tools/list` returns exactly `finish_review`, `record_answers`, `record_explanation`, `record_order`, `review_diff`, and `suggest_comments`.
 - `gh auth status`. This is reported as INFO only, because only connected PR review needs `gh`.
 
 Any `FAIL` makes the exit code 1. On "build is newer than src/", run `npm run build`.
@@ -50,11 +50,12 @@ Any `FAIL` makes the exit code 1. On "build is newer than src/", run `npm run bu
 ## Drive
 
 ```sh
-node .claude/skills/verify/drive.mjs review --args '<json>' [--summary '<plain-English PR goal>'] [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]
+node .claude/skills/verify/drive.mjs review --args '<json>' [--summary '<plain-English PR goal>'] [--explain FILE] [--answer cannot-tell|first] [--order reverse] [--suggest] [--hold SECONDS] [--out DIR]
 ```
 
 - `--args`: the exact `review_diff` arguments. It is a strict schema: `diff`, `repo`, `from`, `to`, `pr`, `input`, `mode`, `expectedOutcome {title, description}`, and `referenceProject`. Any other key is an error.
 - `--summary`: required for a connected review with analysis. Supply your own reading of the PR's stated goal, one plain-English paragraph (at most 80 words and 600 characters), not a fabricated fixture or a truncated description. The drive checks that omitting it refuses completion and that the accepted text appears in `/api/analysis` attributed to this client. Static reviews can omit it.
+- `--explain FILE`: required for a connected review with analysis, optional for a static one. A JSON business explanation you wrote yourself after reading the code: a `purpose` for every entry of the review's `functions` (run once without it and read `functions` from `review_diff.json`), the processes as steps and decisions, and the rules. Never fabricate it from names. The drive checks that a reading without it is refused (connected), that one leaving a function out is refused, that the report page opens on "How it works" and draws every process, and, for a connected review, that `/api/analysis` carries the attributed explanation and `/flow?view=business` serves the charts. See `features/business-view.md`.
 - The drive always finishes the review the way an agent must. It checks that `review_diff` hands out no page link, sends `finish_review`, and takes the page links from its result.
   - It first checks that a reading that leaves a question out is refused.
   - The answers are `cannot-tell`, or with `--answer first` each question's first option.

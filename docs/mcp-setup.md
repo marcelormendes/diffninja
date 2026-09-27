@@ -1,7 +1,9 @@
 # MCP setup
 
-`diffninja-mcp` is a stdio MCP server exposing two tools: `review_diff`, and
-`record_answers` for the agent's answers to a review's questions. The process takes no arguments and reads/writes only JSON-RPC
+`diffninja-mcp` is a stdio MCP server exposing `review_diff`, `finish_review`
+(the agent's whole reading, and the only source of page links), and the update
+tools `record_answers`, `record_order`, `suggest_comments`, and
+`record_explanation`. The process takes no arguments and reads/writes only JSON-RPC
 on stdin/stdout, so the client must launch it directly — anything else
 writing to its stdout corrupts the stream. It never writes report files; the
 report comes back as the tool result. This server is the only way to run a
@@ -124,6 +126,38 @@ order. The result is `{ reviewId, recorded, answered, unanswered, reportUrl }`.
 ```json
 { "reviewId": "4f1c…", "answers": [{ "questionId": "q1", "choice": "changes-behavior" }, { "questionId": "q2", "choice": "cannot-tell" }] }
 ```
+
+## The business explanation (`explanation`, `record_explanation`)
+
+Call flows and hunks name code; a reviewer new to that part of the product
+needs to know what it does. So the agent that requested the review writes a
+business explanation, and diffninja only checks and draws it (it calls no
+model). Every `review_diff` result lists `functions`: each function a reader
+meets around the hunks and in the call flows, once, with a stable id
+`<defining file>#<name>` (at most 40, product code before tests; calls with no
+definition in the repository, such as library calls, are not listed).
+
+`finish_review` takes it as `explanation` (required for a pull request review,
+optional for a static report); `record_explanation` `{ reviewId, explanation }`
+replaces it later. The object is strict:
+
+| Field | Meaning |
+| --- | --- |
+| `functions` | `{ id, purpose }` for **every** listed function, each once: one plain sentence (≤200 characters) on what it does for the business or its users. |
+| `processes` | 1–4 business flows the change touches: `{ title, steps }`, 2–16 steps each. A step is `{ id, kind, text, change, detail?, before?, functions?, hunks?, next? }`: `kind` is `start`, `action`, `decision` (two or more exits, each with a short `when` such as `yes`), or `end`; `change` is `added`, `changed`, `removed`, or `unchanged`; `before` (changed steps only) says how it worked before; `functions` and `hunks` name listed function ids and `items[].id`s; an action without `next` continues to the step listed after it. |
+| `rules` | At most 12 business rules `{ text, change, before?, hunks? }`; a `changed` rule must say what it was `before`. |
+
+Every text is one line of plain prose within its bound: no Markdown, and
+nothing that reads like code (a call such as `charge(`, a snake_case name, a
+source path, backticks). Any problem refuses the whole call and keeps the
+previous explanation. The report page then opens on **How it works**: each
+process as a flowchart with new, changed, and removed steps highlighted, a
+numbered step list with each step's rule, its former behavior, and the purpose
+of the functions that carry it out, and the rules as before and after. In the
+call flows every explained call shows its purpose above its code name, and
+library-only calls fold away behind a checkbox. The pull request page shows the
+same flowcharts under the goal and tags each hunk with the steps and rules that
+name it. All of it is attributed to the MCP client that sent it.
 
 ## Call examples
 

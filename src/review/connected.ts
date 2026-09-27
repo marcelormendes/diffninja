@@ -64,10 +64,12 @@ export interface ConnectedOptions {
   readonly analysis?: () => Promise<ConnectedAnalysisView>;
   /**
    * The call-flow page of the analysis of snapshot `snapshotId`, for one changed
-   * file or all of them, for `GET /flow`. Undefined when that snapshot is not
-   * the one analyzed or it has no call flows there.
+   * file or all of them, for `GET /flow`; with `view` "business", the business
+   * view alone (`GET /flow?snapshot=&view=business`), which the page shows under
+   * its goal. Undefined when that snapshot is not the one analyzed or it has
+   * nothing to show there.
    */
-  readonly flow?: (snapshotId: string, file: string | undefined) => Promise<string | undefined>;
+  readonly flow?: (snapshotId: string, file: string | undefined, view: "flow" | "business") => Promise<string | undefined>;
 }
 
 const NO_ANALYSIS: ConnectedAnalysisView = {
@@ -127,9 +129,10 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
       const query = new URL(req.url ?? "", origin).searchParams;
       const snapshotId = query.get("snapshot") ?? "";
       const file = query.get("file") ?? undefined;
+      const view = query.get("view") === "business" ? "business" : "flow";
       let html: string | undefined;
       try {
-        html = options.flow === undefined ? undefined : await options.flow(snapshotId, file);
+        html = options.flow === undefined ? undefined : await options.flow(snapshotId, file, view);
       } catch {
         html = undefined;
       }

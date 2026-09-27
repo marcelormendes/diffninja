@@ -125,11 +125,26 @@ function staticFinish(reviewId: string, report: Pick<ReviewReport, "questions" |
 const GOAL_SUMMARY = "Checkout now compares the count against the limit instead of a fixed 10, so a limit that is raised in config takes effect without another release. The author states this is meant to replace the hardcoded guard; the removed warning log is not mentioned, so treat the change in logging as unexplained.";
 
 /** The least an agent must send for a page link: the above plus the goal summary. */
-function minimalFinish(reviewId: string, report: Pick<ReviewReport, "questions" | "items">) {
-  return { ...staticFinish(reviewId, report), summary: GOAL_SUMMARY };
+/** The smallest business explanation finish_review accepts for a report: every listed function, one two-step process. */
+function minimalExplanation(report: Pick<ReviewReport, "functions">) {
+  return {
+    functions: (report.functions ?? []).map((fn) => ({ id: fn.id, purpose: "Handles one part of the shop's checkout." })),
+    processes: [{
+      title: "Checking out",
+      steps: [
+        { id: "s1", kind: "start" as const, text: "A shopper places an order", change: "unchanged" as const },
+        { id: "s2", kind: "end" as const, text: "The order is charged", change: "changed" as const },
+      ],
+    }],
+    rules: [],
+  };
 }
 
-async function finished(client: Client, reviewId: string, report: Pick<ReviewReport, "questions" | "items">): Promise<Finished> {
+function minimalFinish(reviewId: string, report: Pick<ReviewReport, "questions" | "items" | "functions">) {
+  return { ...staticFinish(reviewId, report), summary: GOAL_SUMMARY, explanation: minimalExplanation(report) };
+}
+
+async function finished(client: Client, reviewId: string, report: Pick<ReviewReport, "questions" | "items" | "functions">): Promise<Finished> {
   const result = await finishReview(client, minimalFinish(reviewId, report));
   expect(result.isError, textOf(result)).toBeFalsy();
   // SAFETY: finish_review answers with this shape; the finish_review tests assert it field by field.
@@ -153,7 +168,7 @@ describe("review_diff discovery", () => {
     const client = await connectReview();
     const listed = await client.listTools();
 
-    expect(listed.tools.map(tool => tool.name)).toEqual(["review_diff", "finish_review", "record_answers", "record_order", "suggest_comments"]);
+    expect(listed.tools.map(tool => tool.name)).toEqual(["review_diff", "finish_review", "record_answers", "record_order", "suggest_comments", "record_explanation"]);
     const tool = listed.tools[0];
     expect(tool.annotations?.readOnlyHint).toBe(false);
     expect(tool.annotations?.destructiveHint).toBe(false);
@@ -276,6 +291,44 @@ describe("review_diff over the MCP protocol", () => {
     expect(withGoal.isError, textOf(withGoal)).toBeFalsy();
     // SAFETY: finish_review answers with the finished shape; the field asserted here is its own.
     expect(JSON.parse(textOf(withGoal)) as Finished).toMatchObject({ summarized: GOAL_SUMMARY.length });
+    expect(fetchAttempts).toEqual([]);
+  });
+
+  test("a static finish may carry a business explanation; the page opens on it, and record_explanation replaces it whole or not at all", async () => {
+    blockNetwork();
+    const client = await connectReview();
+    const report = reportOf(await review(client, { diff: patch }));
+    // A patch resolves no definitions, so there is no function to explain; the process still draws.
+    expect(report.functions).toEqual([]);
+    const explanation = minimalExplanation(report);
+
+    const done = await finishReview(client, { ...staticFinish(report.reviewId, report), explanation });
+    expect(done.isError, textOf(done)).toBeFalsy();
+    // SAFETY: finish_review answers with the finished shape; its fields are asserted here.
+    const finishedStatic = JSON.parse(textOf(done)) as Finished & { explained?: unknown };
+    expect(finishedStatic.explained).toEqual({ functions: 0, processes: 1, steps: 2, rules: 0 });
+    const page = (await loopback(finishedStatic.reportUrl))?.body ?? "";
+    expect(page).toContain('data-default-view="business"');
+    expect(page).toContain("A shopper places an order");
+    expect(page).toContain("Explained by diffninja-mcp-test 0.1.0");
+
+    // A bad explanation is refused whole: the text reads like code, so nothing changes.
+    const coded = { ...explanation, processes: [{ ...explanation.processes[0], title: "Calls checkout_order() first" }] };
+    // SAFETY: callTool answers a tools/call with a CallToolResult; its fields are asserted below.
+    const refused = await client.callTool({ name: "record_explanation", arguments: { reviewId: report.reviewId, explanation: coded } }) as CallToolResult;
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/reads like code/);
+    expect((await loopback(finishedStatic.reportUrl))?.body).toContain("Checking out");
+
+    // A good one replaces the earlier explanation and re-renders the page; no link comes back.
+    const renamed = { ...explanation, processes: [{ ...explanation.processes[0], title: "Paying for an order" }] };
+    // SAFETY: callTool answers a tools/call with a CallToolResult; its fields are asserted below.
+    const replaced = await client.callTool({ name: "record_explanation", arguments: { reviewId: report.reviewId, explanation: renamed } }) as CallToolResult;
+    expect(replaced.isError, textOf(replaced)).toBeFalsy();
+    expect(textOf(replaced)).not.toMatch(/127\.0\.0\.1/);
+    const after = (await loopback(finishedStatic.reportUrl))?.body ?? "";
+    expect(after).toContain("Paying for an order");
+    expect(after).not.toContain("Checking out");
     expect(fetchAttempts).toEqual([]);
   });
 
@@ -939,7 +992,16 @@ describe("review_diff connected pull request mode", () => {
       expect(view?.summary).toEqual({ text: GOAL_SUMMARY, summarizedBy: "diffninja-mcp-test 0.1.0" });
       // A patch-only analysis has no call flows to show, and says why.
       expect(view?.callFlowFiles).toEqual([]);
-      expect((await loopback(`${url}flow?snapshot=${payload.snapshot.id}`))?.status).toBe(404);
+      expect((await loopback(`${url}flow?snapshot=${payload.snapshot.id}&file=app.ts`))?.status).toBe(404);
+      // The business view still has pages: the drawer's, and the one framed under the goal.
+      expect(view?.explanation).toEqual({ explainedBy: "diffninja-mcp-test 0.1.0", processes: ["Checking out"], rules: 0, functions: 0 });
+      const drawer = await loopback(`${url}flow?snapshot=${payload.snapshot.id}`);
+      expect(drawer?.status).toBe(200);
+      expect(drawer?.body).toContain("Checking out");
+      const business = await loopback(`${url}flow?snapshot=${payload.snapshot.id}&view=business`);
+      expect(business?.status).toBe(200);
+      expect(business?.body).toContain("The order is charged");
+      expect((await loopback(`${url}flow?snapshot=stale&view=business`))?.status).toBe(404);
       expect((await loopback(url))?.status).toBe(200);
 
       // Later updates still reach the finished page; nothing goes to GitHub.
@@ -971,6 +1033,7 @@ describe("review_diff connected pull request mode", () => {
       // so a finish that partly applied before refusing would show up on the page.
       const substitute = {
         ...staticFinish(reviewId, report),
+        explanation: minimalExplanation(report),
         answers: report.questions.map(question => ({ questionId: question.id, choice: question.options[0] })),
         comments: [comment],
       };
@@ -1016,7 +1079,7 @@ describe("review_diff connected pull request mode", () => {
       expect(withoutSummary.isError).toBe(true);
       expect(textOf(withoutSummary)).toMatch(/must send summary/);
       const updated = "Checkout now reads the limit from config instead of a fixed 10. The author gives no reason for dropping the warning log, so that part stays unexplained.";
-      const replaced = await finishReview(client, { ...staticFinish(reviewId, report), summary: updated });
+      const replaced = await finishReview(client, { ...staticFinish(reviewId, report), summary: updated, explanation: minimalExplanation(report) });
       expect(replaced.isError, textOf(replaced)).toBeFalsy();
       // SAFETY: finish_review answers with the finished shape; the field asserted here is its own.
       expect(JSON.parse(textOf(replaced)) as Finished).toMatchObject({ summarized: updated.length });

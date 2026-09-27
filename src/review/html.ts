@@ -3,6 +3,7 @@ import { verdictOf, type ReviewQuestion } from "./questions.js";
 import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
+import { renderBusinessView, BUSINESS_STYLES } from "./process-html.js";
 import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
 import { PALETTE_STYLES } from "./palette.js";
 import { escapeHtml } from "./escape-html.js";
@@ -55,17 +56,19 @@ export function renderReview(report: ReviewReport): string {
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="color-scheme" content="light dark">',
     `<title>${escapeHtml(`diffninja review: ${report.title || "untitled diff"}`)}</title>`,
-    `<style>${STYLES}\n${BRIEF_STYLES}\n${CALL_FLOW_STYLES}</style>`,
+    `<style>${STYLES}\n${BRIEF_STYLES}\n${CALL_FLOW_STYLES}\n${BUSINESS_STYLES}\n${BUSINESS_VIEW_STYLES}</style>`,
     "</head>",
-    `<body data-default-view="${report.evidence === undefined ? "call-flow" : "brief"}">`,
+    `<body data-default-view="${defaultView(report)}">`,
     '<div class="wrap">',
     renderHeader(report),
     renderAgentOrder(report),
     '<nav class="view-switch" aria-label="Report view">',
+    '<a href="#view-business" data-view="business">How it works</a>',
     '<a href="#view-brief" data-view="brief">Outcome</a>',
     '<a href="#view-call-flow" data-view="call-flow">Call flow</a>',
     '<a href="#view-diff" data-view="diff">Diff</a>',
     "</nav>",
+    `<section class="business" id="view-business" aria-labelledby="view-business-title">${renderBusinessSection(report)}</section>`,
     `<section class="brief" id="view-brief" aria-label="Expected outcome and reading agenda">${renderBrief(report)}</section>`,
     '<section id="view-call-flow" aria-label="Call flow">',
     renderCallFlows(report),
@@ -81,6 +84,93 @@ export function renderReview(report: ReviewReport): string {
     "",
   ].join("\n");
 }
+
+/**
+ * The page opens on the business view once the reviewing agent explained the
+ * change: that is the first thing a reader who does not know this code needs.
+ * Without one it opens on the agenda, or on the call flow when there is none.
+ */
+function defaultView(report: ReviewReport): string {
+  if (report.agentExplanation !== undefined) return "business";
+  return report.evidence === undefined ? "call-flow" : "brief";
+}
+
+/** Link target of a hunk on this page: its card in the diff, by rank. */
+function hunkHref(report: ReviewReport): (itemId: string) => string | undefined {
+  const ranks = new Map(report.items.map((item, index) => [item.id, index + 1]));
+  return (itemId) => {
+    const rank = ranks.get(itemId);
+    return rank === undefined ? undefined : `#item-${rank}`;
+  };
+}
+
+function renderBusinessSection(report: ReviewReport): string {
+  return [
+    '<h2 class="business-title" id="view-business-title">How it works</h2>',
+    '<p class="business-lede">What this change does to the product, as processes, rules, and plain descriptions of the code it touches. The reviewing agent wrote it from the code; the diff stays the ground truth.</p>',
+    renderBusinessView(report, { hunkHref: hunkHref(report) }),
+  ].join("\n");
+}
+
+const BUSINESS_VIEW_STYLES = `
+.business { padding-top: 14px; }
+.business-title { font-size: 20px; }
+.business-lede { margin-top: 4px; color: var(--ink-soft); font-size: 14px; max-width: 90ch; }
+.flow-section-title { margin: 22px 0 0; font-size: 18px; }
+`;
+
+/**
+ * Posts the document's height to the page that frames it, so the pull request
+ * page can size its inline "How it works" frame to fit. Only the same origin
+ * receives it, and it carries a number, nothing from the report.
+ */
+const BUSINESS_FRAME_SCRIPT = `
+(function () {
+  'use strict';
+  function post() {
+    if (window.parent === window) return;
+    window.parent.postMessage({ type: 'diffninja-business-height', height: Math.ceil(document.documentElement.scrollHeight) }, window.location.origin);
+  }
+  window.addEventListener('load', post);
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(post).observe(document.body);
+  document.addEventListener('toggle', post, true);
+  post();
+}());
+`;
+
+/**
+ * The business view alone, for the pull request page to frame under its goal:
+ * the processes, the rules, and the glossary, with no links into a diff (the
+ * page around it has its own). Server-rendered; its one script only reports
+ * the document's height to the framing page.
+ */
+export function renderBusinessPage(report: ReviewReport): string {
+  return [
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<meta name="color-scheme" content="light dark">',
+    "<title>How it works</title>",
+    `<style>${STYLES}\n${PALETTE_STYLES}\n${BUSINESS_STYLES}\n${EMBEDDED_BUSINESS_STYLES}</style>`,
+    "</head>",
+    "<body>",
+    '<main class="business-embed" aria-label="How it works">',
+    renderBusinessView(report, { attribution: false, glossary: false, stepsOpen: false }),
+    "</main>",
+    `<script>${BUSINESS_FRAME_SCRIPT}</script>`,
+    "</body>",
+    "</html>",
+    "",
+  ].join("\n");
+}
+
+const EMBEDDED_BUSINESS_STYLES = `
+body { background: transparent; font-family: var(--sans); }
+.business-embed { padding: 0 2px 4px; }
+.business-embed .bp { margin-top: 0; }
+`;
 
 /** Trims the report's call-flow view to live inside the pull request page's drawer. */
 const EMBEDDED_FLOW_STYLES = `
@@ -107,10 +197,19 @@ export function renderCallFlowPage(report: ReviewReport, file?: string): string 
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="color-scheme" content="light dark">',
     `<title>${escapeHtml(file === undefined ? "Call flows" : `Call flow: ${file}`)}</title>`,
-    `<style>${STYLES}\n${CALL_FLOW_STYLES}\n${PALETTE_STYLES}\n${EMBEDDED_FLOW_STYLES}</style>`,
+    `<style>${STYLES}\n${CALL_FLOW_STYLES}\n${PALETTE_STYLES}\n${BUSINESS_STYLES}\n${BUSINESS_VIEW_STYLES}\n${EMBEDDED_FLOW_STYLES}</style>`,
     "</head>",
     "<body>",
+    report.agentExplanation === undefined
+      ? ""
+      : [
+          '<section class="flow-embed business" aria-labelledby="flow-business-title">',
+          `<h2 class="business-title" id="flow-business-title">${file === undefined ? "How it works" : "How this file fits the process"}</h2>`,
+          renderBusinessView(report, { file, glossary: false }),
+          "</section>",
+        ].join("\n"),
     `<section id="view-call-flow" class="flow-embed${file === undefined ? "" : " flow-single"}" aria-label="Call flow">`,
+    report.agentExplanation === undefined ? "" : '<h2 class="flow-section-title">Call flow</h2>',
     renderCallFlows(scoped),
     "</section>",
     `<script>document.documentElement.classList.add('js');\n${CALL_FLOW_SCRIPT}</script>`,
@@ -537,10 +636,11 @@ const SCRIPT = `
   'use strict';
   document.documentElement.classList.add('js');
   var briefView = document.getElementById('view-brief');
+  var businessView = document.getElementById('view-business');
   var diffView = document.getElementById('view-diff');
   var flowView = document.getElementById('view-call-flow');
   var viewLinks = Array.prototype.slice.call(document.querySelectorAll('[data-view]'));
-  var VIEWS = { brief: briefView, 'call-flow': flowView, diff: diffView };
+  var VIEWS = { business: businessView, brief: briefView, 'call-flow': flowView, diff: diffView };
   function showView(name) {
     for (var key in VIEWS) {
       if (VIEWS[key]) VIEWS[key].hidden = key !== name;

@@ -2,7 +2,7 @@
 
 `diffninja` runs inside agent CLIs (Claude Code, Codex, OMP, pi, …) through
 `diffninja-mcp`, a stdio MCP server exposing `review_diff`, `finish_review`,
-`record_answers`, `record_order`, and `suggest_comments`. The
+`record_answers`, `record_order`, `suggest_comments`, and `record_explanation`. The
 `diffninja` bin only registers that server (`diffninja setup`); there is no
 terminal review mode. PR links select a connected, human-authored GitHub review
 via `gh`. Page links come only from `finish_review`: the agent gets them once it
@@ -42,7 +42,10 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `evidence.ts` / `evidence-syntax.ts` (bounded syntactic findings and agenda),
     `module-resolution.ts` (conservative immutable import bindings),
     `reference-check.ts` (opt-in before/after TypeScript diagnostics),
-    `html.ts` / `evidence-html.ts` (report), `types.ts` / `evidence-types.ts`.
+    `html.ts` / `evidence-html.ts` (report), `types.ts` / `evidence-types.ts`,
+    `explanation.ts` (the functions list and the agent's business explanation:
+    checks and storage), `process-html.ts` (the business view: flowcharts,
+    step list, rules, glossary).
   - `setup.ts` — `runSetup()` for `diffninja setup`: CLI detection, config
     writes (atomic, conflict-aware), and `updateFile()`. `toml.ts` — parses
     and edits one TOML table in place by key path, for Codex's config.
@@ -69,14 +72,34 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     be absolute for a range. In auto, `pr`/`input` require a PR link.
   - Static success returns `structuredContent` equal to the `ReviewReport` plus
     `reviewId` and `nextSteps`, and no page link; the report carries `questions` (`questions.ts`,
-    deterministic templates, closed options incl. `cannot-tell`, at most 36; import-only hunks are not asked about).
+    deterministic templates, closed options incl. `cannot-tell`, at most 36; import-only hunks are not asked about)
+    and `functions` (`explanation.ts`: each project definition around the hunks
+    and in the call flows once, id `<file>#<name>`, at most 40, product code
+    before tests, library calls never listed).
     A git-range report also carries `project` (`history.ts`): line origins per
     hunk (`items[].history`, blame at the base), related reverts, applicable
     guideline paths, and new-file sibling conventions, all from local git only,
     code-point sorted, and never affecting status, priority, or order; a shallow
     clone reports `history: "shallow"` and counts cut lines as unknown.
-  - `finish_review`: strict `{ reviewId, answers, order, comments, summary? }`, the only
-    source of page links. Connected reviews require `summary`: nonempty plain
+  - `finish_review`: strict `{ reviewId, answers, order, comments, summary?, explanation? }`, the only
+    source of page links. Connected reviews require `summary` and `explanation`.
+    `explanation` is `{ functions, processes, rules }`: a one-sentence purpose
+    for every listed function exactly once; 1–4 processes of 2–16 steps
+    (`start`/`action`/`decision`/`end`, `change` added/changed/removed/unchanged,
+    optional `detail`, `before` only on a changed step, `functions`/`hunks`
+    references that must resolve, `next` exits that must resolve; a decision
+    has two or more exits each with `when`, an end none, an action without
+    `next` continues to the next step listed); at most 12 rules, a changed one
+    with `before`. Every text is one plain line within its bound, with no
+    Markdown and nothing that reads like code (a call, snake_case, a source
+    path, backticks). It is the agent's reading, attributed, never generated
+    by diffninja, and never changes status, priority, or order. The report page
+    opens on it ("How it works"), the call flows put each purpose above its
+    code name and fold library-only calls behind a checkbox, and the connected
+    page frames it under the goal (`GET /flow?snapshot=&view=business`) and
+    tags hunks with the steps and rules that name them (`/api/analysis`
+    `explanation`, `hunks[].business`). Success adds `explained` counts.
+    The `summary` is nonempty plain
     English, one paragraph, at most 600 characters and 80 words, no control
     characters or Markdown scaffolding. The host summarizes stated intent from
     the title/body, not verified fulfillment; unclear goals stay explicit.
@@ -92,9 +115,11 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     fold the safely formatted original Markdown description below it.
     A later `review_diff` of a finished pull request returns its `url` and
     `reportUrl` again.
-  - `record_answers`, `record_order`, `suggest_comments` update a review
-    before or after it is finished; they return counts and `next`, never a
-    link.
+  - `record_answers`, `record_order`, `suggest_comments`, `record_explanation`
+    update a review before or after it is finished; they return counts and
+    `next`, never a link. `record_explanation` is strict `{ reviewId,
+    explanation }`, checked as in `finish_review`; any problem keeps the
+    previous explanation.
   - `record_answers`: strict `{ reviewId, answers: [{ questionId, choice }] }`,
     no free text; any invalid answer refuses the whole call and keeps nothing;
     answers are attributed to the MCP client's own name/version, re-render the
@@ -142,6 +167,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
 - Keep connected safeguards: immutable snapshot binding, canonical line anchors,
   stale-snapshot and duplicate-submit blocking, loopback-only Host/Origin/CSRF
   checks, and no general GitHub/command proxy. `GET /flow?snapshot=&file=`
+  (or `&view=business`, the business view alone, once explained)
   serves the analyzed snapshot's call-flow page (`renderCallFlowPage`, hashed
   CSP) framable only by its own origin (`frame-ancestors 'self'`,
   `X-Frame-Options: SAMEORIGIN`); any other snapshot or file is a 404, and the
@@ -171,7 +197,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   the deterministic checks, status, ranking, and order; `review-change-facts.test.ts`
   the lexical facts; `review-report-pages.test.ts` the report pages;
   `review-input.test.ts` and `review-html.test.ts` cover parsing and rendering;
-  `review-cli.test.ts` covers the setup-only command. `review-history.test.ts`
+  `review-cli.test.ts` covers the setup-only command. `review-explanation.test.ts`
+  covers the functions list, the explanation checks, and the business view. `review-history.test.ts`
   covers the project context against temporary repositories (full and shallow). `review-mcp.test.ts` covers the MCP tool through
   `createReviewServer()`: input validation, the structured report, its JSON
   text twin, and error cases — assert the outward result, not internal wiring.
