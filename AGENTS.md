@@ -43,7 +43,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `module-resolution.ts` (conservative immutable import bindings),
     `reference-check.ts` (opt-in before/after TypeScript diagnostics),
     `html.ts` / `evidence-html.ts` (report), `types.ts` / `evidence-types.ts`,
-    `explanation.ts` (the functions list and the agent's business explanation:
+    `update-check.ts` (the opt-in npm version lookup and its notice), `explanation.ts` (the functions list and the agent's business explanation:
     checks and storage), `process-html.ts` (the business view: flowcharts,
     step list, rules, glossary).
   - `setup.ts` — `runSetup()` for `diffninja setup`: CLI detection, config
@@ -165,6 +165,14 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     Repeated calls for one PR reuse its page; no review is submitted by the tool.
   - No output files, no CLI flags, no key arguments, no environment: static
     analysis is local; connected uses `gh`.
+    The one outward request is the update notice (`update-check.ts`): only the
+    `diffninja-mcp` executable, never `createReviewServer()` by default, asks
+    `registry.npmjs.org/diffninja/latest` once per connection (3 s timeout,
+    failure means no notice, nothing about the user or the diff is sent). A
+    strictly newer version becomes `updateNotice` on the report (so on the
+    static and connected pages and in `/api/analysis` `update`) and the first
+    `nextSteps` line telling the agent to say it. The only environment read is
+    npm's `NO_UPDATE_NOTIFIER`, which turns it off.
   - Keep `readOnlyHint: false` and `destructiveHint: false`: git-range analysis
     can install missing grammars into calldiff's cache through npm. It does not
     edit repository source. Inline diffs are fully offline.

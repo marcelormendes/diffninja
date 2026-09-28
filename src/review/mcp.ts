@@ -25,6 +25,7 @@ import {
   MIN_PROCESS_STEPS,
 } from "./explanation.js";
 import { packageVersion } from "./version.js";
+import { UpdateNotifier, updateStep, type LatestVersion } from "./update-check.js";
 
 const PR_LINK_ERROR = "A pull request review needs exactly one full github.com pull request URL, for example https://github.com/OWNER/REPO/pull/123. Ask the user for their link; do not guess, search, or invent one.";
 const STATIC_MODE_ERROR = "mode static reviews a diff or git range and accepts no pr or input. Use mode connected to review a pull request link.";
@@ -343,7 +344,14 @@ const CONNECTED_SUMMARY_ERROR = "finish_review for a pull request review must se
  * link before anything is loaded, and `static` never navigates a link it finds
  * inside a diff.
  */
-export function createReviewServer(): McpServer {
+/** Options only the executable sets: the library never reaches the network on its own. */
+export interface ReviewServerOptions {
+  /** Looks up the newest published diffninja version; leave out to never check. */
+  readonly latestVersion?: LatestVersion;
+}
+
+export function createReviewServer(options: ReviewServerOptions = {}): McpServer {
+  const notifier = new UpdateNotifier(options.latestVersion);
   const reports = new ReportPages(renderReview);
   const sessions = new ConnectedSessions(reports);
   const server = new ReviewServer(sessions, reports);
@@ -366,6 +374,10 @@ export function createReviewServer(): McpServer {
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   }, async ({ diff, repo, from, to, pr, input, mode, expectedOutcome, referenceProject }) => {
     try {
+      // A newer diffninja is told to the agent first, and every page of this connection carries it.
+      const update = await notifier.notice();
+      reports.setUpdateNotice(update);
+      const steps = (list: readonly string[]) => (update === undefined ? list : [updateStep(update), ...list]);
       const intent = mode ?? "auto";
       if (intent === "static" && (pr !== undefined || input !== undefined)) throw new Error(STATIC_MODE_ERROR);
       // Only auto and connected look for a link, and an explicit static request
@@ -393,7 +405,7 @@ export function createReviewServer(): McpServer {
                 reviewId: analysis.reviewId,
                 analysisScope: analysis.scope,
                 report: analysis.report,
-                ...(reports.isFinished(analysis.reviewId) ? { url: binding.url, reportUrl: analysis.reportUrl } : { nextSteps: CONNECTED_NEXT_STEPS }),
+                ...(reports.isFinished(analysis.reviewId) ? { url: binding.url, reportUrl: analysis.reportUrl } : { nextSteps: steps(CONNECTED_NEXT_STEPS) }),
               };
           return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: { ...payload } };
         }
@@ -413,7 +425,7 @@ export function createReviewServer(): McpServer {
           pr: expectedOutcome === undefined ? undefined : { title: expectedOutcome.title, body: expectedOutcome.description } });
       // The agent reads the report as data; the human reads the same report as a page.
       const published = await reports.publish(report);
-      const payload = { ...report, reviewId: published.reviewId, nextSteps: STATIC_NEXT_STEPS };
+      const payload = { ...report, reviewId: published.reviewId, nextSteps: steps(STATIC_NEXT_STEPS) };
       return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: { ...payload } };
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };

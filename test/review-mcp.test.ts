@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema, type CallToolRequest, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, test } from "vitest";
+import { packageVersion } from "../src/review/version.js";
 import { createReviewServer } from "../src/review/mcp.js";
 import type { ConnectedSnapshot } from "../src/review/github.js";
 import { placementOf } from "../src/review/pipeline.js";
@@ -35,8 +36,8 @@ function blockNetwork(): void {
 
 interface ReviewPair { client: Client; close: () => Promise<void> }
 
-async function openReview(): Promise<ReviewPair> {
-  const server = createReviewServer();
+async function openReview(options: Parameters<typeof createReviewServer>[0] = {}): Promise<ReviewPair> {
+  const server = createReviewServer(options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "diffninja-mcp-test", version: "0.1.0" });
   // Both ends must start together: an initialize request sent before the server
@@ -676,6 +677,39 @@ class StdioReviewPeer {
     waiting(message);
   }
 }
+
+describe("update notice", () => {
+  const stepsOf = async (options: Parameters<typeof createReviewServer>[0]) => {
+    const { client } = await openReview(options);
+    return reportOf(await review(client, { diff: patch }));
+  };
+
+  test("a newer published version is told to the agent first and shown on the report page", async () => {
+    const plain = await stepsOf({});
+    const { client } = await openReview({ latestVersion: async () => "99.0.0" });
+    const first = reportOf(await review(client, { diff: patch }));
+    expect(first.updateNotice).toEqual({ current: packageVersion(), latest: "99.0.0", command: "npx diffninja@latest setup" });
+    expect(first.nextSteps?.[0]).toContain("diffninja 99.0.0 is available");
+    expect(first.nextSteps?.[0]).toContain("npx diffninja@latest setup");
+    expect(first.nextSteps).toHaveLength((plain.nextSteps?.length ?? 0) + 1);
+    const page = await loopback((await published(client, await review(client, { diff: patch }))).reportUrl);
+    expect(page?.body).toContain('class="update-notice"');
+    expect(page?.body).toContain("diffninja 99.0.0 is available");
+  });
+
+  test("no lookup, the same version, an older one, a failure or a missing answer say nothing", async () => {
+    const plain = await stepsOf({});
+    expect(plain.updateNotice).toBeUndefined();
+    for (const latestVersion of [async () => packageVersion(), async () => "0.0.1", async () => undefined, async () => { throw new Error("offline"); }]) {
+      const result = await stepsOf({ latestVersion });
+      expect(result.updateNotice).toBeUndefined();
+      expect(result.nextSteps).toEqual(plain.nextSteps);
+    }
+    const { client } = await openReview({});
+    const page = await loopback((await published(client, await review(client, { diff: patch }))).reportUrl);
+    expect(page?.body).not.toContain('class="update-notice"');
+  });
+});
 
 describe("record_order", () => {
   async function reviewed(client: Client) {

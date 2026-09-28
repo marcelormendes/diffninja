@@ -1,3 +1,4 @@
+import type { UpdateNotice } from "./update-check.js";
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
 import { verdictOf, type ReviewQuestion } from "./questions.js";
 import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
@@ -265,11 +266,17 @@ function renderHeader(report: ReviewReport): string {
     `<p class="meta">Files changed · <span class="mono">${escapeHtml(report.source)}</span></p>`,
     scope === "" ? "" : `<p class="meta">${escapeHtml(scope)}</p>`,
     `<p class="mode-note">${mode}</p>`,
+    report.updateNotice === undefined ? "" : renderUpdateNotice(report.updateNotice),
     renderLegend(),
     "</header>",
   ]
     .filter((part) => part !== "")
     .join("\n");
+}
+
+/** One line, above the legend: a newer diffninja exists and the command that installs it. */
+function renderUpdateNotice(notice: UpdateNotice): string {
+  return `<p class="update-notice" role="status">diffninja ${escapeHtml(notice.latest)} is available (you have ${escapeHtml(notice.current)}). Update by running <code>${escapeHtml(notice.command)}</code> in a terminal, then restart your agent.</p>`;
 }
 
 /** One color line, no jargon. Counting is left to the filter chips. */
@@ -1010,6 +1017,7 @@ a { color: var(--teal); }
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
+.update-notice { padding: 8px 12px; border-left: 3px solid var(--warn); background: var(--warn-bg); border-radius: 4px; font-size: 14px; }
 .masthead {
   display: flex;
   flex-direction: column;

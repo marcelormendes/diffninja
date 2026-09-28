@@ -1,3 +1,4 @@
+import type { UpdateNotice } from "./update-check.js";
 import type { PullRequestIntent, ReviewEvidence } from "./evidence-types.js";
 import type { ChangeFacts } from "./change-facts.js";
 import type { ReviewQuestion } from "./questions.js";
@@ -191,6 +192,8 @@ export interface ReviewReport {
    * agent's reading rather than a verified claim.
    */
   agentSummary?: AgentSummary;
+  /** A newer diffninja exists on npm; set only by the executable's opt-in version lookup. */
+  updateNotice?: UpdateNotice;
   /**
    * Every function a reader meets in this report (around the hunks and in the
    * call flows), each with a stable `<file>#<name>` id, for the reviewing agent

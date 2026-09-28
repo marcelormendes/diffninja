@@ -37,6 +37,7 @@ export function renderConnectedPage(csrf: string): string {
     `<p class="brand">${BRAND_MARK}<span>diffninja</span></p>`,
     '<h1 id="page-title">Pull request review</h1>',
     '<p id="page-meta" class="page-meta" hidden></p>',
+    '<p id="update-notice" class="update-notice" role="status" hidden></p>',
     '<section id="pr-goal" class="pr-goal" aria-labelledby="pr-goal-heading" hidden>',
     '<h2 id="pr-goal-heading" class="pr-goal-heading">Goal</h2>',
     '<p id="pr-goal-text" class="pr-goal-text"></p>',
@@ -1106,6 +1107,19 @@ function script(csrf: string): string {
    * nothing rather than a stale goal — and when none was recorded the block
    * says so instead of describing the pull request itself.
    */
+  /** A newer diffninja exists: one line with the command, from the analysis the page already polls. */
+  function renderUpdate() {
+    var current = currentAnalysis();
+    var u = current && current.update && typeof current.update === 'object' ? current.update : null;
+    var valid = u && typeof u.latest === 'string' && typeof u.current === 'string' && typeof u.command === 'string';
+    el.updateNotice.textContent = '';
+    show(el.updateNotice, Boolean(valid));
+    if (!valid) return;
+    el.updateNotice.appendChild(document.createTextNode('diffninja ' + u.latest + ' is available (you have ' + u.current + '). Update by running '));
+    el.updateNotice.appendChild(make('code', '', u.command));
+    el.updateNotice.appendChild(document.createTextNode(' in a terminal, then restart your agent.'));
+  }
+
   function renderGoal() {
     var snap = snapshot();
     // A revision that cannot be reviewed gets no goal block: there is nothing to aim the reading at.
@@ -1384,6 +1398,7 @@ function script(csrf: string): string {
     var snap = snapshot();
     // The goal rides on the analysis, so it re-renders wherever the analysis does — every poll included.
     renderGoal();
+    renderUpdate();
     renderHow();
     show(el.analysisSection, Boolean(snap) && !(typeof snap.unavailableReason === 'string' && snap.unavailableReason !== ''));
     el.analysisBody.textContent = '';
@@ -2618,6 +2633,7 @@ function script(csrf: string): string {
     el.refreshButton = byId('refresh-button');
     el.pageTitle = byId('page-title');
     el.pageMeta = byId('page-meta');
+    el.updateNotice = byId('update-notice');
     el.prGoal = byId('pr-goal');
     el.prGoalText = byId('pr-goal-text');
     el.prGoalBy = byId('pr-goal-by');
@@ -2745,6 +2761,7 @@ ${BRAND_MARK_STYLES}
 .page-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; color: var(--ink-soft); }
 .page-meta a { font-weight: 600; }
 /* The agent's stated goal, first thing under the masthead: one sentence, with its attribution. */
+.update-notice { padding: 8px 12px; border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 4px; font-size: 14px; }
 .pr-goal { margin-top: 6px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--panel); }
 .pr-goal.is-empty { border-left-color: var(--line-strong); background: var(--sunken); }
 .pr-goal-heading { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }

@@ -187,6 +187,17 @@ library-only calls fold away behind a checkbox. The pull request page shows the
 same flowcharts under the goal and tags each hunk with the steps and rules that
 name it. All of it is attributed to the MCP client that sent it.
 
+## Update notice
+
+When `diffninja-mcp` starts it asks the npm registry once for the newest
+`diffninja` version (only that request; nothing about you or your code is
+sent, and a failure is silent). If a newer release exists, the first
+`review_diff` result tells your agent to say so, and the review pages show a
+line with the command, `npx diffninja@latest setup`, which updates the global
+install and re-points your agents. Restart the agent afterwards. Set
+`NO_UPDATE_NOTIFIER=1` in the environment that launches the server to turn the
+lookup off.
+
 ## Call examples
 
 ```json

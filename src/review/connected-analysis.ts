@@ -13,6 +13,7 @@
 
 import { CHANGE_FACT_QUESTIONS, type ChangeFactQuestion } from "./change-facts.js";
 import { verdictOf, type QuestionKind, type Verdict } from "./questions.js";
+import type { UpdateNotice } from "./update-check.js";
 import type { AgentSummary, ReviewItem, ReviewReport, ReviewStatus, SuggestedComment } from "./types.js";
 import type { ExplanationChange } from "./explanation.js";
 
@@ -121,6 +122,8 @@ export interface ConnectedAnalysis {
    * author's stated intent, not a claim that the changes achieve it.
    */
   summary?: AgentSummary;
+  /** A newer diffninja exists: the page shows a one-line notice with the command. */
+  update?: UpdateNotice;
   /** Present once the reviewing agent's business explanation was accepted for this report. */
   explanation?: ConnectedExplanation;
 }
@@ -280,6 +283,7 @@ export function connectedAnalysisOf(
   // agent's whole reading was accepted for this snapshot's report; it is copied
   // verbatim, attributed, and never synthesized here.
   if (report.agentSummary !== undefined) analysis.summary = report.agentSummary;
+  if (report.updateNotice !== undefined) analysis.update = report.updateNotice;
   const explanation = report.agentExplanation;
   if (explanation !== undefined) {
     analysis.explanation = {

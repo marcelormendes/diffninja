@@ -15,6 +15,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { z } from "zod";
 import type { ReviewItem, ReviewReport, SuggestedComment } from "./types.js";
+import type { UpdateNotice } from "./update-check.js";
 import { checkExplanation, explanationCounts, normalizeExplanation, type ExplanationCounts, type ExplanationInput } from "./explanation.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
@@ -253,7 +254,14 @@ export class ReportPages {
   private readonly pages = new Map<string, ReportPage>();
   private readonly tokens = new Map<string, string>();
 
+  private updateNotice: UpdateNotice | undefined;
+
   constructor(private readonly render: (report: ReviewReport) => string = () => "") {}
+
+  /** Stamp every report served from now on, so its pages carry the update notice. */
+  setUpdateNotice(notice: UpdateNotice | undefined): void {
+    this.updateNotice = notice;
+  }
   private listening: Promise<{ server: Server; origin: string }> | undefined;
   private closed = false;
 
@@ -273,6 +281,7 @@ export class ReportPages {
 
   /** Serve a static review's page, keeping the report so answers can be recorded. */
   async publish(report: ReviewReport): Promise<PublishedReview> {
+    if (this.updateNotice !== undefined) report.updateNotice = this.updateNotice;
     const url = await this.add(this.render(report));
     const token = url.slice(url.lastIndexOf("/") + 1);
     const reviewId = randomBytes(16).toString("hex");
@@ -400,6 +409,7 @@ export class ReportPages {
   }
 
   private rerender(page: ReportPage, report: ReviewReport): void {
+    if (this.updateNotice !== undefined) report.updateNotice = this.updateNotice;
     page.html = this.render(report);
     page.policy = reportPolicy(page.html);
   }
