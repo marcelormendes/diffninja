@@ -1845,7 +1845,8 @@ function script(csrf: string): string {
     for (var i = 0; i < list.length; i += 1) {
       var s = list[i];
       var shaped = s && typeof s === 'object' && typeof s.path === 'string' && typeof s.line === 'number'
-        && (s.side === 'LEFT' || s.side === 'RIGHT') && typeof s.body === 'string' && s.body !== '';
+        && (s.side === 'LEFT' || s.side === 'RIGHT') && typeof s.body === 'string' && s.body !== ''
+        && SEVERITY_LABELS[s.severity] !== undefined;
       if (!shaped || !currentLine(s) || settled[suggestionKey(current.snapshotId, s)]) continue;
       out.push(s);
     }
@@ -1912,12 +1913,17 @@ function script(csrf: string): string {
     render();
   }
 
+  var SEVERITY_LABELS = { critical: 'Critical', major: 'Major', minor: 'Minor' };
+
   function suggestionRow(suggestion, disabled) {
     var wrap = make('div', 'suggestion');
     var head = make('p', 'suggestion-by');
     head.appendChild(make('span', 'agent-dot', ''));
     head.appendChild(make('strong', '', suggestedBy()));
     head.appendChild(document.createTextNode(' suggests'));
+    var severity = make('span', 'severity severity-' + suggestion.severity, SEVERITY_LABELS[suggestion.severity]);
+    severity.title = 'How much the agent thinks this matters';
+    head.appendChild(severity);
     wrap.appendChild(head);
     wrap.appendChild(make('p', 'suggestion-body', suggestion.body));
     var actions = make('div', 'suggestion-actions');
@@ -3074,8 +3080,14 @@ kbd {
 .editor { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
 .editor-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .editor-input { flex: 1 1 240px; min-width: 0; }
-.suggestion-by { font-size: 12px; color: var(--ink-soft); }
+.suggestion-by { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-soft); }
 .suggestion-by strong { color: var(--ink); font-weight: 600; }
+.severity {
+  margin-left: 6px; padding: 1px 7px; border-radius: 4px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--ink-soft); background: var(--neutral-soft);
+}
+.severity-critical { color: var(--alarm); background: var(--alarm-bg); }
+.severity-major { color: var(--warn); background: var(--warn-soft); }
 .suggestion-body { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .suggestion-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 

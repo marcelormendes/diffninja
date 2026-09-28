@@ -134,12 +134,16 @@ export interface AgentOrder {
   /** diffninja's own order of the same items, kept so the page can still offer it. */
   diffninjaIds: string[];
 }
+/** How much a suggested comment matters, most to least: what a reviewer triages by. */
+export const COMMENT_SEVERITIES = ["critical", "major", "minor"] as const;
+export type CommentSeverity = (typeof COMMENT_SEVERITIES)[number];
 /** One line comment the reviewing agent suggests; the human adds it to their review or not. */
 export interface SuggestedComment {
   path: string;
   line: number;
   side: "LEFT" | "RIGHT";
   body: string;
+  severity: CommentSeverity;
 }
 export interface AgentComments {
   comments: SuggestedComment[];

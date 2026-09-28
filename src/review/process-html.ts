@@ -34,8 +34,6 @@ import type { ReviewReport } from "./types.js";
 export interface BusinessViewOptions {
   /** Link for a hunk id, or undefined when this page has no diff to link to. */
   readonly hunkHref?: (itemId: string) => string | undefined;
-  /** Draw only the processes and rules that touch this changed file. */
-  readonly file?: string;
   /** Leave out the function glossary (the call-flow view shows the purposes). */
   readonly glossary?: boolean;
   /** Leave out the attribution line when the page around it already says who explained it. */
@@ -77,9 +75,7 @@ const CHART_PAD = 14;
 const DECISION_INSET = 16;
 
 /**
- * The whole business view, or a note saying why there is none. `options.file`
- * scopes it to one changed file: the processes whose steps name a hunk or a
- * function of that file, and the rules that name one of its hunks.
+ * The whole business view, or a note saying why there is none.
  */
 export function renderBusinessView(report: ReviewReport, options: BusinessViewOptions = {}): string {
   const explanation = report.agentExplanation;
@@ -90,12 +86,7 @@ export function renderBusinessView(report: ReviewReport, options: BusinessViewOp
   const purposes = purposesOf(report);
   const ranks = new Map(report.items.map((item, index) => [item.id, index + 1]));
   const itemFiles = new Map(report.items.map((item) => [item.id, item.file]));
-  const touches = (hunks: readonly string[] | undefined, fns: readonly string[] | undefined) =>
-    options.file === undefined ||
-    (hunks ?? []).some((id) => itemFiles.get(id) === options.file) ||
-    (fns ?? []).some((id) => functions.get(id)?.file === options.file);
-  const processes = explanation.processes.filter((process) => process.steps.some((step) => touches(step.hunks, step.functions)));
-  const rules = explanation.rules.filter((rule) => touches(rule.hunks, undefined));
+  const { processes, rules } = explanation;
   const context: RenderContext = { functions, purposes, ranks, itemFiles, hunkHref: options.hunkHref, stepsOpen: options.stepsOpen !== false };
   const parts = [
     '<div class="bp">',
@@ -106,12 +97,9 @@ export function renderBusinessView(report: ReviewReport, options: BusinessViewOp
     renderLegend(),
     "</div>",
   ].filter((part) => part !== "");
-  if (processes.length === 0 && rules.length === 0) {
-    parts.push(`<p class="bp-note">No process or rule in the explanation names this file's hunks or functions.</p>`);
-  }
   processes.forEach((process, index) => parts.push(renderProcess(process, index + 1, context)));
   if (rules.length > 0) parts.push(renderRules(rules, context));
-  if (options.glossary !== false && options.file === undefined) parts.push(renderGlossary(report.functions ?? [], purposes));
+  if (options.glossary !== false) parts.push(renderGlossary(report.functions ?? [], purposes));
   parts.push("</div>");
   return parts.join("\n");
 }

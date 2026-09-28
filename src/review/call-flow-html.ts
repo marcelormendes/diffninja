@@ -46,7 +46,8 @@ import type {
  * reaches the reviewer as a glyph plus color for a call that was added,
  * removed, or contains a change, and plain dimmed text for an unchanged call.
  */
-export function renderCallFlows(report: ReviewReport): string {
+export function renderCallFlows(report: ReviewReport, options: { readonly treeOnly?: boolean } = {}): string {
+  const treeOnly = options.treeOnly === true;
   const purposes = purposesOf(report);
   const files = collectFiles(report.callFlows, report.items, purposes);
   if (files.length === 0) {
@@ -57,7 +58,7 @@ export function renderCallFlows(report: ReviewReport): string {
     '<div class="cf">',
     renderSummary(files, new Set(report.items.map(item => item.file)).size),
     renderPlumbingToggle(plumbing, report.agentExplanation?.explainedBy),
-    renderControls(),
+    treeOnly ? "" : renderControls(),
     renderJump(files),
     '<nav class="cf-crumbs" id="cf-crumbs" aria-label="Visited call trail" hidden></nav>',
     // One panel the script fills with the focused call's definition; without the
@@ -67,7 +68,7 @@ export function renderCallFlows(report: ReviewReport): string {
     '<div class="cf-src-panel-body" id="cf-src-panel-body"></div>',
     "</details>",
     '<div class="cf-files">',
-    files.map((view, index) => renderFile(view, index + 1)).join("\n"),
+    files.map((view, index) => renderFile(view, index + 1, treeOnly)).join("\n"),
     "</div>",
     "</div>",
   ].join("\n");
@@ -336,7 +337,7 @@ function renderJump(files: readonly FileView[]): string {
 }
 
 /** One file section: severity, path, call count and its diff link. */
-function renderFile(view: FileView, at: number): string {
+function renderFile(view: FileView, at: number, treeOnly: boolean): string {
   const { dot, tone, count } = fileFacts(view);
   const status = view.status;
   const diff = `<a class="cf-diff-link" data-open-hunk href="#item-${view.rank}">View diff #${view.rank}</a>`;
@@ -353,8 +354,8 @@ function renderFile(view: FileView, at: number): string {
     view.truncated
       ? `<p class="cf-bounds">Bounds reached for this file: ${escapeHtml(BOUNDS_TEXT)}. Calls cut at a bound are omitted.</p>`
       : "",
-    modesNote(),
-    renderModes(view, at),
+    treeOnly ? "" : modesNote(),
+    treeOnly ? renderTreeMode(view, at, false) : renderModes(view, at),
     "</div>",
     "</details>",
   ]
@@ -373,7 +374,7 @@ function renderFile(view: FileView, at: number): string {
  */
 function renderModes(view: FileView, at: number): string {
   return [
-    renderTreeMode(view, at),
+    renderTreeMode(view, at, true),
     lazyMode("graph", at, renderGraphMode(view, at)),
     lazyMode("sequence", at, renderSequenceMode(view, at)),
   ].join("\n");
@@ -395,10 +396,10 @@ function modesNote(): string {
   );
 }
 
-function modeSection(mode: FlowMode, at: number, body: string): string {
+function modeSection(mode: FlowMode, at: number, body: string, headed = true): string {
   return [
     `<section class="cf-mode cf-mode-${mode}" id="cf-f${at}-${mode}" data-cf-mode-body="${mode}">`,
-    `<h3 class="cf-mode-head">${MODE_LABEL[mode]}</h3>`,
+    headed ? `<h3 class="cf-mode-head">${MODE_LABEL[mode]}</h3>` : "",
     body,
     "</section>",
   ].join("\n");
@@ -409,11 +410,11 @@ function lazyMode(mode: FlowMode, at: number, section: string): string {
   return `<template data-cf-lazy-mode="${mode}" data-cf-file="${at}">${section}</template>`;
 }
 
-function renderTreeMode(view: FileView, at: number): string {
+function renderTreeMode(view: FileView, at: number, headed: boolean): string {
   const trees = view.trees
     .map((tree, root) => renderTreeNode(tree, [root], at, view.file, view.purposes))
     .join("\n");
-  return modeSection("tree", at, `<ul class="cf-tree">${trees}</ul>`);
+  return modeSection("tree", at, `<ul class="cf-tree">${trees}</ul>`, headed);
 }
 
 /** The resolved definition of one call. It is a native disclosure, so the actual

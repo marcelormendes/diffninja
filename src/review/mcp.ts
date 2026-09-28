@@ -9,7 +9,7 @@ import { detectPullRequest } from "./pr-input.js";
 import { renderBusinessPage, renderCallFlowPage, renderReview } from "./html.js";
 import { MAX_SUGGESTED_COMMENTS, ReportPages } from "./report-pages.js";
 import { reviewDiff } from "./service.js";
-import type { ReviewReport } from "./types.js";
+import { COMMENT_SEVERITIES, type ReviewReport } from "./types.js";
 import {
   MAX_BRANCH_CHARS,
   MAX_DETAIL_CHARS,
@@ -285,8 +285,9 @@ const commentSchema = z.object({
   line: z.number().int().positive().describe("The line number on that side."),
   side: z.enum(["LEFT", "RIGHT"]).describe("RIGHT for an added or context line (new side), LEFT for a removed line (old side)."),
   body: z.string().max(1000).describe("The comment, as the reviewer would write it: one short line, no labels or formatting."),
+  severity: z.enum(COMMENT_SEVERITIES).describe("How much it matters, so the human can triage: critical for a bug, data loss, security or contract break that should block the merge; major for a real risk or missing case worth fixing before merge; minor for a nit, naming or style point. Give it here, never inside the body."),
 }).strict();
-const COMMENT_RULES = "Only comment where a maintainer would actually ask for something or point something out: a bug, a risk, a missing case, a confusing name, a missing test; never pad. Write each one as the reviewer would type it on GitHub, in their own voice: short (one line, at most 280 characters), concrete, conversational, e.g. \"This drops the error from Close(); should we return it?\" or \"nit: could this reuse parseVersion?\". No report scaffolding: no headings, bold, list markers, numbering, or labels such as Finding, Issue, Attention, Error, Severity. Each names a line of the diff: path, line, and side RIGHT for an added or context line, LEFT for a removed line; at most one per line and 30 in all.";
+const COMMENT_RULES = "Only comment where a maintainer would actually ask for something or point something out: a bug, a risk, a missing case, a confusing name, a missing test; never pad. Write each one as the reviewer would type it on GitHub, in their own voice: short (one line, at most 280 characters), concrete, conversational, e.g. \"This drops the error from Close(); should we return it?\" or \"nit: could this reuse parseVersion?\". No report scaffolding: no headings, bold, list markers, numbering, or labels such as Finding, Issue, Attention, Error, Severity. Each names a line of the diff: path, line, and side RIGHT for an added or context line, LEFT for a removed line; at most one per line and 30 in all. Each also carries a severity (critical, major or minor) in its own field, which the page shows next to the comment so the human reviews the important ones first; the words critical, major and minor do not belong in the body.";
 /**
  * What the goal summary is for. It is the agent's own paragraph for the human
  * reading the pull request, written from the author's own title and
@@ -490,12 +491,7 @@ export function createReviewServer(): McpServer {
     description: "Update the line comments suggested for a pull request review after finish_review, or before it. " + COMMENT_RULES + " The whole call is refused, and the previous suggestions kept, if any comment breaks these rules. A later call replaces the earlier suggestions; an empty list clears them. Nothing is posted: the page shows each suggestion under its line, attributed to this MCP client, and the human adds it to their own review, edits it, or dismisses it. This returns no page link: only finish_review does.",
     inputSchema: z.object({
       reviewId: z.string().regex(/^[a-f0-9]{32}$/).describe("The reviewId a review_diff result returned on this connection."),
-      comments: z.array(z.object({
-        path: z.string().min(1).max(1024).describe("The file's path in the diff."),
-        line: z.number().int().positive().describe("The line number on that side."),
-        side: z.enum(["LEFT", "RIGHT"]).describe("RIGHT for an added or context line (new side), LEFT for a removed line (old side)."),
-        body: z.string().max(1000).describe("The comment, as the reviewer would write it: one short line, no labels or formatting."),
-      }).strict()).max(MAX_SUGGESTED_COMMENTS),
+      comments: z.array(commentSchema).max(MAX_SUGGESTED_COMMENTS),
     }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async ({ reviewId, comments }) => {
