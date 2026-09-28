@@ -5,7 +5,7 @@
 ## Sub-features
 
 - `setup-detect` selects CLIs automatically, or takes them from `--cli claude,codex,omp,pi`.
-- `setup-entry` resolves a global install, or an `npx -y -p diffninja diffninja-mcp` entry with `--no-install` or when npm is unavailable.
+- `setup-entry` resolves a global install, updating one older than the running setup to its version (never downgrading), or an `npx -y -p diffninja@<version> diffninja-mcp` entry with `--no-install` or when npm is unavailable.
 - `setup-edit` edits `~/.claude.json`, `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), and the OMP and pi configs atomically, and refuses conflicting edits.
 - `setup-dry-run` previews the edits with `would update <path>` lines and writes no config.
 - `setup-uninstall` removes the entries with `--uninstall`.
@@ -32,6 +32,6 @@ Preconditions:
 
 ## Gotchas
 
-- Without `--no-install`, a non-dry setup runs `npm install -g diffninja` from the public registry. Keep `--no-install` for verification.
+- Without `--no-install`, a non-dry setup runs `npm install -g diffninja@<version>` from the public registry, both when the package is missing and when the global install is older than the checkout. Keep `--no-install` for verification.
 - Codex reads `CODEX_HOME` before HOME. Set both, or a run can edit the user's real Codex config.
 - `--dry-run` is not network-free: npm may contact the registry config while resolving the global root.

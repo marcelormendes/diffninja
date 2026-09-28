@@ -48,9 +48,12 @@ npx -y diffninja@latest setup
 It installs diffninja and adds it to every agent CLI it finds on your machine.
 Then restart your agent CLI.
 
-To update later, run the same command again. To remove diffninja from your
-agent CLIs, run `npx -y diffninja setup --uninstall`. Other options:
-`npx -y diffninja setup --help`.
+To update later, run the same command again: setup brings an older global
+install up to its own version, then restart your agent CLI. (Setup from
+0.3.0 or earlier does not update an existing install; if yours reports an
+older version, run `npm install -g diffninja@latest` once.) To remove
+diffninja from your agent CLIs, run `npx -y diffninja@latest setup --uninstall`.
+Other options: `npx -y diffninja@latest setup --help`.
 
 ## How to use it
 

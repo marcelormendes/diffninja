@@ -24,6 +24,7 @@ import {
   MAX_TITLE_CHARS,
   MIN_PROCESS_STEPS,
 } from "./explanation.js";
+import { packageVersion } from "./version.js";
 
 const PR_LINK_ERROR = "A pull request review needs exactly one full github.com pull request URL, for example https://github.com/OWNER/REPO/pull/123. Ask the user for their link; do not guess, search, or invent one.";
 const STATIC_MODE_ERROR = "mode static reviews a diff or git range and accepts no pr or input. Use mode connected to review a pull request link.";
@@ -260,7 +261,7 @@ class ConnectedSessions {
  */
 class ReviewServer extends McpServer {
   constructor(private readonly sessions: ConnectedSessions, private readonly reports: ReportPages) {
-    super({ name: "diffninja", version: "0.1.0" });
+    super({ name: "diffninja", version: packageVersion() });
     this.server.onclose = () => {
       void this.sessions.close().catch(() => {});
       void this.reports.close().catch(() => {});
