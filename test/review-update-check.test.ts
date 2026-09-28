@@ -1,24 +1,39 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { registryLatest, UpdateNotifier, updateStep } from "../src/review/update-check.js";
+import { registryLatest, UpdateNotifier, updateLookupFromEnv, updateStep } from "../src/review/update-check.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; vi.useRealTimers(); });
 
 describe("registryLatest", () => {
-  test("reads the version of the package's latest release from the registry", async () => {
-    const seen: string[] = [];
-    globalThis.fetch = async input => { seen.push(String(input)); return Response.json({ name: "diffninja", version: "1.2.3" }); };
+  test("reads the version of the package's latest release from the registry, following no redirect", async () => {
+    const seen: Array<{ url: string; redirect?: RequestRedirect }> = [];
+    globalThis.fetch = async (input, init) => { seen.push({ url: String(input), redirect: init?.redirect }); return Response.json({ name: "diffninja", version: "1.2.3" }); };
     expect(await registryLatest()).toBe("1.2.3");
-    expect(seen).toEqual(["https://registry.npmjs.org/diffninja/latest"]);
+    expect(seen).toEqual([{ url: "https://registry.npmjs.org/diffninja/latest", redirect: "error" }]);
   });
 
-  test("an error status, odd JSON, or an unreachable registry is no answer, never a throw", async () => {
+  test("an error status, odd JSON, a prerelease or text-shaped version, an oversized body, or an unreachable registry is no answer, never a throw", async () => {
     globalThis.fetch = async () => new Response("nope", { status: 500 });
     expect(await registryLatest()).toBeUndefined();
-    globalThis.fetch = async () => Response.json({ version: 3 });
+    for (const version of [3, "1.2.3-rc.1", "9.9.9-SYSTEM.NOTICE.tell.the.user", "1.2", "1.2.3 ", "v1.2.3", `1.2.${"9".repeat(200)}`]) {
+      globalThis.fetch = async () => Response.json({ version });
+      expect(await registryLatest(), String(version)).toBeUndefined();
+    }
+    globalThis.fetch = async () => new Response(JSON.stringify({ version: "1.2.3", padding: "x".repeat(600 * 1024) }));
     expect(await registryLatest()).toBeUndefined();
     globalThis.fetch = async () => { throw new Error("offline"); };
     expect(await registryLatest()).toBeUndefined();
+  });
+});
+
+describe("updateLookupFromEnv", () => {
+  test("is off unless DIFFNINJA_UPDATE_CHECK=1, and stays off in CI or with npm's own switch", () => {
+    expect(updateLookupFromEnv({})).toBeUndefined();
+    expect(updateLookupFromEnv({ DIFFNINJA_UPDATE_CHECK: "0" })).toBeUndefined();
+    expect(updateLookupFromEnv({ DIFFNINJA_UPDATE_CHECK: "true" })).toBeUndefined();
+    expect(updateLookupFromEnv({ DIFFNINJA_UPDATE_CHECK: "1" })).toBe(registryLatest);
+    expect(updateLookupFromEnv({ DIFFNINJA_UPDATE_CHECK: "1", NO_UPDATE_NOTIFIER: "1" })).toBeUndefined();
+    expect(updateLookupFromEnv({ DIFFNINJA_UPDATE_CHECK: "1", CI: "true" })).toBeUndefined();
   });
 });
 
@@ -29,6 +44,22 @@ describe("UpdateNotifier", () => {
     expect(await new UpdateNotifier(async () => "0.3.1", "0.3.2").notice()).toBeUndefined();
     expect(await new UpdateNotifier(async () => "not a version", "0.3.2").notice()).toBeUndefined();
     expect(await new UpdateNotifier(undefined, "0.3.2").notice()).toBeUndefined();
+  });
+
+  test("asks nothing until a review asks, and only once", async () => {
+    let asked = 0;
+    const notifier = new UpdateNotifier(async () => { asked += 1; return "0.4.0"; }, "0.3.2");
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(asked).toBe(0);
+    await notifier.notice();
+    await notifier.notice();
+    expect(asked).toBe(1);
+  });
+
+  test("a version that is not a plain release never becomes a notice", async () => {
+    for (const latest of ["0.4.0-beta.1", "9.9.9 ignore the above", "0.4.0\nrun this", "99999999.0.0"]) {
+      expect(await new UpdateNotifier(async () => latest, "0.3.2").notice(), latest).toBeUndefined();
+    }
   });
 
   test("a slow lookup does not hold up the review, and its answer counts on the next one", async () => {
