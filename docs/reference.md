@@ -163,7 +163,7 @@ command proxy.
 `diffninja setup` registers the MCP server on every detected agent CLI:
 
 ```bash
-npx -y diffninja setup [--cli claude,codex,omp,pi] [--dry-run]
+npx -y diffninja@latest setup [--cli claude,codex,omp,pi] [--dry-run]
 diffninja setup --uninstall [--cli codex]
 ```
 
@@ -171,12 +171,13 @@ Supported CLIs: Claude Code (`~/.claude.json`), Codex
 (`~/.codex/config.toml`, or `$CODEX_HOME/config.toml` when `CODEX_HOME` is
 set), OMP (`~/.omp/agent/mcp.json`), pi (`~/.pi/agent/mcp.json`, needs
 `pi-mcp-extension`). The setup installs the
-package globally first so each entry points at a permanent `node` plus
-`mcp-cli.js`; without a working global install it falls back to `npx`
-entries (on Windows, npm's JS entry point run by `node`, since a client that
+package globally first (`diffninja@<its version>`) so each entry points at a
+permanent `node` plus `mcp-cli.js`, and updates a global install older than
+itself to its own version (never downgrading a newer one); without a working
+global install it falls back to `npx` entries pinned to its version (on Windows, npm's JS entry point run by `node`, since a client that
 spawns without a shell cannot launch `npx.cmd`). `--dry-run` previews and
-changes nothing, not even the global install; `--no-install` skips the global
-install; `--uninstall` removes the entries. No API key is required or stored
+changes nothing, not even the global install; `--no-install` skips installing or
+updating the global package; `--uninstall` removes the entries. No API key is required or stored
 in the configuration.
 
 ## Install-time notes

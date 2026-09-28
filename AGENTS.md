@@ -49,6 +49,11 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - `setup.ts` — `runSetup()` for `diffninja setup`: CLI detection, config
     writes (atomic, conflict-aware), and `updateFile()`. `toml.ts` — parses
     and edits one TOML table in place by key path, for Codex's config.
+    Setup installs and pins its own version (`diffninja@<version>`, npx
+    fallback included) and updates a global install older than itself, never
+    downgrading, so re-running setup is how users update. `version.ts` —
+    `packageVersion()` from the package's own `package.json` (also the MCP
+    server's reported version) and `compareVersions()`.
   - `cli.ts` — the setup-only `diffninja` command; any other invocation
     explains how to review through an agent, without echoing its arguments.
     `pr-input.ts` — shared PR-link detection and canonicalization.

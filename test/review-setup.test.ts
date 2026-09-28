@@ -21,6 +21,8 @@ import {
   codexConfigPath,
   createNpm,
   globalEntry,
+  globalIsOlder,
+  globalVersion,
   npxEntry,
   runSetup,
   updateFile,
@@ -28,6 +30,7 @@ import {
   type Npm,
   type SetupOptions,
 } from "../src/review/setup.js";
+import { compareVersions, packageVersion } from "../src/review/version.js";
 
 function fakeHome(): string {
   return mkdtempSync(join(tmpdir(), "diffninja-setup-"));
@@ -38,23 +41,39 @@ interface FakeNpm extends Npm {
   root: string;
   /** How many times a global install was requested. */
   installs: number;
+  /** The package spec of each requested install, e.g. `diffninja@0.3.1`. */
+  specs: string[];
 }
 
-/** npm stub over a fake global root, holding the package unless `installed` is false. */
-function fakeNpm(home: string, installed = true): FakeNpm {
+/** Lay down a fake global package at `version` under `root`. */
+function placeGlobal(root: string, version: string): void {
+  mkdirSync(join(root, "diffninja", "dist", "review"), { recursive: true });
+  writeFileSync(join(root, "diffninja", "dist", "review", "mcp-cli.js"), "placeholder\n");
+  writeFileSync(join(root, "diffninja", "package.json"), JSON.stringify({ name: "diffninja", version }));
+}
+
+/**
+ * npm stub over a fake global root. It holds the package at `installed` (the
+ * running version by default; false for none), and an install lays down the
+ * version it was asked for unless `installSucceeds` is false.
+ */
+function fakeNpm(home: string, installed: string | false = packageVersion(), installSucceeds = true): FakeNpm {
   const root = join(home, "fake-global-root");
   mkdirSync(join(root, "diffninja", "dist", "review"), { recursive: true });
   const npm: FakeNpm = {
     root,
     installs: 0,
+    specs: [],
     rootG: async () => root,
-    installG: async () => {
+    installG: async (spec) => {
       npm.installs += 1;
-      writeFileSync(join(root, "diffninja", "dist", "review", "mcp-cli.js"), "placeholder\n");
+      npm.specs.push(spec);
+      if (!installSucceeds) return false;
+      placeGlobal(root, spec.slice(spec.lastIndexOf("@") + 1));
       return true;
     },
   };
-  if (installed) writeFileSync(join(root, "diffninja", "dist", "review", "mcp-cli.js"), "placeholder\n");
+  if (installed !== false) placeGlobal(root, installed);
   return npm;
 }
 
@@ -63,16 +82,17 @@ function options(home: string, extra: Partial<SetupOptions> = {}): SetupOptions 
 }
 
 describe("entries", () => {
-  it("runs npx directly off Windows", () => {
-    const expected = { command: "npx", args: ["-y", "-p", "diffninja", "diffninja-mcp"] };
+  it("runs npx directly off Windows, pinned to this version", () => {
+    const expected = { command: "npx", args: ["-y", "-p", `diffninja@${packageVersion()}`, "diffninja-mcp"] };
     expect(npxEntry("darwin")).toEqual(expected);
     expect(npxEntry("linux")).toEqual(expected);
+    expect(npxEntry("linux", "9.9.9").args).toEqual(["-y", "-p", "diffninja@9.9.9", "diffninja-mcp"]);
   });
 
   it("never hands Windows a bare .cmd shim", () => {
     const entry = npxEntry("win32");
     expect(entry.command).not.toBe("npx.cmd");
-    expect(entry.args.slice(-4)).toEqual(["-y", "-p", "diffninja", "diffninja-mcp"]);
+    expect(entry.args.slice(-4)).toEqual(["-y", "-p", `diffninja@${packageVersion()}`, "diffninja-mcp"]);
     // Either npm's JS entry point driven by Node, or the shim driven by cmd.exe.
     if (entry.command === process.execPath) expect(entry.args[0]).toMatch(/npx-cli\.js$/u);
     else expect(entry.args.slice(0, 4)).toEqual(["/d", "/s", "/c", "npx"]);
@@ -124,6 +144,45 @@ describe("entries", () => {
   });
 });
 
+describe("versions", () => {
+  it("reads the running package's version", () => {
+    // SAFETY: this is the repository's own manifest, which always carries a string version.
+    const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")) as { version: string };
+    expect(packageVersion()).toBe(manifest.version);
+  });
+
+  it("orders versions numerically, a prerelease before its release", () => {
+    expect(compareVersions("0.2.0", "0.3.0")).toBeLessThan(0);
+    expect(compareVersions("0.10.0", "0.9.9")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0", "v1.0.0")).toBe(0);
+    expect(compareVersions("1.0.0-rc.1", "1.0.0")).toBeLessThan(0);
+    expect(compareVersions("1.0.0", "1.0.0-rc.1")).toBeGreaterThan(0);
+    expect(compareVersions("latest", "1.0.0")).toBeUndefined();
+  });
+
+  it("updates an older or unreadable global install, never a newer one", () => {
+    expect(globalIsOlder("0.2.0", "0.3.1")).toBe(true);
+    expect(globalIsOlder(undefined, "0.3.1")).toBe(true);
+    expect(globalIsOlder("garbage", "0.3.1")).toBe(true);
+    expect(globalIsOlder("0.3.1", "0.3.1")).toBe(false);
+    expect(globalIsOlder("0.4.0", "0.3.1")).toBe(false);
+  });
+
+  it("reads the global install's version from its manifest", () => {
+    const home = fakeHome();
+    try {
+      const root = join(home, "root");
+      expect(globalVersion(root)).toBeUndefined();
+      placeGlobal(root, "0.2.0");
+      expect(globalVersion(root)).toBe("0.2.0");
+      writeFileSync(join(root, "diffninja", "package.json"), "{ not json");
+      expect(globalVersion(root)).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("createNpm", () => {
   it.skipIf(process.platform === "win32")("runs exactly the npm it was pointed at, spaces and all", async () => {
     const home = fakeHome();
@@ -139,14 +198,14 @@ describe("createNpm", () => {
       );
       const npm = createNpm({ env: { HOME: home, CODEX_HOME: "", PATH: `${bin}${delimiter}/usr/bin${delimiter}/bin` } });
       expect(await npm.rootG()).toBe(root);
-      expect(await npm.installG()).toBe(true);
+      expect(await npm.installG("diffninja@9.9.9")).toBe(true);
       // npm 12 skips dependency install scripts unless named: tree-sitter's native
       // builds and diffninja's grammar repair must be allowed by name.
       expect(readFileSync(argsFile, "utf8").trim().split("\n")).toEqual([
         "install",
         "-g",
         "--allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript",
-        "diffninja",
+        "diffninja@9.9.9",
       ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -220,8 +279,100 @@ describe("runSetup", () => {
       const npm = fakeNpm(home, false);
       const report = await runSetup(options(home), { npm });
       expect(npm.installs).toBe(1);
+      expect(npm.specs).toEqual([`diffninja@${packageVersion()}`]);
       expect(report.viaNpx).toBe(false);
       expect(report.entry).toEqual(globalEntry(npm.root));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("updates a global install older than itself to its own version", async () => {
+    const home = fakeHome();
+    try {
+      mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+      const npm = fakeNpm(home, "0.2.0");
+      const report = await runSetup(options(home), { npm, version: "0.3.1" });
+      expect(npm.specs).toEqual(["diffninja@0.3.1"]);
+      expect(globalVersion(npm.root)).toBe("0.3.1");
+      expect(report.viaNpx).toBe(false);
+      expect(report.entry).toEqual(globalEntry(npm.root));
+      // Already current: a second run installs nothing.
+      await runSetup(options(home), { npm, version: "0.3.1" });
+      expect(npm.installs).toBe(1);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs a global install whose version cannot be read", async () => {
+    const home = fakeHome();
+    try {
+      mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+      const npm = fakeNpm(home);
+      rmSync(join(npm.root, "diffninja", "package.json"));
+      await runSetup(options(home), { npm, version: "0.3.1" });
+      expect(npm.specs).toEqual(["diffninja@0.3.1"]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("never downgrades a newer global install", async () => {
+    const home = fakeHome();
+    try {
+      mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+      const npm = fakeNpm(home, "0.4.0");
+      const report = await runSetup(options(home), { npm, version: "0.3.1" });
+      expect(npm.installs).toBe(0);
+      expect(globalVersion(npm.root)).toBe("0.4.0");
+      expect(report.entry).toEqual(globalEntry(npm.root));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the older global entry when the update fails", async () => {
+    const home = fakeHome();
+    try {
+      mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+      const npm = fakeNpm(home, "0.2.0", false);
+      const report = await runSetup(options(home), { npm, version: "0.3.1" });
+      expect(npm.installs).toBe(1);
+      expect(globalVersion(npm.root)).toBe("0.2.0");
+      expect(report.viaNpx).toBe(false);
+      expect(report.entry).toEqual(globalEntry(npm.root));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves an older global install alone with --no-install and on dry-run", async () => {
+    const home = fakeHome();
+    try {
+      mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+      const npm = fakeNpm(home, "0.2.0");
+      const skipped = await runSetup(options(home, { noInstall: true }), { npm, version: "0.3.1" });
+      expect(skipped.entry).toEqual(globalEntry(npm.root));
+      const previewed = await runSetup(options(home, { dryRun: true }), { npm, version: "0.3.1" });
+      expect(previewed.entry).toEqual(globalEntry(npm.root));
+      expect(npm.installs).toBe(0);
+      expect(globalVersion(npm.root)).toBe("0.2.0");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rewrites a pinned npx entry when a newer setup runs", async () => {
+    const home = fakeHome();
+    try {
+      mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+      const failing: Npm = { rootG: async () => "", installG: async () => false };
+      await runSetup(options(home), { npm: failing, version: "0.3.0" });
+      const second = await runSetup(options(home), { npm: failing, version: "0.3.1" });
+      expect(second.clis.find((r) => r.cli === "omp")!.action).toBe("configured");
+      const ompJson = JSON.parse(readFileSync(join(home, ".omp", "agent", "mcp.json"), "utf8"));
+      expect(ompJson.mcpServers.diffninja.args).toContain("diffninja@0.3.1");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

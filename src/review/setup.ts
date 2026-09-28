@@ -3,8 +3,10 @@
  * agent CLI (Claude Code, Codex, OMP, pi) with one command.
  *
  * The setup installs the package globally first so the registration points
- * at a permanent binary instead of the npx cache. When the global install is
- * unavailable it falls back to an npx-based entry and says so. The server
+ * at a permanent binary instead of the npx cache, and brings a global install
+ * older than itself up to its own version, so running the newest setup is how
+ * a user updates. When the global install is unavailable it falls back to an
+ * npx-based entry pinned to its own version and says so. The server
  * needs no key or environment: reviews are local, and connected reviews reuse
  * the `gh` session.
  */
@@ -12,30 +14,34 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { existsSync, type Stats } from "node:fs";
+import { existsSync, readFileSync, type Stats } from "node:fs";
 import { lstat, mkdir, open, readFile, readlink, realpath, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { npmCliPath, npmSpawnSpec } from "../languages/grammars.js";
 import { removeTomlTable, upsertTomlTable, type TomlTable } from "./toml.js";
+import { compareVersions, packageVersion } from "./version.js";
 
 export const setupHelp = `diffninja setup. Register the diffninja MCP server on every detected agent CLI.
 
-  npx -y diffninja setup [--cli claude,codex,omp,pi] [--dry-run]
+  npx -y diffninja@latest setup [--cli claude,codex,omp,pi] [--dry-run]
   diffninja setup --uninstall [--cli codex]
 
 Detects Claude Code, Codex, OMP, and pi from their config files or binaries
 and registers the diffninja MCP server in each user config, pointing at the
 globally installed package. Installs the package globally first
-(\`npm install -g diffninja\`) so the registration keeps working; when that
-install fails it registers an npx-based entry instead and says so.
+(\`npm install -g diffninja@<this version>\`) so the registration keeps
+working, and updates a global install older than this setup, so running
+\`npx -y diffninja@latest setup\` again is how you update. When that install
+fails it registers an npx-based entry pinned to this version and says so.
 
 Options:
   --cli NAMES    Only these CLIs, comma-separated: claude,codex,omp,pi.
   --uninstall    Remove the diffninja server from every detected CLI.
   --dry-run      Show what would change, without installing or writing.
-  --no-install   Skip the global install and register npx-based entries.
+  --no-install   Skip installing or updating the global package; without one,
+                 register npx-based entries.
   --help         Show this help.
 
 The server needs no API key: static reviews run locally, and pull request
@@ -64,7 +70,8 @@ export interface SetupOptions {
 
 export interface Npm {
   rootG(): Promise<string>;
-  installG(): Promise<boolean>;
+  /** `npm install -g <spec>`, e.g. `diffninja@0.3.1`; true on success. */
+  installG(spec: string): Promise<boolean>;
 }
 
 export interface CliReport {
@@ -82,6 +89,8 @@ export interface SetupReport {
 
 export interface SetupDeps {
   npm?: Npm;
+  /** Version this setup installs and pins; defaults to the running package's. */
+  version?: string;
 }
 
 type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
@@ -94,9 +103,14 @@ const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 );
 const jsonObjectSchema = z.object({}).catchall(jsonValueSchema);
 
-/** Entry that runs the published package on demand, without an install. */
-export function npxEntry(platform: NodeJS.Platform = process.platform): McpEntry {
-  const args = ["-y", "-p", "diffninja", "diffninja-mcp"];
+/**
+ * Entry that runs the published package on demand, without an install. It
+ * names this setup's version: an unversioned package lets npx keep running
+ * whichever copy it cached first, while a pinned one changes with each newer
+ * setup, which rewrites the entry.
+ */
+export function npxEntry(platform: NodeJS.Platform = process.platform, version: string = packageVersion()): McpEntry {
+  const args = ["-y", "-p", `diffninja@${version}`, "diffninja-mcp"];
   return platform === "win32" ? windowsCliEntry("npx", args) : { command: "npx", args };
 }
 
@@ -130,6 +144,28 @@ export function globalEntryExists(globalRoot: string): boolean {
   return existsSync(join(globalRoot, "diffninja", "dist", "review", "mcp-cli.js"));
 }
 
+const installedManifestSchema = z.object({ version: z.string() });
+
+/** Version of the globally installed package, or undefined when its manifest is missing or unreadable. */
+export function globalVersion(globalRoot: string): string | undefined {
+  try {
+    const manifest = installedManifestSchema.safeParse(JSON.parse(readFileSync(join(globalRoot, "diffninja", "package.json"), "utf8")));
+    return manifest.success ? manifest.data.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a global install at `installed` should be brought up to `version`.
+ * A manifest that cannot be read or compared counts as older, so a broken
+ * install is repaired; a newer one is never downgraded.
+ */
+export function globalIsOlder(installed: string | undefined, version: string): boolean {
+  if (installed === undefined) return true;
+  return (compareVersions(installed, version) ?? -1) < 0;
+}
+
 /**
  * npm runner. Shell-free by design: on Windows npm is a `.cmd` shim, so runs
  * go through `npmSpawnSpec`, which resolves npm's JS entry point instead.
@@ -150,8 +186,8 @@ export function createNpm(overrides: { platform?: NodeJS.Platform; env?: NodeJS.
       });
       return (await exitCode(child)) === 0 ? out.trim() : "";
     },
-    async installG(): Promise<boolean> {
-      return (await exitCode(run(["install", "-g", `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(",")}`, "diffninja"], true))) === 0;
+    async installG(spec: string): Promise<boolean> {
+      return (await exitCode(run(["install", "-g", `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(",")}`, spec], true))) === 0;
     },
   };
 }
@@ -186,37 +222,66 @@ async function globalRoot(npm: Npm): Promise<string | undefined> {
   }
 }
 
+/** Run one global install; a throw counts as a failed install. */
+async function installGlobal(npm: Npm, spec: string): Promise<boolean> {
+  try {
+    return await npm.installG(spec);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Resolve the registration entry. `--dry-run` never installs: it reports the
- * install it would have run and the entry that install would have produced.
+ * Resolve the registration entry. A global install older than `version` is
+ * updated to it first; one that cannot be updated keeps its entry, with a
+ * warning naming the command that updates it. `--dry-run` never installs: it
+ * reports the install it would have run and the entry that install would have
+ * produced.
  */
 async function resolveEntry(
   noInstall: boolean,
   npm: Npm,
   quiet: boolean,
   dryRun: boolean,
+  version: string,
 ): Promise<{ entry: McpEntry; viaNpx: boolean }> {
+  const spec = `diffninja@${version}`;
   const root = await globalRoot(npm);
-  if (root !== undefined && globalEntryExists(root)) return { entry: globalEntry(root), viaNpx: false };
+  if (root !== undefined && globalEntryExists(root)) {
+    const installed = globalVersion(root);
+    if (!globalIsOlder(installed, version)) return { entry: globalEntry(root), viaNpx: false };
+    const from = installed ?? "an unknown version";
+    const update = `npm install -g ${spec}`;
+    if (noInstall) {
+      if (!quiet) console.error(`diffninja: the global install is ${from}, older than this setup (${version}); update it with ${update}.`);
+    } else if (dryRun) {
+      if (!quiet) console.log(`diffninja: dry run: would update the global install from ${from} to ${version} (${update}).`);
+    } else {
+      if (!quiet) console.log(`diffninja: updating the global install from ${from} to ${version} (${update})...`);
+      const updated = await installGlobal(npm, spec);
+      const updatedRoot = updated ? await globalRoot(npm) : undefined;
+      if (updatedRoot !== undefined && globalEntryExists(updatedRoot)) return { entry: globalEntry(updatedRoot), viaNpx: false };
+      if (!globalEntryExists(root)) {
+        if (!quiet) console.error("diffninja: global update failed and left no install; registering npx-based entries instead.");
+        return { entry: npxEntry(process.platform, version), viaNpx: true };
+      }
+      if (!quiet) console.error(`diffninja: update failed; the global install is still ${globalVersion(root) ?? from}. Update it with ${update}.`);
+    }
+    return { entry: globalEntry(root), viaNpx: false };
+  }
 
   if (dryRun) {
     if (!noInstall && root !== undefined) {
-      if (!quiet) console.log("diffninja: dry run: would install the package globally (npm install -g diffninja).");
+      if (!quiet) console.log(`diffninja: dry run: would install the package globally (npm install -g ${spec}).`);
       return { entry: globalEntry(root), viaNpx: false };
     }
     if (!quiet) console.error("diffninja: dry run: global install unavailable; would register npx-based entries instead.");
-    return { entry: npxEntry(), viaNpx: true };
+    return { entry: npxEntry(process.platform, version), viaNpx: true };
   }
 
   if (!noInstall) {
-    if (!quiet) console.log("diffninja: installing the package globally (npm install -g diffninja)...");
-    let installed = false;
-    try {
-      installed = await npm.installG();
-    } catch {
-      installed = false;
-    }
-    if (installed) {
+    if (!quiet) console.log(`diffninja: installing the package globally (npm install -g ${spec})...`);
+    if (await installGlobal(npm, spec)) {
       const installedRoot = await globalRoot(npm);
       if (installedRoot !== undefined && globalEntryExists(installedRoot)) {
         return { entry: globalEntry(installedRoot), viaNpx: false };
@@ -224,7 +289,7 @@ async function resolveEntry(
     }
   }
   if (!quiet) console.error("diffninja: global install unavailable; registering npx-based entries instead.");
-  return { entry: npxEntry(), viaNpx: true };
+  return { entry: npxEntry(process.platform, version), viaNpx: true };
 }
 
 function findOnPath(name: string, pathDirs: string[]): string | undefined {
@@ -599,11 +664,12 @@ export async function runSetup(options: SetupOptions = {}, deps: SetupDeps = {})
   const quiet = options.quiet === true;
   const uninstall = options.uninstall === true;
   const dryRun = options.dryRun === true;
+  const version = deps.version ?? packageVersion();
 
   let entry: McpEntry | undefined;
   let viaNpx = false;
   if (!uninstall) {
-    const resolved = await resolveEntry(options.noInstall === true, deps.npm ?? realNpm, quiet, dryRun);
+    const resolved = await resolveEntry(options.noInstall === true, deps.npm ?? realNpm, quiet, dryRun, version);
     entry = resolved.entry;
     viaNpx = resolved.viaNpx;
   }
@@ -654,5 +720,5 @@ export async function runSetup(options: SetupOptions = {}, deps: SetupDeps = {})
     }
   }
 
-  return { entry: entry ?? npxEntry(), viaNpx, clis: reports };
+  return { entry: entry ?? npxEntry(process.platform, version), viaNpx, clis: reports };
 }
