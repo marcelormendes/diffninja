@@ -116,7 +116,6 @@ const BUSINESS_VIEW_STYLES = `
 .business { padding-top: 14px; }
 .business-title { font-size: 20px; }
 .business-lede { margin-top: 4px; color: var(--ink-soft); font-size: 14px; max-width: 90ch; }
-.flow-section-title { margin: 22px 0 0; font-size: 18px; }
 `;
 
 /**
@@ -129,7 +128,9 @@ const BUSINESS_FRAME_SCRIPT = `
   'use strict';
   function post() {
     if (window.parent === window) return;
-    window.parent.postMessage({ type: 'diffninja-business-height', height: Math.ceil(document.documentElement.scrollHeight) }, window.location.origin);
+    // The html element's own box, not scrollHeight: scrollHeight never drops below the frame's
+    // height, so the frame could grow but never shrink back around its content.
+    window.parent.postMessage({ type: 'diffninja-business-height', height: Math.ceil(document.documentElement.getBoundingClientRect().height) }, window.location.origin);
   }
   window.addEventListener('load', post);
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(post).observe(document.body);
@@ -184,8 +185,9 @@ body { background: var(--bg); font-family: var(--sans); }
 /**
  * The call flows of one review as a page of their own, for the connected pull
  * request page to show beside its diff: every changed file with call flows, or
- * only `file` when given. Tree, Graph and Sequence work as in the report; links
- * into the report's diff are dropped, since the page showing this has its own.
+ * only `file` when given. Only the Tree view is offered, and the business view
+ * stays out of it: the page around it already shows that view. Links into the
+ * report's diff are dropped, since the page showing this has its own.
  */
 export function renderCallFlowPage(report: ReviewReport, file?: string): string {
   const scoped = file === undefined ? report : { ...report, callFlows: report.callFlows.filter((entry) => entry.file === file) };
@@ -197,20 +199,11 @@ export function renderCallFlowPage(report: ReviewReport, file?: string): string 
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="color-scheme" content="light dark">',
     `<title>${escapeHtml(file === undefined ? "Call flows" : `Call flow: ${file}`)}</title>`,
-    `<style>${STYLES}\n${CALL_FLOW_STYLES}\n${PALETTE_STYLES}\n${BUSINESS_STYLES}\n${BUSINESS_VIEW_STYLES}\n${EMBEDDED_FLOW_STYLES}</style>`,
+    `<style>${STYLES}\n${CALL_FLOW_STYLES}\n${PALETTE_STYLES}\n${EMBEDDED_FLOW_STYLES}</style>`,
     "</head>",
     "<body>",
-    report.agentExplanation === undefined
-      ? ""
-      : [
-          '<section class="flow-embed business" aria-labelledby="flow-business-title">',
-          `<h2 class="business-title" id="flow-business-title">${file === undefined ? "How it works" : "How this file fits the process"}</h2>`,
-          renderBusinessView(report, { file, glossary: false }),
-          "</section>",
-        ].join("\n"),
     `<section id="view-call-flow" class="flow-embed${file === undefined ? "" : " flow-single"}" aria-label="Call flow">`,
-    report.agentExplanation === undefined ? "" : '<h2 class="flow-section-title">Call flow</h2>',
-    renderCallFlows(scoped),
+    renderCallFlows(scoped, { treeOnly: true }),
     "</section>",
     `<script>document.documentElement.classList.add('js');\n${CALL_FLOW_SCRIPT}</script>`,
     "</body>",

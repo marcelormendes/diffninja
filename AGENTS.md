@@ -129,7 +129,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     no free text; any invalid answer refuses the whole call and keeps nothing;
     answers are attributed to the MCP client's own name/version, re-render the
     page, and never change status, priority, or order.
-  - `suggest_comments`: strict `{ reviewId, comments: [{ path, line, side, body }] }`,
+  - `suggest_comments`: strict `{ reviewId, comments: [{ path, line, side, body, severity }] }`, `severity` one of
+    `critical`/`major`/`minor` (required, its own field, shown on the suggestion),
     at most 30. Each names a commentable line of that review's diff (added
     RIGHT, removed LEFT, context either), at most one per line, and reads like
     the reviewer's own comment: one line, at most 280 characters, no control
@@ -173,7 +174,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   stale-snapshot and duplicate-submit blocking, loopback-only Host/Origin/CSRF
   checks, and no general GitHub/command proxy. `GET /flow?snapshot=&file=`
   (or `&view=business`, the business view alone, once explained)
-  serves the analyzed snapshot's call-flow page (`renderCallFlowPage`, hashed
+  serves the analyzed snapshot's call-flow page (the Tree view only, without the business view) (`renderCallFlowPage`, hashed
   CSP) framable only by its own origin (`frame-ancestors 'self'`,
   `X-Frame-Options: SAMEORIGIN`); any other snapshot or file is a 404, and the
   review page's CSP allows only `frame-src 'self'`.

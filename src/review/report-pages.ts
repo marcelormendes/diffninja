@@ -196,7 +196,7 @@ function checkComments(report: ReviewReport, comments: readonly SuggestedComment
 
 function applyComments(report: ReviewReport, comments: readonly SuggestedComment[], suggestedBy: string): void {
   report.agentComments = {
-    comments: comments.map(({ path, line, side, body }) => ({ path, line, side, body: body.trim() })),
+    comments: comments.map(({ path, line, side, body, severity }) => ({ path, line, side, body: body.trim(), severity })),
     suggestedBy,
     suggestedAt: new Date().toISOString(),
   };

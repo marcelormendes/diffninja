@@ -778,7 +778,7 @@ describe("suggest_comments", () => {
     const item = report.items[0];
     let line = item.newStart;
     for (const text of item.diff.split("\n").slice(1)) {
-      if (text.startsWith("+")) return { path: item.file, line, side: "RIGHT" as const };
+      if (text.startsWith("+")) return { path: item.file, line, side: "RIGHT" as const, severity: "minor" as const };
       if (!text.startsWith("-")) line += 1;
     }
     throw new Error("the fixture's first hunk adds no line");
@@ -793,6 +793,20 @@ describe("suggest_comments", () => {
     expect(first.structuredContent).toEqual({ reviewId: report.reviewId, suggested: 1, next: expect.stringContaining("finish_review") });
     expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, body: "nit: could this reuse the helper above?" }] })).isError).toBeFalsy();
     expect((await suggest(client, { reviewId: report.reviewId, comments: [] })).structuredContent).toMatchObject({ suggested: 0 });
+  });
+
+  test("every suggested comment carries a critical, major or minor severity, kept beside its body", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const { severity: _omitted, ...bare } = addedLine(report);
+    for (const bad of [{ ...bare, body: "Is this right?" }, { ...bare, severity: "blocker", body: "Is this right?" }, { ...bare, severity: "Major", body: "Is this right?" }]) {
+      const refused = await suggest(client, { reviewId: report.reviewId, comments: [bad] });
+      expect(refused.isError).toBe(true);
+      expect(JSON.stringify(refused.content)).toMatch(/severity/);
+    }
+    for (const severity of ["critical", "major", "minor"] as const) {
+      expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...bare, severity, body: "Is this right?" }] })).isError).toBeFalsy();
+    }
   });
 
   test("refuses the whole call for a line outside the diff, a repeated line, or report-style text", async () => {
@@ -956,7 +970,7 @@ describe("review_diff connected pull request mode", () => {
       const reviewId = payload.reviewId!;
       const report = payload.report!;
       const complete = minimalFinish(reviewId, report);
-      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?" };
+      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", severity: "major" };
 
       // Anything short of the whole reading is refused, keeps nothing, and hands out no link.
       const incomplete: Array<{ args: NonNullable<CallToolRequest["params"]["arguments"]>; expected: RegExp }> = [
@@ -993,11 +1007,11 @@ describe("review_diff connected pull request mode", () => {
       // A patch-only analysis has no call flows to show, and says why.
       expect(view?.callFlowFiles).toEqual([]);
       expect((await loopback(`${url}flow?snapshot=${payload.snapshot.id}&file=app.ts`))?.status).toBe(404);
-      // The business view still has pages: the drawer's, and the one framed under the goal.
+      // The business view has one page, framed under the goal; the call-flow drawer no longer repeats it.
       expect(view?.explanation).toEqual({ explainedBy: "diffninja-mcp-test 0.1.0", processes: ["Checking out"], rules: 0, functions: 0 });
       const drawer = await loopback(`${url}flow?snapshot=${payload.snapshot.id}`);
       expect(drawer?.status).toBe(200);
-      expect(drawer?.body).toContain("Checking out");
+      expect(drawer?.body).not.toContain("Checking out");
       const business = await loopback(`${url}flow?snapshot=${payload.snapshot.id}&view=business`);
       expect(business?.status).toBe(200);
       expect(business?.body).toContain("The order is charged");
@@ -1028,7 +1042,7 @@ describe("review_diff connected pull request mode", () => {
       const payload = connectedOf(await review(client, { pr: GH_URL }));
       const reviewId = payload.reviewId!;
       const report = payload.report!;
-      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?" };
+      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", severity: "major" };
       // Every refused call sends answers and a comment the accepted one does not,
       // so a finish that partly applied before refusing would show up on the page.
       const substitute = {

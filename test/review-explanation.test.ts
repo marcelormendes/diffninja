@@ -238,9 +238,20 @@ describe("the business view", () => {
     expect(page).toContain("diffninja-business-height");
   });
 
-  test("scoped to one file, it keeps only the processes and rules that touch that file", () => {
-    const target = explained();
-    expect(renderBusinessView(target, { file: "shop/checkout.py" })).toContain("Checking out");
-    expect(renderBusinessView(target, { file: "shop/other.py" })).toContain("No process or rule in the explanation names this file");
+  test("the frame reports its content's height, so it can shrink as well as grow", () => {
+    const page = renderBusinessPage(explained());
+    expect(page).toContain("document.documentElement.getBoundingClientRect().height");
+    expect(page).not.toContain("documentElement.scrollHeight");
+  });
+
+  test("the call-flow page repeats neither the business view nor the view switches", () => {
+    const page = renderCallFlowPage(explained());
+    expect(page).not.toContain("How it works");
+    expect(page).not.toContain('class="bp"');
+    expect(page).not.toContain('class="cf-controls"');
+    expect(page).not.toContain('class="cf-mode-link');
+    expect(page).not.toContain('class="cf-diagram-btn');
+    expect(page).not.toContain('<h3 class="cf-mode-head"');
+    expect(page).toContain('class="cf-tree"');
   });
 });
