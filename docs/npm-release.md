@@ -1,10 +1,13 @@
 # Publishing diffninja to npm
 
-**Status: publishing through GitHub Actions.** `diffninja@0.1.1` is published
-on npm. Version `0.2.0` adds the concise agent-written PR goal, safely formatted
-original descriptions, and removes misleading Attention badges from connected
-pages. Connected `finish_review` calls now require `summary`; static calls may
-omit it. Restart agent sessions after upgrading so they discover the new schema.
+**Status: publishing through GitHub Actions.** `diffninja@0.2.0` is published
+on npm. Version `0.3.0` adds the business view: the reviewing agent explains
+every listed function in plain words, draws the business processes the change
+touches (new and changed steps highlighted), and lists its business rules as
+before and after; call flows lead with those purposes. Connected `finish_review`
+calls now require `explanation` as well as `summary`; static calls may omit
+both. A new tool, `record_explanation`, replaces it later. Restart agent
+sessions after upgrading so they discover the new schema.
 
 Publishing requires an explicit maintainer action: the manual bootstrap below,
 then the trusted-publisher configuration, then tags. Two consequences follow:
@@ -21,7 +24,7 @@ then the trusted-publisher configuration, then tags. Two consequences follow:
 
 | Piece | State |
 |---|---|
-| `package.json` | `diffninja@0.2.0`, `publishConfig.access: public`, `engines.node: >=22.18.0`, bins `diffninja` and `diffninja-mcp` |
+| `package.json` | `diffninja@0.3.0`, `publishConfig.access: public`, `engines.node: >=22.18.0`, bins `diffninja` and `diffninja-mcp` |
 | Packed tarball contents | `dist` JavaScript + declarations, `package.json`, `README.md`, `LICENSE`; no `src`, `test`, `scripts`, `tsconfig.json`, `vitest.config.ts` or lockfile, and no `node_modules` |
 | `.github/workflows/release.yml` | one workflow: metadata gate, tag gate on tag pushes, build/lint/test/pack, four-runner install matrix, minimum-toolchain job, OIDC publish job |
 | `.github/workflows/consumer-matrix.yml` | pack once, then a 5-OS x 2-Node consumer matrix (Ubuntu x64/ARM64, macOS x64/ARM64, Windows x64; Node 22/24) that globally installs the tarball and runs `scripts/verify-package.mjs`; runs on PRs and on demand |
@@ -157,7 +160,7 @@ exists, so the tag that would publish `0.1.0` must not be the one that starts CI
    then tag that merged commit and push:
 
    ```bash
-   git tag v0.2.0 && git push origin v0.2.0
+   git tag v0.3.0 && git push origin v0.3.0
    ```
 
 The workflow's guarantee is stronger than a local build: it publishes the exact
