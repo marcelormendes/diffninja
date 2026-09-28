@@ -121,9 +121,10 @@ can give the user.
 
 `record_order` replaces the order with `{ reviewId, order }`, naming all
 items exactly once. `suggest_comments` replaces suggestions with
-`{ reviewId, comments: [{ path, line, side, body }] }`: at most 30, one per
+`{ reviewId, comments: [{ path, line, side, body, severity }] }`: at most 30, one per
 commentable diff line, `side` LEFT or RIGHT, one plain line of at most
-280 characters per body. An empty list clears them. Suggestions appear on
+280 characters per body, and a `severity` of `critical`, `major` or `minor`
+that the page shows next to the suggestion. An empty list clears them. Suggestions appear on
 the connected page and join the human's draft only when they add them.
 Nothing is posted by these tools. Both return counts and `next`, never a
 page link, and work before or after finishing.
