@@ -964,7 +964,7 @@ describe("review_diff connected pull request mode", () => {
       expect(unfinished.nextSteps?.join(" ")).toMatch(/finish_review/);
       expect(textOf(result)).not.toMatch(/127\.0\.0\.1/);
       const payload = await opened(client, result);
-      expect(payload.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+      expect(payload.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{64}\/$/);
       expect(payload.snapshot).toMatchObject({ url: GH_URL, owner: "octocat", repo: "hello", number: 7, state: "OPEN" });
       expect(payload.snapshot.unavailableReason).toBeUndefined();
       expect(payload.snapshot.lines).toEqual([
@@ -1025,7 +1025,7 @@ describe("review_diff connected pull request mode", () => {
       // SAFETY: finish_review answers with the finished shape; its fields are asserted just below.
       const done = JSON.parse(textOf(finishedResult)) as Finished;
       expect(done).toMatchObject({ reviewId, answered: report.questions.length, ordered: report.items.length, suggested: 1 });
-      expect(done.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+      expect(done.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{64}\/$/);
       expect(done.reportUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/report\/[a-f0-9]{64}$/);
       const url = done.url!;
 

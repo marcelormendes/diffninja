@@ -101,23 +101,50 @@ function requestIsTrusted(req: IncomingMessage, origin: string): boolean {
   return !site || ["same-origin", "none"].includes(String(site));
 }
 
+/**
+ * The part of a request path after this session's secret prefix, or undefined
+ * when the path does not start with it. Every route of the session lives under
+ * `/<256-bit secret>/`: a process that can reach the loopback port but was never
+ * handed the link (another local user, a script the reviewed code runs) finds
+ * nothing to read and nothing to post. Host, Origin and the CSRF token below
+ * only defend against browsers; this is what defends against the rest.
+ */
+function routeOf(url: string | undefined, secret: string): string | undefined {
+  if (url === undefined || url.length < secret.length + 2 || url[0] !== "/" || url[secret.length + 1] !== "/") return undefined;
+  const presented = Buffer.from(url.slice(1, secret.length + 1));
+  const expected = Buffer.from(secret);
+  if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return undefined;
+  return url.slice(secret.length + 2);
+}
+
 /** A single ephemeral session; never exposes a general GitHub API proxy. */
 export async function serveConnected(review = new ConnectedReview(), options: ConnectedOptions = {}): Promise<ConnectedSession> {
   const csrf = randomBytes(32).toString("hex");
+  const secret = randomBytes(32).toString("hex");
+  const base = `/${secret}/`;
   let origin = "";
   const server = createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "no-referrer");
-    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${csrf}'; style-src 'nonce-${csrf}'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
     const json = (code: number, value: ApiResponse) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(withDescription(value))); };
     if (!requestIsTrusted(req, origin)) { json(403, { error: "Untrusted Host or Origin." }); return; }
-    if (req.method === "GET" && req.url === "/") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); res.end(renderConnectedPage(csrf)); return;
+    const route = routeOf(req.url, secret);
+    if (route === undefined) { json(404, { error: "Not found." }); return; }
+    if (req.method === "GET" && route === "") {
+      // A fresh nonce per response, never the CSRF token the script carries.
+      const nonce = randomBytes(16).toString("base64url");
+      res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(renderConnectedPage({ csrf, nonce, base }));
+      return;
     }
-    if (req.method === "GET" && req.url === "/api/state") { json(200, review.getState()); return; }
-    if (req.method === "GET" && req.url === "/api/analysis") {
+    if (req.method === "GET" && route === "api/state") { json(200, review.getState()); return; }
+    if (req.method === "GET" && route === "api/analysis") {
       try {
         json(200, options.analysis === undefined ? NO_ANALYSIS : await options.analysis());
       } catch (error) {
@@ -125,8 +152,8 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
       }
       return;
     }
-    if (req.method === "GET" && (req.url ?? "").startsWith("/flow?")) {
-      const query = new URL(req.url ?? "", origin).searchParams;
+    if (req.method === "GET" && route.startsWith("flow?")) {
+      const query = new URL(route, origin).searchParams;
       const snapshotId = query.get("snapshot") ?? "";
       const file = query.get("file") ?? undefined;
       const view = query.get("view") === "business" ? "business" : "flow";
@@ -144,8 +171,8 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
       res.end(html);
       return;
     }
-    const routes = ["/api/load", "/api/preview", "/api/submit", "/api/reconcile"];
-    if (req.method !== "POST" || !routes.includes(req.url ?? "")) { json(404, { error: "Not found." }); return; }
+    const routes = ["api/load", "api/preview", "api/submit", "api/reconcile"];
+    if (req.method !== "POST" || !routes.includes(route)) { json(404, { error: "Not found." }); return; }
     const token = tokenSchema.safeParse(req.headers["x-diffninja-csrf"]);
     if (req.headers.origin !== origin || !token.success || !timingSafeEqual(Buffer.from(token.data), Buffer.from(csrf))) {
       json(403, { error: "Invalid session or CSRF token." }); return;
@@ -153,10 +180,10 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
     try {
       const text = await readBody(req);
       let result: ConnectedState | ReviewPayload;
-      switch (req.url) {
-        case "/api/load": result = await review.load(loadSchema.parse(JSON.parse(text)).url); break;
-        case "/api/preview": result = await review.preview(reviewSchema.parse(JSON.parse(text))); break;
-        case "/api/submit": result = await review.submit(reviewSchema.parse(JSON.parse(text))); break;
+      switch (route) {
+        case "api/load": result = await review.load(loadSchema.parse(JSON.parse(text)).url); break;
+        case "api/preview": result = await review.preview(reviewSchema.parse(JSON.parse(text))); break;
+        case "api/submit": result = await review.submit(reviewSchema.parse(JSON.parse(text))); break;
         default: emptySchema.parse(JSON.parse(text)); result = await review.reconcile(); break;
       }
       json(200, result);
@@ -170,5 +197,5 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
   const address = z.object({ port: z.number().int().positive() }).parse(server.address());
   origin = `http://127.0.0.1:${address.port}`;
-  return { server, url: origin + "/" };
+  return { server, url: origin + base };
 }

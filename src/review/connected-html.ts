@@ -9,17 +9,19 @@ import { escapeHtml } from "./escape-html.js";
  * draft to `/api/preview`, and posts the same payload to `/api/submit`. Every
  * string that comes from GitHub (paths, diff lines, the diff text itself, error
  * messages) reaches the DOM through `textContent`; nothing is interpolated into
- * markup or into the script. Style and script carry the session CSRF token as
- * their CSP nonce, so the server can serve a `default-src 'none'` policy with
- * no inline handlers and no inline styles.
+ * markup or into the script. Style and script carry a per-response nonce, so the
+ * server can serve a `default-src 'none'` policy with no inline handlers and no
+ * inline styles; the session's CSRF token is a different secret, and the whole
+ * page lives under the session's secret path prefix.
  *
  * Drafts live in `sessionStorage`, keyed per pull request and stamped with the
  * snapshot id. Restoring a draft revalidates every comment anchor against the
  * snapshot on screen: a comment whose line no longer exists in the new revision
  * is dropped, never silently carried over.
  */
-export function renderConnectedPage(csrf: string): string {
-  const nonce = escapeHtml(csrf);
+export function renderConnectedPage(options: { readonly csrf: string; readonly nonce: string; readonly base: string }): string {
+  const { csrf, base } = options;
+  const nonce = escapeHtml(options.nonce);
   return [
     "<!doctype html>",
     '<html lang="en">',
@@ -179,14 +181,14 @@ export function renderConnectedPage(csrf: string): string {
     "</div>",
     '<iframe id="flow-frame" class="flow-frame" title="Call flow"></iframe>',
     "</aside>",
-    `<script nonce="${nonce}">${script(csrf)}</script>`,
+    `<script nonce="${nonce}">${script(csrf, base)}</script>`,
     "</body>",
     "</html>",
     "",
   ].join("\n");
 }
 
-function script(csrf: string): string {
+function script(csrf: string, base: string): string {
   // The nonce doubles as a JS string literal; `\u003c` keeps a hostile value
   // from closing the surrounding script element.
   return `
@@ -194,6 +196,8 @@ function script(csrf: string): string {
   'use strict';
 
   var CSRF = ${JSON.stringify(csrf).replaceAll("<", "\\u003c")};
+  // Every request goes under the session's secret prefix; without it the server answers 404.
+  var BASE = ${JSON.stringify(base).replaceAll("<", "\\u003c")};
   var DRAFT_PREFIX = 'diffninja.connected.draft.v1';
 
   var state = null;
@@ -493,7 +497,7 @@ function script(csrf: string): string {
       init.headers['X-Diffninja-CSRF'] = CSRF;
       init.body = JSON.stringify(payload === undefined ? {} : payload);
     }
-    return fetch(path, init).then(function (response) {
+    return fetch(BASE + (path.charAt(0) === '/' ? path.slice(1) : path), init).then(function (response) {
       return response.text().then(function (raw) {
         var data = null;
         if (raw) {
@@ -1162,7 +1166,7 @@ function script(csrf: string): string {
     var by = typeof explanation.explainedBy === 'string' && explanation.explainedBy.trim() !== '' ? explanation.explainedBy.trim() : 'your review agent';
     var processes = Array.isArray(explanation.processes) ? explanation.processes.length : 0;
     setText(el.prHowBy, 'Explained by ' + by + ' from the code: ' + processes + (processes === 1 ? ' process' : ' processes') + ' and ' + (explanation.rules || 0) + ((explanation.rules || 0) === 1 ? ' business rule' : ' business rules') + '. Its reading, not a verdict; the diff below is the ground truth.');
-    var src = '/flow?snapshot=' + encodeURIComponent(current.snapshotId) + '&view=business';
+    var src = BASE + 'flow?snapshot=' + encodeURIComponent(current.snapshotId) + '&view=business';
     if (el.prHowFrame.getAttribute('src') !== src) el.prHowFrame.setAttribute('src', src);
   }
 
@@ -1786,7 +1790,7 @@ function script(csrf: string): string {
   function openFlow(path, opener) {
     var current = currentAnalysis();
     if (!current) return;
-    var src = '/flow?snapshot=' + encodeURIComponent(current.snapshotId) + (path === '' ? '' : '&file=' + encodeURIComponent(path));
+    var src = BASE + 'flow?snapshot=' + encodeURIComponent(current.snapshotId) + (path === '' ? '' : '&file=' + encodeURIComponent(path));
     if (el.flowFrame.getAttribute('src') !== src) el.flowFrame.setAttribute('src', src);
     flowSnapshot = current.snapshotId;
     var explained = Boolean(current.explanation);

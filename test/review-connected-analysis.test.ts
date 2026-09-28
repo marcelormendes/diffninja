@@ -66,7 +66,7 @@ describe("connected analysis update notice", () => {
   });
 
   test("the connected page draws it in its own line", () => {
-    const page = renderConnectedPage("csrf");
+    const page = renderConnectedPage({ csrf: "csrf", nonce: "nonce", base: "/secret/" });
     expect(page).toContain('id="update-notice"');
     expect(page).toContain("function renderUpdate()");
   });
