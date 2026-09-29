@@ -22,6 +22,9 @@ describe("diffninja command", () => {
       expect(result.stdout).toContain("diffninja setup");
       expect(result.stdout).toContain("review_diff");
       expect(result.stdout).not.toContain("--diff PATH");
+      // setup also downloads through npm, so grammars install is not "the only command that downloads code".
+      expect(result.stdout).toContain("grammars install [--build]");
+      expect(result.stdout).not.toContain("The only command that downloads code");
     }
   });
 
@@ -29,6 +32,7 @@ describe("diffninja command", () => {
     const result = run("setup", "--help");
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("--uninstall");
+    expect(result.stdout).toMatch(/no\s+backup is kept/);
   });
 
   it("has no terminal review mode and points to the agent instead of reviewing anything", () => {

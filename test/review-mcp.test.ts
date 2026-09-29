@@ -180,6 +180,22 @@ describe("review_diff discovery", () => {
     // mode is the intent assertion: one of the three documented values.
     expect(schema.properties?.mode).toMatchObject({ enum: ["auto", "connected", "static"] });
   });
+
+  test("its description says who submits, treats a link inside a real diff as source, and does not promise a clone is never fetched", async () => {
+    const client = await connectReview();
+    const tool = (await client.listTools()).tools[0];
+    const description = tool.description ?? "";
+
+    // Submit on the page posts as the user, so "approves or merges nothing" was false.
+    expect(description).not.toMatch(/approves or merges nothing/);
+    expect(description).toMatch(/never open or fetch the review page: the human submits the review on the page/);
+    // One rule for links: inside a real unified diff a link is source, in every sentence that speaks of it.
+    expect(description).not.toMatch(/including inside diff text/);
+    expect(description).toMatch(/except a link inside text that is a real unified diff/);
+    // In a partial clone git fetches by itself, so the claim is about what diffninja runs.
+    expect(tool.inputSchema.properties?.repo).toMatchObject({ description: expect.stringMatching(/never runs fetch or checkout there[\s\S]*partial clone/) });
+    expect(tool.inputSchema.properties?.mode).toMatchObject({ description: expect.stringMatching(/a link inside a real unified diff does not count/) });
+  });
 });
 
 describe("review_diff over the MCP protocol", () => {
