@@ -98,12 +98,41 @@ export interface ConnectedReceipt {
  */
 export type ConnectedStatus = "empty" | "ready" | "submitting" | "unknown" | "submitted";
 
+/** GitHub's Viewed mark for one changed file, as the signed-in account has it. */
+export interface ViewedFile {
+  path: string;
+  viewed: boolean;
+}
+
+/**
+ * The signed-in account's Viewed marks on the loaded pull request, one entry
+ * per changed file. Unavailable when GitHub did not offer them, with a short
+ * fixed reason and never GitHub's own words.
+ */
+export type ViewedState =
+  | { available: true; files: ViewedFile[] }
+  | { available: false; reason: string };
+
+/** What the page sends to mark a file Viewed or not Viewed; it owns nothing else about the write. */
+export interface ViewedInput {
+  snapshotId: string;
+  path: string;
+  viewed: boolean;
+}
+
+export interface ViewedReceipt {
+  path: string;
+  viewed: boolean;
+}
+
 export interface ConnectedState {
   identity?: ConnectedIdentity;
   snapshot?: ConnectedSnapshot;
   status: ConnectedStatus;
   receipt?: ConnectedReceipt;
   message?: string;
+  /** Present for a reviewable snapshot; a load reads it, a successful mark updates it. */
+  viewed?: ViewedState;
 }
 
 /* ---------------------------------------------------------------- gh process */
@@ -221,7 +250,7 @@ const AUTHORIZATION_FAILURE = "The gh account is not authorized for that reposit
 const NOT_FOUND_FAILURE = "GitHub did not return that pull request. Check the URL, or confirm the gh account can read the repository.";
 
 /** What the caller was attempting, so a rejection says which thing GitHub refused. */
-type RejectionSubject = "request" | "review";
+type RejectionSubject = "request" | "review" | "viewed";
 
 /** Drop control characters and cap length; GitHub error text is data, not a channel. */
 function sanitizeText(text: string): string {
@@ -272,6 +301,33 @@ function githubBodyError(message: string): Error {
   return new Error(`GitHub rejected the request: ${cleaned}`);
 }
 
+/** Why a `gh` run failed, told apart once so each caller words it (or acts on it) from the same reading. */
+type FailureKind = "timeout" | "gh-missing" | "gh-outdated" | "signed-out" | "forbidden" | "not-found" | "rejected" | "refused" | "server" | "unreachable" | "other";
+
+function failureKind(error: GhCommandError): FailureKind {
+  const detail = error.message;
+  const status = httpStatus(error);
+  if (status === 408 || /timed out|timeout/i.test(detail)) return "timeout";
+  if (/was not found/i.test(detail) && status === null) return "gh-missing";
+  if (/unknown json field|unknown flag|unknown shorthand|unknown command/i.test(detail)) return "gh-outdated";
+  if (status === 401 || /bad credentials|not logged in|gh auth login|authentication required/i.test(detail)) return "signed-out";
+  if (status === 403 || /resource not accessible|forbidden|must have push|not authorized|insufficient/i.test(detail)) return "forbidden";
+  if (status === 404 || /could not resolve to a (?:node|pull ?request)|pull request was not found/i.test(detail)) return "not-found";
+  if (status !== null && status >= 400 && status < 500) return "rejected";
+  // A GraphQL refusal is an HTTP 200 whose body carries `errors`, so gh names no status.
+  if (status === null && graphqlErrorsIn(error.stdout)) return "refused";
+  if (githubErrorText(error.stdout) !== null || (status !== null && status >= 500)) return "server";
+  if (/connection refused|no such host|name resolution|network is unreachable|unexpected EOF|TLS handshake|proxyconnect/i.test(detail)) return "unreachable";
+  return "other";
+}
+
+function graphqlErrorsIn(stdout: string): boolean {
+  const decoded = tryParseJson(stdout);
+  if (!isGhObject(decoded)) return false;
+  const errors = decoded["errors"];
+  return Array.isArray(errors) && errors.length > 0;
+}
+
 /**
  * Map a raw `gh` failure to a safe, user-facing error. Read failures stay
  * neutral — no failure text claims the pull request was untouched, because when
@@ -282,33 +338,28 @@ function githubBodyError(message: string): Error {
 function classifyGhFailure(rawError: Error, subject: RejectionSubject): Error {
   const error = asGhCommandError(rawError);
   const detail = error.message;
-  const status = httpStatus(error);
   const github = githubErrorText(error.stdout);
-  if (status === 408 || /timed out|timeout/i.test(detail)) {
-    return new Error("gh did not answer in time; the request did not complete. Check the network, then try again.");
-  }
-  if (/was not found/i.test(detail) && status === null) return new Error(`The GitHub CLI (gh) was not found on PATH. Install gh ${MIN_GH_VERSION} or newer from https://cli.github.com, then run \`gh auth login --hostname github.com\` and try again.`);
-  if (/unknown json field|unknown flag|unknown shorthand|unknown command/i.test(detail)) {
-    return new Error(`The installed gh does not support the flags diffninja needs. Update gh to ${MIN_GH_VERSION} or newer.`);
-  }
-  if (status === 401 || /bad credentials|not logged in|gh auth login|authentication required/i.test(detail)) return new Error(AUTH_FAILURE);
-  if (status === 403 || /resource not accessible|forbidden|must have push|not authorized|insufficient/i.test(detail)) {
+  switch (failureKind(error)) {
+    case "timeout": return new Error("gh did not answer in time; the request did not complete. Check the network, then try again.");
+    case "gh-missing": return new Error(`The GitHub CLI (gh) was not found on PATH. Install gh ${MIN_GH_VERSION} or newer from https://cli.github.com, then run \`gh auth login --hostname github.com\` and try again.`);
+    case "gh-outdated": return new Error(`The installed gh does not support the flags diffninja needs. Update gh to ${MIN_GH_VERSION} or newer.`);
+    case "signed-out": return new Error(AUTH_FAILURE);
     // A 403 has many causes; GitHub's own text is what tells them apart.
-    return new Error(github === null ? AUTHORIZATION_FAILURE : `${AUTHORIZATION_FAILURE} GitHub said: ${github}.`);
+    case "forbidden": return new Error(github === null ? AUTHORIZATION_FAILURE : `${AUTHORIZATION_FAILURE} GitHub said: ${github}.`);
+    case "not-found": return new Error(NOT_FOUND_FAILURE);
+    case "rejected": {
+      const what = subject === "review" ? "GitHub rejected the review" : subject === "viewed" ? "GitHub rejected the Viewed mark" : "The request was rejected";
+      // The Viewed mark shows GitHub's named message or nothing of its own: never a line of gh's stderr.
+      if (github === null) return new Error(subject === "viewed" ? `${what}.` : `${what}: ${sanitizeText(detail)}`);
+      return new Error(`${what}: ${github}`);
+    }
+    case "refused": return new Error(`GitHub refused the ${subject === "viewed" ? "Viewed mark" : "request"}: ${github ?? "no reason given"}.`);
+    case "server": return new Error(github === null
+      ? "GitHub returned a server error; the request did not complete. Try again in a moment."
+      : `GitHub returned a server error; the request did not complete: ${github}. Try again in a moment.`);
+    case "unreachable": return new Error("diffninja could not reach GitHub; the request did not complete. Check the network and try again.");
+    case "other": return new Error("The gh command failed; the request did not complete.");
   }
-  if (status === 404 || /could not resolve to a pull ?request|pull request was not found/i.test(detail)) return new Error(NOT_FOUND_FAILURE);
-  if (status !== null && status >= 400 && status < 500) {
-    const what = subject === "review" ? "GitHub rejected the review" : "The request was rejected";
-    return new Error(github === null ? `${what}: ${sanitizeText(detail)}` : `${what}: ${github}`);
-  }
-  if (github !== null) {
-    return new Error(`GitHub returned a server error; the request did not complete: ${github}. Try again in a moment.`);
-  }
-  if (status !== null && status >= 500) return new Error("GitHub returned a server error; the request did not complete. Try again in a moment.");
-  if (/connection refused|no such host|name resolution|network is unreachable|unexpected EOF|TLS handshake|proxyconnect/i.test(detail)) {
-    return new Error("diffninja could not reach GitHub; the request did not complete. Check the network and try again.");
-  }
-  return new Error("The gh command failed; the request did not complete.");
 }
 
 /* ------------------------------------------------------------- JSON boundary */
@@ -480,6 +531,8 @@ function parsePullUrl(raw: string): PullTarget {
 }
 
 interface PrMetadata {
+  /** The pull request's GraphQL node id, the only handle a Viewed mark needs; null when gh did not report it. */
+  nodeId: string | null;
   url: string;
   owner: string;
   repo: string;
@@ -830,6 +883,44 @@ const VIEW_FIELDS = [
   "headRepository", "headRepositoryOwner", "baseRefName", "headRefName",
 ].join(",");
 
+/**
+ * The only GraphQL documents diffninja sends, fixed text. A file path, a cursor
+ * and the pull request's node id travel as separate `-f` variables and are never
+ * placed in a document.
+ */
+export const VIEWED_FILES_QUERY = "query($pullRequestId: ID!, $after: String) { node(id: $pullRequestId) { ... on PullRequest { files(first: 100, after: $after) { nodes { path viewerViewedState } pageInfo { hasNextPage endCursor } } } } }";
+export const MARK_VIEWED_MUTATION = "mutation($pullRequestId: ID!, $path: String!) { markFileAsViewed(input: { pullRequestId: $pullRequestId, path: $path }) { clientMutationId } }";
+export const UNMARK_VIEWED_MUTATION = "mutation($pullRequestId: ID!, $path: String!) { unmarkFileAsViewed(input: { pullRequestId: $pullRequestId, path: $path }) { clientMutationId } }";
+
+const VIEWED_MUTATIONS = {
+  mark: { query: MARK_VIEWED_MUTATION, field: "markFileAsViewed" },
+  unmark: { query: UNMARK_VIEWED_MUTATION, field: "unmarkFileAsViewed" },
+} as const;
+
+/** GitHub lists at most 3,000 files of a pull request; at 100 a page this is far past that. */
+const MAX_VIEWED_PAGES = 40;
+const UNFINISHED_MARK = "The Viewed mark did not finish, so GitHub may or may not have recorded it. Load the pull request again to read GitHub's marks.";
+/** A failure of these kinds means GitHub answered the write with a refusal, or gh never ran it. */
+const DEFINITE_FAILURES: ReadonlySet<FailureKind> = new Set(["gh-missing", "gh-outdated", "signed-out", "forbidden", "not-found", "rejected", "refused"]);
+
+/** Fixed reasons a read of the Viewed marks failed. GitHub's own text is never among them. */
+const VIEWED_READ_REASON = {
+  "timeout": "gh did not answer in time",
+  "gh-missing": "the GitHub CLI was not found",
+  "gh-outdated": "the installed gh is too old",
+  "signed-out": "gh is not signed in to GitHub",
+  "forbidden": "the gh account may not read viewed marks",
+  "not-found": "GitHub did not find the pull request",
+  "rejected": "GitHub rejected the request",
+  "refused": "GitHub refused the request",
+  "server": "GitHub returned a server error",
+  "unreachable": "GitHub could not be reached",
+  "other": "gh failed",
+} satisfies Record<FailureKind, string>;
+
+/** A read of the Viewed marks that cannot be trusted; its message is a fixed sentence fragment. */
+class ViewedUnreadable extends Error {}
+
 const MAX_REVIEW_CHARS = 65_536;
 const MAX_COMMENT_CHARS = 65_536;
 const MAX_COMMENTS = 100;
@@ -860,6 +951,9 @@ interface SnapshotRead {
   anchors: Set<string>;
   /** A fact the reviewer should see even though the snapshot is reviewable. */
   note: string | null;
+  /** The pull request's GraphQL node id, and the file paths GitHub's own file list names for it. */
+  nodeId: string | null;
+  filePaths: string[];
 }
 
 /**
@@ -891,6 +985,7 @@ export class ConnectedReview {
   /** Review ids that already existed before this session's write attempt. */
   private preexistingReviewIds = new Set<number>();
   private queue: Promise<void> = Promise.resolve();
+  private viewedSync: ViewedSync | undefined;
 
   constructor(deps: ConnectedReviewDeps = {}) {
     this.runner = deps.runner ?? ghCliRunner();
@@ -904,6 +999,7 @@ export class ConnectedReview {
       status: this.status,
       receipt: this.receipt,
       message: this.message,
+      viewed: this.viewedState(),
     };
   }
 
@@ -927,6 +1023,11 @@ export class ConnectedReview {
 
   async reconcile(): Promise<ConnectedState> {
     return this.serialize(() => this.runReconcile());
+  }
+
+  /** Mark one changed file of the loaded snapshot Viewed, or not, on GitHub. */
+  async setViewed(input: ViewedInput): Promise<ViewedReceipt> {
+    return this.serialize(() => this.runSetViewed(input));
   }
 
   /** Run `work` after everything already queued; failures never break the chain. */
@@ -998,7 +1099,9 @@ export class ConnectedReview {
     if (!SHA_PATTERN.test(baseSha) || !SHA_PATTERN.test(headSha)) throw new Error("GitHub reported a malformed base or head commit for this pull request.");
     const canonical = parsePullUrl(url);
     if (canonical.number !== number) throw new Error("GitHub's pull request metadata is inconsistent; refusing to review it.");
+    const nodeId = textField(payload, "id");
     return {
+      nodeId: nodeId === null || nodeId === "" ? null : nodeId,
       url: canonical.url,
       owner: canonical.owner,
       repo: canonical.repo,
@@ -1078,7 +1181,8 @@ export class ConnectedReview {
     };
     const reason = canonical.problem ?? reviewabilityProblem(meta);
     if (reason !== null) snapshot.unavailableReason = reason;
-    return { snapshot, diff: rawDiff, anchors: canonical.anchors, note: reason === null ? forkNote(meta) : null };
+    const filePaths = (listedFiles(listing) ?? []).map((file) => file.filename);
+    return { snapshot, diff: rawDiff, anchors: canonical.anchors, note: reason === null ? forkNote(meta) : null, nodeId: meta.nodeId, filePaths };
   }
 
   /**
@@ -1104,10 +1208,12 @@ export class ConnectedReview {
     await this.ensureGhVersion();
     const identity = await this.readIdentity();
     const read = await this.readSnapshot(target);
+    const viewed = read.snapshot.unavailableReason === undefined ? await this.readViewed(read) : undefined;
     this.identity = identity;
     this.snapshot = read.snapshot;
     this.diff = read.diff;
     this.anchors = read.anchors;
+    this.viewedSync = viewed;
     this.previewed = undefined;
     this.message = read.snapshot.unavailableReason ?? read.note ?? undefined;
     this.status = read.snapshot.unavailableReason === undefined ? "ready" : "empty";
@@ -1153,6 +1259,77 @@ export class ConnectedReview {
     this.preexistingReviewIds = await this.readReviewIds(snapshot);
     await this.postReview(snapshot, payload);
     return this.getState();
+  }
+
+  /** One `gh api graphql` run: a fixed document plus its variables, each a separate raw `-f` argument. */
+  private graphql(query: string, variables: GraphqlVariables): Promise<GhResult> {
+    const args = ["api", "--hostname", GITHUB_HOST, "graphql", "-f", `query=${query}`];
+    for (const [name, value] of Object.entries(variables)) args.push("-f", `${name}=${value}`);
+    return this.runner.run({ args, timeoutMs: this.timeoutMs });
+  }
+
+  /** The Viewed marks for the files of a fresh snapshot; a read that fails costs the sync, never the load. */
+  private async readViewed(read: SnapshotRead): Promise<ViewedSync> {
+    const pullRequestId = read.nodeId;
+    if (pullRequestId === null) return { available: false, reason: "gh did not report the pull request's GitHub id" };
+    try {
+      const marks = await this.readViewedMarks(pullRequestId);
+      return { available: true, pullRequestId, files: new Map(read.filePaths.map((path) => [path, marks.get(path) === true])) };
+    } catch (error) {
+      if (error instanceof ViewedUnreadable) return { available: false, reason: error.message };
+      return { available: false, reason: VIEWED_READ_REASON[failureKind(asGhCommandError(error instanceof Error ? error : new Error("gh failed")))] };
+    }
+  }
+
+  /** Path to viewed, over every page of the pull request's files; VIEWED counts, UNVIEWED and DISMISSED do not. */
+  private async readViewedMarks(pullRequestId: string): Promise<Map<string, boolean>> {
+    const marks = new Map<string, boolean>();
+    let after: string | undefined;
+    for (let page = 0; page < MAX_VIEWED_PAGES; page++) {
+      const result = await this.graphql(VIEWED_FILES_QUERY, after === undefined ? { pullRequestId } : { pullRequestId, after });
+      const next = readViewedPage(result.stdout, marks);
+      if (next === null) return marks;
+      after = next;
+    }
+    throw new ViewedUnreadable("the pull request has more files than diffninja reads");
+  }
+
+  private async runSetViewed(input: ViewedInput): Promise<ViewedReceipt> {
+    const snapshot = this.snapshot;
+    if (snapshot === undefined) throw new Error("Load a pull request before marking a file viewed.");
+    if (input.snapshotId !== snapshot.id) {
+      throw new Error("This mark belongs to a different version of the pull request. Reload it and try again.");
+    }
+    const sync = this.viewedSync;
+    if (sync === undefined || !sync.available) {
+      throw new Error(`Viewed marks are not synced with GitHub for this pull request${sync === undefined ? "" : ` (${sync.reason})`}.`);
+    }
+    if (!sync.files.has(input.path)) throw new Error("That file is not one of this pull request's changed files.");
+    const mutation = input.viewed ? VIEWED_MUTATIONS.mark : VIEWED_MUTATIONS.unmark;
+    let stdout: string;
+    try {
+      ({ stdout } = await this.graphql(mutation.query, { pullRequestId: sync.pullRequestId, path: input.path }));
+    } catch (error) {
+      const failure = asGhCommandError(error instanceof Error ? error : new Error("gh failed"));
+      if (DEFINITE_FAILURES.has(failureKind(failure))) throw classifyGhFailure(failure, "viewed");
+      throw this.unfinishedMark();
+    }
+    if (!confirmsMutation(stdout, mutation.field)) throw this.unfinishedMark();
+    sync.files.set(input.path, input.viewed);
+    return { path: input.path, viewed: input.viewed };
+  }
+
+  /** A write that may or may not have landed: the marks stay unread until the pull request is loaded again. */
+  private unfinishedMark(): Error {
+    this.viewedSync = { available: false, reason: "the last Viewed mark did not finish" };
+    return new Error(UNFINISHED_MARK);
+  }
+
+  private viewedState(): ViewedState | undefined {
+    const sync = this.viewedSync;
+    if (sync === undefined) return undefined;
+    if (!sync.available) return { available: false, reason: sync.reason };
+    return { available: true, files: [...sync.files].map(([path, viewed]) => ({ path, viewed })) };
   }
 
   private async postReview(snapshot: ConnectedSnapshot, payload: ReviewPayload): Promise<void> {
@@ -1327,6 +1504,49 @@ export class ConnectedReview {
     if (this.anchors.has(anchorKey(path, line, side))) return { path, line, side, body };
     throw new Error(`The comment on ${path}:${line} (${side}) does not match a line of this pull request's diff. Comment on an added line on the right, a deleted line on the left, or a context line.`);
   }
+}
+
+/** Viewed marks of the loaded snapshot; the map's keys are exactly the paths GitHub's file list names. */
+type ViewedSync =
+  | { readonly available: true; readonly pullRequestId: string; readonly files: Map<string, boolean> }
+  | { readonly available: false; readonly reason: string };
+
+interface GraphqlVariables {
+  readonly pullRequestId: string;
+  readonly path?: string;
+  readonly after?: string;
+}
+
+/**
+ * Add one page of `files { nodes { path viewerViewedState } }` to `marks` and
+ * return the cursor of the next page, or null after the last. Anything that is
+ * not that shape rejects the whole read: a mark cannot be guessed.
+ */
+function readViewedPage(stdout: string, marks: Map<string, boolean>): string | null {
+  const unreadable = new ViewedUnreadable("GitHub's answer about viewed files was not readable");
+  const decoded = tryParseJson(stdout);
+  const files = objectField(objectField(objectField(isGhObject(decoded) ? decoded : null, "data"), "node"), "files");
+  const nodes = files === null ? null : files["nodes"];
+  const pageInfo = objectField(files, "pageInfo");
+  const more = booleanField(pageInfo, "hasNextPage");
+  if (!Array.isArray(nodes) || more === null) throw unreadable;
+  for (const node of nodes) {
+    const path = isGhObject(node) ? textField(node, "path") : null;
+    const state = isGhObject(node) ? textField(node, "viewerViewedState") : null;
+    if (path === null || state === null) throw unreadable;
+    marks.set(path, state === "VIEWED");
+  }
+  if (!more) return null;
+  const cursor = textField(pageInfo, "endCursor");
+  if (cursor === null || cursor === "") throw unreadable;
+  return cursor;
+}
+
+/** A mutation is confirmed only by its own field in `data` and no `errors`. */
+function confirmsMutation(stdout: string, field: string): boolean {
+  const decoded = tryParseJson(stdout);
+  if (!isGhObject(decoded) || graphqlErrorsIn(stdout)) return false;
+  return objectField(objectField(decoded, "data"), field) !== null;
 }
 
 function compareVersions(left: string, right: string): number {

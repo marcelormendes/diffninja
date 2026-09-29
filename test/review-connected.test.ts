@@ -73,7 +73,7 @@ describe("connected session boundary", () => {
   });
   it("answers nothing without the session's secret path, so a local process that never got the link finds no page, no PR data and no way to post", async () => {
     const review = new ConnectedReview();
-    const touched = [vi.spyOn(review, "getState"), vi.spyOn(review, "load"), vi.spyOn(review, "preview"), vi.spyOn(review, "submit"), vi.spyOn(review, "reconcile")];
+    const touched = [vi.spyOn(review, "getState"), vi.spyOn(review, "load"), vi.spyOn(review, "preview"), vi.spyOn(review, "submit"), vi.spyOn(review, "reconcile"), vi.spyOn(review, "setViewed")];
     let analysisAsked = 0;
     const session = await serveConnected(review, { analysis: async () => { analysisAsked += 1; return { available: false, reason: "x" }; } });
     servers.push(session);
@@ -86,7 +86,7 @@ describe("connected session boundary", () => {
     const same = { Origin: origin, "Content-Type": "application/json", "X-Diffninja-CSRF": csrf };
     const wrong = (secret[0] === "a" ? "b" : "a") + secret.slice(1);
     for (const prefix of ["/", `/${wrong}/`, `/${secret.slice(0, 63)}/`, `/${secret}x/`, `//${secret}/`, "/api/", `/${secret}`]) {
-      for (const [method, path] of [["GET", ""], ["GET", "api/state"], ["GET", "api/analysis"], ["GET", "flow?snapshot=x"], ["POST", "api/load"], ["POST", "api/preview"], ["POST", "api/submit"], ["POST", "api/reconcile"]] as const) {
+      for (const [method, path] of [["GET", ""], ["GET", "api/state"], ["GET", "api/analysis"], ["GET", "flow?snapshot=x"], ["POST", "api/load"], ["POST", "api/preview"], ["POST", "api/submit"], ["POST", "api/reconcile"], ["POST", "api/viewed"]] as const) {
         const response = await fetch(origin + prefix + path, { method, headers: method === "POST" ? same : {}, body: method === "POST" ? "{}" : undefined });
         expect(response.status, `${method} ${prefix}${path}`).toBe(404);
         expect(await response.text()).not.toMatch(/CSRF|snapshot|diff/i);

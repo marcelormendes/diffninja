@@ -1,6 +1,6 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { get } from "node:http";
+import { get, request } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { packageVersion } from "../src/review/version.js";
 import { createReviewServer } from "../src/review/mcp.js";
 import { MAX_RESULT_BYTES } from "../src/review/result-budget.js";
-import type { ConnectedSnapshot } from "../src/review/github.js";
+import { MARK_VIEWED_MUTATION, UNMARK_VIEWED_MUTATION, type ConnectedSnapshot, type ViewedState } from "../src/review/github.js";
 import { placementOf } from "../src/review/pipeline.js";
 import type { ReviewReport } from "../src/review/types.js";
 
@@ -77,6 +77,30 @@ function loopback(url: string): Promise<{ status: number; body: string } | null>
     });
     request.on("error", () => resolve(null));
     request.setTimeout(3_000, () => { request.destroy(); resolve(null); });
+  });
+}
+
+/** A POST to a served page, the way its own script sends one: same origin, its CSRF token, JSON. */
+interface PagePost {
+  snapshotId?: string;
+  path?: string;
+  viewed?: boolean;
+  url?: string;
+}
+
+function loopbackPost(url: string, route: string, csrf: string, payload: PagePost): Promise<{ status: number; json: { error?: string; viewed?: boolean; path?: string; state?: { viewed?: ViewedState } } }> {
+  return new Promise((resolvePost, reject) => {
+    const target = new URL(route, url);
+    const body = JSON.stringify(payload);
+    const outgoing = request(target, { method: "POST", headers: { Origin: target.origin, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), "X-Diffninja-CSRF": csrf } }, response => {
+      let text = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { text += chunk; });
+      // SAFETY: the connected server answers every POST with JSON of the shape named above.
+      response.on("end", () => resolvePost({ status: response.statusCode ?? 0, json: JSON.parse(text) as never }));
+    });
+    outgoing.on("error", reject);
+    outgoing.end(body);
   });
 }
 
@@ -450,7 +474,7 @@ const URL_IN_DIFF = [
  * refusal and a slow answer.
  */
 const GH_SCRIPT = `#!${process.execPath}
-const { appendFileSync } = require("node:fs");
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 if (process.env.GH_TEST_LOG) appendFileSync(process.env.GH_TEST_LOG, args.join(" ") + "\\n");
 if (process.env.GH_TEST_FAIL === "1" && args[0] === "pr") {
@@ -462,9 +486,32 @@ const number = Number(/(\\d+)$/.exec(requested.split(/[?#]/)[0])?.[1] ?? 7);
 const metadata = { ...${JSON.stringify(GH_METADATA)}, url: requested, number };
 const files = ${JSON.stringify(GH_FILES)};
 const diff = ${JSON.stringify(GH_DIFF)};
+/** GraphQL: the file list's Viewed marks, kept in GH_TEST_VIEWED between runs, and the two mutations. */
+function graphql() {
+  const field = name => (args.find((argument, index) => args[index - 1] === "-f" && argument.startsWith(name + "="))?.slice(name.length + 1));
+  const query = field("query") ?? "";
+  const marks = existsSync(process.env.GH_TEST_VIEWED) ? JSON.parse(readFileSync(process.env.GH_TEST_VIEWED, "utf8")) : {};
+  const failing = process.env.GH_TEST_FAIL_GRAPHQL;
+  if (query.includes("viewerViewedState")) {
+    if (failing === "read") { process.stderr.write("gh: HTTP 502 Bad Gateway\\n"); process.exit(1); }
+    const nodes = files.map(file => ({ path: file.filename, viewerViewedState: marks[file.filename] ?? "UNVIEWED" }));
+    process.stdout.write(JSON.stringify({ data: { node: { files: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } }));
+    return;
+  }
+  if (failing === "write") {
+    process.stdout.write(JSON.stringify({ errors: [{ type: "FORBIDDEN", message: "Resource not accessible by personal access token" }] }));
+    process.stderr.write("gh: Resource not accessible by personal access token\\nAuthorization: token ghp_SECRETTOKEN\\n");
+    process.exit(1);
+  }
+  const mark = query.includes("markFileAsViewed") && !query.includes("unmarkFileAsViewed");
+  marks[field("path")] = mark ? "VIEWED" : "UNVIEWED";
+  writeFileSync(process.env.GH_TEST_VIEWED, JSON.stringify(marks));
+  process.stdout.write(JSON.stringify({ data: { [mark ? "markFileAsViewed" : "unmarkFileAsViewed"]: { clientMutationId: null } } }));
+}
 function respond() {
   const last = String(args[args.length - 1]);
-  if (args[0] === "--version") process.stdout.write("gh version 2.101.0 (2026-01-01)\\nhttps://github.com/cli/cli/releases\\n");
+  if (args[3] === "graphql") graphql();
+  else if (args[0] === "--version") process.stdout.write("gh version 2.101.0 (2026-01-01)\\nhttps://github.com/cli/cli/releases\\n");
   else if (last === "user") process.stdout.write(JSON.stringify({ login: "octocat", id: 42, name: "Test" }));
   else if (args[0] === "pr") process.stdout.write(JSON.stringify(metadata));
   else if (last.endsWith("/files?per_page=100")) process.stdout.write(JSON.stringify(files));
@@ -480,6 +527,12 @@ interface FakeGh {
   log: string;
   fail: () => void;
   slow: (milliseconds: number) => void;
+  /** The fake GitHub's Viewed marks, file to state. */
+  marks: () => Record<string, string>;
+  /** Set a mark on the fake GitHub, as the owner would on the website. */
+  seedMark: (path: string, state: string) => void;
+  /** Make GraphQL reads or writes fail from now on; null stops it. */
+  failGraphql: (kind: "read" | "write" | null) => void;
 }
 
 interface ConnectedPayload {
@@ -526,23 +579,33 @@ function ghCalls(log: string): string[] {
 async function withFakeGh(body: (gh: FakeGh) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "diffninja-mcp-gh-"));
   const log = join(dir, "calls.log");
-  const saved = { path: process.env.PATH, log: process.env.GH_TEST_LOG, fail: process.env.GH_TEST_FAIL, delay: process.env.GH_TEST_DELAY_MS };
+  const viewed = join(dir, "viewed.json");
+  const saved = { path: process.env.PATH, log: process.env.GH_TEST_LOG, fail: process.env.GH_TEST_FAIL, delay: process.env.GH_TEST_DELAY_MS, viewed: process.env.GH_TEST_VIEWED, graphql: process.env.GH_TEST_FAIL_GRAPHQL };
+  // SAFETY: the file is written only by the scripted gh and by seedMark, both as a JSON map from path to state.
+  const marks = (): Record<string, string> => existsSync(viewed) ? JSON.parse(readFileSync(viewed, "utf8")) as Record<string, string> : {};
   try {
     writeFileSync(join(dir, "gh"), GH_SCRIPT, { mode: 0o755 });
     process.env.PATH = `${dir}${delimiter}${saved.path ?? ""}`;
     process.env.GH_TEST_LOG = log;
+    process.env.GH_TEST_VIEWED = viewed;
     delete process.env.GH_TEST_FAIL;
     delete process.env.GH_TEST_DELAY_MS;
+    delete process.env.GH_TEST_FAIL_GRAPHQL;
     await body({
       log,
       fail: () => { process.env.GH_TEST_FAIL = "1"; },
       slow: milliseconds => { process.env.GH_TEST_DELAY_MS = String(milliseconds); },
+      marks,
+      seedMark: (path, state) => { writeFileSync(viewed, JSON.stringify({ ...marks(), [path]: state })); },
+      failGraphql: kind => { if (kind === null) delete process.env.GH_TEST_FAIL_GRAPHQL; else process.env.GH_TEST_FAIL_GRAPHQL = kind; },
     });
   } finally {
     if (saved.path === undefined) delete process.env.PATH; else process.env.PATH = saved.path;
     if (saved.log === undefined) delete process.env.GH_TEST_LOG; else process.env.GH_TEST_LOG = saved.log;
     if (saved.fail === undefined) delete process.env.GH_TEST_FAIL; else process.env.GH_TEST_FAIL = saved.fail;
     if (saved.delay === undefined) delete process.env.GH_TEST_DELAY_MS; else process.env.GH_TEST_DELAY_MS = saved.delay;
+    if (saved.viewed === undefined) delete process.env.GH_TEST_VIEWED; else process.env.GH_TEST_VIEWED = saved.viewed;
+    if (saved.graphql === undefined) delete process.env.GH_TEST_FAIL_GRAPHQL; else process.env.GH_TEST_FAIL_GRAPHQL = saved.graphql;
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -1362,6 +1425,69 @@ describe("review_diff connected pull request mode", () => {
       expect(repeat.url).toBe(second.url);
       expect(ghCalls(log).filter(line => line.startsWith("pr view")).length).toBe(loads);
       expect(fetchAttempts).toEqual([]);
+    });
+  });
+
+  test("a file's Viewed mark is read from GitHub at load and written back on the owner's click, through the real gh runner", async () => {
+    await withFakeGh(async ({ log, marks, seedMark }) => {
+      seedMark("app.ts", "VIEWED");
+      blockNetwork();
+      const client = await connectReview();
+      const payload = await opened(client, await review(client, { pr: GH_URL }));
+      const csrf = /var CSRF = "([a-f0-9]{64})"/.exec((await loopback(payload.url))?.body ?? "")?.[1] ?? "";
+      // SAFETY: /api/state is the connected page's own JSON; only its viewed field is read here.
+      const state = async () => (JSON.parse((await loopback(payload.url + "api/state"))?.body ?? "{}") as { viewed?: ViewedState }).viewed;
+      const graphql = () => ghCalls(log).filter(line => line.startsWith("api --hostname github.com graphql "));
+
+      expect(await state()).toEqual({ available: true, files: [{ path: "app.ts", viewed: true }] });
+      expect(graphql()).toHaveLength(1);
+      expect(graphql()[0]).toContain("viewerViewedState");
+      expect(graphql()[0]).toMatch(/ -f pullRequestId=PR_kwDOAAAB$/);
+
+      const snapshotId = payload.snapshot.id;
+      const unmark = await loopbackPost(payload.url, "api/viewed", csrf, { snapshotId, path: "app.ts", viewed: false });
+      expect(unmark).toMatchObject({ status: 200, json: { path: "app.ts", viewed: false } });
+      expect(graphql().at(-1)).toBe(`api --hostname github.com graphql -f query=${UNMARK_VIEWED_MUTATION} -f pullRequestId=PR_kwDOAAAB -f path=app.ts`);
+      expect(marks()["app.ts"]).toBe("UNVIEWED");
+      expect(await state()).toEqual({ available: true, files: [{ path: "app.ts", viewed: false }] });
+
+      const mark = await loopbackPost(payload.url, "api/viewed", csrf, { snapshotId, path: "app.ts", viewed: true });
+      expect(mark).toMatchObject({ status: 200, json: { path: "app.ts", viewed: true } });
+      expect(graphql().at(-1)).toBe(`api --hostname github.com graphql -f query=${MARK_VIEWED_MUTATION} -f pullRequestId=PR_kwDOAAAB -f path=app.ts`);
+      expect(marks()["app.ts"]).toBe("VIEWED");
+
+      const before = ghCalls(log).length;
+      expect((await loopbackPost(payload.url, "api/viewed", csrf, { snapshotId, path: "other.ts", viewed: true })).status).toBe(400);
+      expect(ghCalls(log).length).toBe(before);
+      expect(fetchAttempts).toEqual([]);
+    });
+  });
+
+  test("a failed Viewed read or write breaks nothing else and shows no raw gh text", async () => {
+    await withFakeGh(async ({ log, failGraphql }) => {
+      blockNetwork();
+      const client = await connectReview();
+      failGraphql("read");
+      const payload = await opened(client, await review(client, { pr: GH_URL }));
+      expect(payload.snapshot.unavailableReason).toBeUndefined();
+      const page = await loopback(payload.url + "api/state");
+      // SAFETY: /api/state is the connected page's own JSON; only these two fields are read here.
+      const state = JSON.parse(page?.body ?? "{}") as { status?: string; viewed?: ViewedState };
+      expect(state.status).toBe("ready");
+      expect(state.viewed).toEqual({ available: false, reason: "GitHub returned a server error" });
+      expect(page?.body).not.toContain("Bad Gateway");
+
+      // The read failed, so a later load reads it again and a write can then fail on its own.
+      failGraphql(null);
+      const csrf = /var CSRF = "([a-f0-9]{64})"/.exec((await loopback(payload.url))?.body ?? "")?.[1] ?? "";
+      expect((await loopbackPost(payload.url, "api/load", csrf, { url: GH_URL })).status).toBe(200);
+      failGraphql("write");
+      const refused = await loopbackPost(payload.url, "api/viewed", csrf, { snapshotId: payload.snapshot.id, path: "app.ts", viewed: true });
+      expect(refused.status).toBe(400);
+      expect(refused.json.error).toContain("The gh account is not authorized for that repository.");
+      expect(JSON.stringify(refused.json)).not.toContain("ghp_SECRETTOKEN");
+      expect(refused.json.state?.viewed).toMatchObject({ available: true });
+      expect(ghCalls(log).some(line => line.includes("markFileAsViewed"))).toBe(true);
     });
   });
 
