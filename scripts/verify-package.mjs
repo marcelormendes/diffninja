@@ -53,7 +53,9 @@ try {
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
   assert.equal(manifest.name, "diffninja");
   assert.deepEqual(manifest.bin, { diffninja: "dist/review/cli.js", "diffninja-mcp": "dist/review/mcp-cli.js" });
-  assert.deepEqual(readdirSync(packageDir).sort(), ["LICENSE", "README.md", "dist", "node_modules", "package.json", "scripts"]);
+  assert.deepEqual(readdirSync(packageDir).sort(), ["LICENSE", "README.md", "dist", "node_modules", "npm-shrinkwrap.json", "package.json", "scripts"]);
+  // npm-shrinkwrap.json ships in the package: when npm installs diffninja from the registry it
+  // pins every dependency to the tested version (a tarball install, as here, does not use it).
 
   // Each source owns exactly two emitted files. Catch stale output of any name,
   // not just the tmp-report.js leak that originally prompted this release gate.

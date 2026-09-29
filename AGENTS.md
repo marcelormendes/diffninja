@@ -17,7 +17,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
 
 ## Project specific instructions
 
-- Single Node.js CLI package (npm, `package-lock.json`). Node `>=22.18` required.
+- Single Node.js CLI package (npm; `npm-shrinkwrap.json` is the lockfile and ships in the package, so a consumer installs exactly the tested dependency tree with integrity hashes; `npm install` keeps it current). Node `>=22.18` required.
 - The package is prepared for public npm distribution as `diffninja`, with
   `diffninja` and `diffninja-mcp` bins only. Preparation is not publication.
   README documents npm-first installation and absolute Node + MCP entry paths;
