@@ -24,6 +24,19 @@ describe("npmEnvironment", () => {
     expect(npmEnvironment(shell, {}, { build: true })).not.toHaveProperty("VSCODE_GIT_ASKPASS_MAIN");
   });
 
+  test("passes the variables named in DIFFNINJA_NPM_ENV, so a private registry's token reaches npm, and still nothing else", () => {
+    const env = npmEnvironment({ ...shell, NODE_AUTH_TOKEN: "node-auth-secret", DIFFNINJA_NPM_ENV: " NPM_TOKEN, node_auth_token," });
+    expect(env).toMatchObject({ NPM_TOKEN: "npm-secret", NODE_AUTH_TOKEN: "node-auth-secret" });
+    for (const secret of ["GITHUB_TOKEN", "GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "ANTHROPIC_API_KEY", "SSH_AUTH_SOCK", "NODE_OPTIONS"]) expect(env, secret).not.toHaveProperty(secret);
+  });
+
+  test("refuses DIFFNINJA_NPM_ENV that holds anything but names, without repeating what it holds", () => {
+    for (const written of ["NPM_TOKEN=npm_abc123", "npm_abc123 NPM_TOKEN", "NPM-TOKEN", "1NPM"]) {
+      expect(() => npmEnvironment({ ...shell, DIFFNINJA_NPM_ENV: written }), written).toThrow(/^DIFFNINJA_NPM_ENV must list only environment variable names/);
+      expect(() => npmEnvironment({ ...shell, DIFFNINJA_NPM_ENV: written }), written).not.toThrow(written);
+    }
+  });
+
   test("names are matched without regard to case, as Windows spells them, and explicit overrides win", () => {
     const env = npmEnvironment({ Path: "C:\\Windows", SystemRoot: "C:\\Windows", ComSpec: "C:\\Windows\\system32\\cmd.exe", GITHUB_TOKEN: "x" }, { npm_config_global: "false" });
     expect(env).toEqual({ Path: "C:\\Windows", SystemRoot: "C:\\Windows", ComSpec: "C:\\Windows\\system32\\cmd.exe", npm_config_global: "false" });

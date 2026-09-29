@@ -34,7 +34,8 @@ tree-sitter grammar packages at exact versions (18 usable at once; Kotlin and
 Perl arrive as source and load only after `--build`). The lock that ships with
 diffninja holds the sha512 of every tarball, dependencies included, and
 `npm ci --ignore-scripts` refuses any tarball that differs, so no install script
-of any package runs and npm gets only the environment it needs (no tokens).
+of any package runs and npm gets only the environment it needs (no tokens,
+unless you name them in `DIFFNINJA_NPM_ENV`).
 `--build` additionally compiles the Kotlin and Perl grammars, which ship no
 prebuilt binary; that is the one case where an install script (theirs) runs. A review never installs anything: a missing grammar is named in
 the review's warnings, and the files that need it are skipped by call flows. The
@@ -113,6 +114,7 @@ the agent passes its link); none of them posts to GitHub or runs a command.
 | `DIFFNINJA_UPDATE_CHECK=1` | Turn on the update notice (off by default; never in CI or with `NO_UPDATE_NOTIFIER`). |
 | `DIFFNINJA_TRUST_PROJECT_COMPILER=1` | Let `referenceProject` run the repository's own TypeScript compiler. |
 | `DIFFNINJA_GRAMMAR_CACHE` | Where the grammars are installed and read. |
+| `DIFFNINJA_NPM_ENV=NPM_TOKEN,NODE_AUTH_TOKEN` | Names of environment variables that npm also gets when `setup` or `grammars install` runs it, for a private registry whose `.npmrc` reads its token from the environment. Names only; any other text is refused. The install scripts npm runs see them too (at `setup`, and with `grammars install --build`). |
 
 ## What is not covered
 

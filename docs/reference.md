@@ -199,6 +199,11 @@ published): `npm install -g diffninja`. Both bins ship in the package:
 call the `.cmd` form (`diffninja.cmd setup`) without changing the execution
 policy.
 
+- **Private registries.** When `setup` or `grammars install` runs npm, npm
+  gets a minimal environment with no tokens. If your `.npmrc` reads a registry
+  token from an environment variable (`_authToken=${NPM_TOKEN}`), name it in
+  `DIFFNINJA_NPM_ENV`, for example `DIFFNINJA_NPM_ENV=NPM_TOKEN,NODE_AUTH_TOKEN`.
+  It takes variable names only, and the install scripts npm runs see them too.
 - **Linux ARM64 needs a build toolchain at install time.**
   `tree-sitter-typescript@0.23.2` ships an x86-64 binary mislabeled as
   `linux-arm64`. Because it is an `optionalDependency`, that failure no longer
