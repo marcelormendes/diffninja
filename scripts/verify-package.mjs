@@ -94,16 +94,25 @@ try {
 
   // Native DLLs stay locked while loaded on Windows. Use a child that exits
   // before removing the sandbox, just like the CLI and MCP checks below.
-  // On-demand grammar installation runs on every platform: on Windows it
-  // exercises the npm-cli.js invocation, which cmd.exe shims cannot serve.
+  // Reviews never download grammars. Without the explicit install, a Python file is
+  // refused with the command to run and npm is never started; `diffninja grammars
+  // install` is the one installer, and it runs on every platform (on Windows it
+  // exercises the npm-cli.js invocation, which cmd.exe shims cannot serve).
+  const grammarCache = join(sandbox, "grammar cache");
+  const grammarEnv = { ...isolatedEnv, DIFFNINJA_GRAMMAR_CACHE: grammarCache };
+  run(process.execPath, ["--input-type=module", "-e", `
+    import assert from "node:assert/strict";
+    const { extractFunctions } = await import(process.argv[1]);
+    assert.equal(extractFunctions("sample.ts", "export function greet() { return 42; }")[0].key, "greet");
+    assert.throws(() => extractFunctions("sample.py", "def greet():\\n    return 42\\n"), /diffninja grammars install/);
+  `, pathToFileURL(join(packageDir, "dist/extract.js")).href], { env: grammarEnv });
+  run(process.execPath, [join(packageDir, manifest.bin.diffninja), "grammars", "install"], { env: grammarEnv });
   run(process.execPath, ["--input-type=module", "-e", `
     import assert from "node:assert/strict";
     const { extractFunctions } = await import(process.argv[1]);
     assert.equal(extractFunctions("sample.ts", "export function greet() { return 42; }")[0].key, "greet");
     assert.equal(extractFunctions("sample.py", "def greet():\\n    return 42\\n")[0].key, "greet");
-  `, pathToFileURL(join(packageDir, "dist/extract.js")).href], {
-    env: { ...isolatedEnv, CALLDIFF_GRAMMAR_CACHE: join(sandbox, "grammar cache") },
-  });
+  `, pathToFileURL(join(packageDir, "dist/extract.js")).href], { env: grammarEnv });
 
   const patch = "diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n@@ -1 +1 @@\n-export const value = 1;\n+export const value = 2;\n";
   // Reviews run only through MCP: the diffninja bin registers the server and

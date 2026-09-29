@@ -1,3 +1,4 @@
+import { takeMissingGrammars } from "../languages/grammars.js";
 import { resolve } from "node:path";
 import { runDiff } from "../run.js";
 import { readSnapshotFile } from "../git.js";
@@ -137,6 +138,7 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   // need a git range. Every other value is decided by what analysis returned.
   let callFlowAvailability: CallFlowAvailability = snapshots ? "no-changes" : "needs-git-range";
   if (snapshots && units.length) {
+    takeMissingGrammars();
     try {
       const flow = runDiff({
         cwd: cwd!, from: snapshots.from, to: snapshots.to, maxDepth: CALL_FLOW_MAX_DEPTH, color: false, locs: true,
@@ -168,6 +170,10 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
       callFlowAvailability = "failed";
       evidence = buildReviewEvidence(units);
       warnings.push("Call-flow analysis failed. Review is based on the diff only. Inspect repository context manually.");
+    }
+    const missing = takeMissingGrammars();
+    if (missing.length > 0) {
+      warnings.push(`Call flows skip the files these grammars would read: ${missing.join(", ")}. diffninja does not download code while it reviews; run \`npx diffninja grammars install\` once and review again to include them. Flows through those files are absent, which is not evidence of safety.`);
     }
   }
   if (options.referenceProject !== undefined) {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { get } from "node:http";
 import { serveConnected, type ConnectedSession } from "../src/review/connected.js";
 import { ConnectedReview } from "../src/review/github.js";
@@ -72,21 +72,19 @@ describe("connected session boundary", () => {
     expect((await fetch(url + "api/load", { method: "POST", headers, body: "{" })).status).toBe(400);
   });
   it("answers nothing without the session's secret path, so a local process that never got the link finds no page, no PR data and no way to post", async () => {
-    const calls: string[] = [];
     const review = new ConnectedReview();
-    for (const name of ["getState", "load", "preview", "submit", "reconcile"] as const) {
-      const original = review[name].bind(review) as (...args: unknown[]) => unknown;
-      (review as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => { calls.push(name); return original(...args); };
-    }
-    const session = await serveConnected(review, { analysis: async () => { calls.push("analysis"); return { available: false, reason: "x" }; } });
+    const touched = [vi.spyOn(review, "getState"), vi.spyOn(review, "load"), vi.spyOn(review, "preview"), vi.spyOn(review, "submit"), vi.spyOn(review, "reconcile")];
+    let analysisAsked = 0;
+    const session = await serveConnected(review, { analysis: async () => { analysisAsked += 1; return { available: false, reason: "x" }; } });
     servers.push(session);
     const origin = new URL(session.url).origin;
-    const secret = new URL(session.url).pathname.split("/")[1]!;
+    const secret = new URL(session.url).pathname.split("/")[1] ?? "";
     expect(secret).toMatch(/^[a-f0-9]{64}$/);
     // The page is what carries the CSRF token; fetch it the legitimate way once.
-    const csrf = /var CSRF = "([a-f0-9]{64})"/.exec(await (await fetch(session.url)).text())![1]!;
+    const csrf = /var CSRF = "([a-f0-9]{64})"/.exec(await (await fetch(session.url)).text())?.[1] ?? "";
+    expect(csrf).toHaveLength(64);
     const same = { Origin: origin, "Content-Type": "application/json", "X-Diffninja-CSRF": csrf };
-    const wrong = secret.replace(/^./, secret[0] === "a" ? "b" : "a");
+    const wrong = (secret[0] === "a" ? "b" : "a") + secret.slice(1);
     for (const prefix of ["/", `/${wrong}/`, `/${secret.slice(0, 63)}/`, `/${secret}x/`, `//${secret}/`, "/api/", `/${secret}`]) {
       for (const [method, path] of [["GET", ""], ["GET", "api/state"], ["GET", "api/analysis"], ["GET", "flow?snapshot=x"], ["POST", "api/load"], ["POST", "api/preview"], ["POST", "api/submit"], ["POST", "api/reconcile"]] as const) {
         const response = await fetch(origin + prefix + path, { method, headers: method === "POST" ? same : {}, body: method === "POST" ? "{}" : undefined });
@@ -94,11 +92,13 @@ describe("connected session boundary", () => {
         expect(await response.text()).not.toMatch(/CSRF|snapshot|diff/i);
       }
     }
-    expect(calls).toEqual([]);
+    for (const spy of touched) expect(spy).not.toHaveBeenCalled();
+    expect(analysisAsked).toBe(0);
     // The right prefix works, and still needs the CSRF token to change anything.
     expect((await fetch(session.url + "api/state")).status).toBe(200);
     expect((await fetch(session.url + "api/submit", { method: "POST", headers: { ...same, "X-Diffninja-CSRF": "0".repeat(64) }, body: "{}" })).status).toBe(403);
-    expect(calls).toEqual(["getState"]);
+    expect(touched[0]).toHaveBeenCalledTimes(1);
+    for (const spy of touched.slice(1)) expect(spy).not.toHaveBeenCalled();
   });
   it("gives every response its own script nonce, never the CSRF token, and sends the page's requests under the secret prefix", async () => {
     const { url } = await start();

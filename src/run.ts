@@ -1,3 +1,4 @@
+import { GrammarNotInstalledError } from "./languages/grammars.js";
 import {
   buildCallTreeFromInfo,
   exportsInFile,
@@ -93,6 +94,8 @@ function loadIndex(
     try {
       extracted.set(file.path, extractCached(file.path, source, cache));
     } catch (error) {
+      // A grammar that is not installed is reported once, by the review, not per file.
+      if (error instanceof GrammarNotInstalledError) return;
       const message = error instanceof Error ? error.message : String(error);
       console.error(
         `warn: failed to parse ${file.path} @ ${snapshot.ref}: ${message}`,
