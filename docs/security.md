@@ -45,6 +45,10 @@ gets the dependency versions diffninja was tested with.
 
 - Nothing in the repository under review, ever (git plumbing only, read only).
 - `~/.cache/diffninja/grammars` (mode 0700) when you run `grammars install`.
+  diffninja loads grammars from it only while the directory belongs to you and
+  no other user can write to it (on Windows this is not checked). The marker
+  file inside records which lock installed the cache. It holds only public
+  data, so it is a consistency check, not a signature.
 - Your agents' configuration files, when you run `diffninja setup`
   (`~/.claude.json`, Codex's `config.toml`, `~/.omp/agent/mcp.json`,
   `~/.pi/agent/mcp.json`): one `diffninja` entry each, atomically.

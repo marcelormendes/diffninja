@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
@@ -51,9 +51,28 @@ export function grammarCacheDir(): string {
   return join(homedir(), ".cache", "diffninja", "grammars");
 }
 
-/** Written last by the installer, so a cache without it (or with another lock's) is not trusted. */
+/**
+ * Written last by the installer, so a cache without it (or with another lock's) is not trusted.
+ * It is a consistency check, not authentication. It holds only public data (the lock's digest),
+ * so anyone who can write the directory can write one. Ownership is what cacheDirectoryProblem checks.
+ */
 const CACHE_MARKER = ".diffninja-grammars.json";
 const markerSchema = z.object({ format: z.literal(1), lockSha256: z.string(), installedAt: z.string(), built: z.boolean().optional() });
+
+/**
+ * Why grammars in this directory must not be loaded, or undefined when it is safe to.
+ * It must belong to the user running diffninja and be writable by no one else. A missing
+ * directory is no problem, since there is nothing in it to trust. Windows has no uid or mode bits,
+ * so nothing is checked there.
+ */
+export function cacheDirectoryProblem(dir: string): string | undefined {
+  const uid = process.getuid?.();
+  const stats = uid === undefined ? undefined : statSync(dir, { throwIfNoEntry: false });
+  if (stats === undefined) return undefined;
+  if (stats.uid !== uid) return `${dir} belongs to another user (uid ${stats.uid})`;
+  if ((stats.mode & 0o022) !== 0) return `other users can write to ${dir} (mode ${(stats.mode & 0o777).toString(8)})`;
+  return undefined;
+}
 
 /** The exact version diffninja pins for a grammar package, or undefined when it is not one of them. */
 export function pinnedVersion(npmPackage: string): string | undefined {
@@ -76,6 +95,7 @@ export function grammarLockDigest(): string {
 
 /** The marker of a cache this diffninja's lock installed, or undefined for anything else. */
 function readCacheMarker(cacheDir: string): z.infer<typeof markerSchema> | undefined {
+  if (cacheDirectoryProblem(cacheDir) !== undefined) return undefined;
   try {
     const marker = markerSchema.safeParse(JSON.parse(readFileSync(join(cacheDir, CACHE_MARKER), "utf8")));
     return marker.success && marker.data.lockSha256 === grammarLockDigest() ? marker.data : undefined;
@@ -352,6 +372,10 @@ export interface InstalledGrammars {
 export function installPinnedGrammars(options: { cacheDir?: string; runNpm?: NpmRunner; build?: boolean } = {}): InstalledGrammars {
   const cacheDir = options.cacheDir ?? grammarCacheDir();
   mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+  // mkdir leaves an existing directory's mode alone, so tighten one's own and refuse anyone else's.
+  if (statSync(cacheDir).uid === process.getuid?.()) chmodSync(cacheDir, 0o700);
+  const problem = cacheDirectoryProblem(cacheDir);
+  if (problem !== undefined) throw new Error(`Refusing to install grammars: ${problem}, so its contents could not be trusted. Set DIFFNINJA_GRAMMAR_CACHE to a directory of your own.`);
   // Untrusted until the install below finishes and verifies.
   rmSync(join(cacheDir, CACHE_MARKER), { force: true });
   writeFileSync(join(cacheDir, "package.json"), JSON.stringify(GRAMMAR_PACKAGE_JSON, null, 2) + "\n", "utf8");

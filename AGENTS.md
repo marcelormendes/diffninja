@@ -177,8 +177,12 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `npm ci --ignore-scripts` with npm's environment cut to what it needs
     (`child-env.ts`), Kotlin and Perl (no prebuilt binary) are compiled only
     with `--build`. The cache (`~/.cache/diffninja/grammars`, 0700) is trusted
-    only when its marker holds this lock's digest and the installed version is
-    the pin. A missing grammar raises `GrammarNotInstalledError`; the review
+    only when the directory belongs to the current user and no one else can
+    write it (not checked on Windows), its marker holds this lock's digest, and
+    the installed version is the pin. The marker holds only public data, so it is a
+    consistency check, not authentication. Install tightens a directory of the
+    user's own to 0700 and refuses anyone else's; `test/global-setup.ts` checks
+    both levels of the shared test cache path the same way. A missing grammar raises `GrammarNotInstalledError`; the review
     warns once which grammars its call flows skipped. Call-flow indexing skips
     source files over 1 MiB and files past the first 15,000 per revision, and
     says so.

@@ -217,7 +217,8 @@ policy.
   runs an install script) into `~/.cache/diffninja/grammars`
   (`C:\Users\<you>\.cache\diffninja\grammars` on Windows; `DIFFNINJA_GRAMMAR_CACHE`
   moves it), a private directory diffninja trusts only if it wrote it for this
-  lock. `diffninja grammars status` shows what is installed. Kotlin and Perl
+  lock and it belongs to you with no other user able to write to it (not checked
+  on Windows). `diffninja grammars status` shows what is installed. Kotlin and Perl
   grammars ship no prebuilt binary: `diffninja grammars install --build`
   compiles them on your machine and needs Python and a C/C++ toolchain. A
   review without a grammar still runs on the diff, and its warnings name the

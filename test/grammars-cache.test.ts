@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -83,6 +83,33 @@ describe("a review never downloads a grammar", () => {
     expect(grammarStatus(cache).packages.every((entry) => !entry.installed)).toBe(true);
   });
 
+  // The marker holds only public data, so the directory's owner and mode are what make it trustworthy.
+  test.skipIf(process.platform === "win32")("a cache other users can write is not trusted, whatever its marker says", () => {
+    installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm() });
+    for (const mode of [0o777, 0o775, 0o757]) {
+      chmodSync(cache, mode);
+      expect(grammarStatus(cache).trusted, mode.toString(8)).toBe(false);
+      expect(() => loadGrammarPackage("tree-sitter-python"), mode.toString(8)).toThrow(GrammarNotInstalledError);
+    }
+    chmodSync(cache, 0o755);
+    expect(loadGrammarPackage("tree-sitter-python")).toEqual({ fake: true });
+  });
+
+  test.skipIf(process.platform === "win32")("a cache that belongs to another user is not trusted, and install refuses to write into it", () => {
+    installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm() });
+    const owner = statSync(cache).uid;
+    vi.spyOn(process, "getuid").mockReturnValue(owner + 1);
+    try {
+      expect(grammarStatus(cache).trusted).toBe(false);
+      expect(() => loadGrammarPackage("tree-sitter-python")).toThrow(GrammarNotInstalledError);
+      const calls: string[][] = [];
+      expect(() => installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm({ calls }) })).toThrow(`Refusing to install grammars: ${cache} belongs to another user (uid ${owner})`);
+      expect(calls).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   test("the grammars diffninja ships itself load from its own dependencies, not from the cache", () => {
     expect(loadGrammarPackage("tree-sitter-typescript")).toBeTruthy();
     expect(loadGrammarPackage("tree-sitter-javascript")).toBeTruthy();
@@ -109,6 +136,13 @@ describe("installPinnedGrammars", () => {
     expect(result.packages.map((entry) => entry.name)).toEqual(Object.keys(GRAMMAR_PINS));
     expect(JSON.parse(readFileSync(join(target, ".diffninja-grammars.json"), "utf8"))).toMatchObject({ format: 1, lockSha256: grammarLockDigest(), built: false });
     if (process.platform !== "win32") expect(statMode(target)).toBe(0o700);
+  });
+
+  test.skipIf(process.platform === "win32")("install makes an existing directory of one's own private, so the cache it fills is trusted", () => {
+    chmodSync(cache, 0o775);
+    installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm() });
+    expect(statMode(cache)).toBe(0o700);
+    expect(grammarStatus(cache).trusted).toBe(true);
   });
 
   test("runs an install script only for the two build-only grammars, and only when asked", () => {
