@@ -23,7 +23,8 @@ Check what you run with `npm ls -g diffninja`, or read the version in the
 - diffninja is a Node program that your coding agent starts on your machine. It
   runs with your user rights. It is not sandboxed.
 - It calls no AI model, needs no API key, and has no telemetry of its own.
-- Reviewing an inline diff runs no other program and opens no connection.
+- Reviewing an inline diff runs no other program and opens no connection,
+  apart from the optional update notice.
 - Reviewing a git range runs `git` in the repository you name.
 - Reviewing a pull request runs your GitHub CLI (`gh`), which talks to GitHub
   with your login.
@@ -151,7 +152,7 @@ review's warnings, and call flows skip the files that need it.
 `diffninja setup` rewrites each JSON config file it changes in full
 (`~/.claude.json`, `~/.omp/agent/mcp.json`, `~/.pi/agent/mcp.json`). It parses
 the file and writes it back in standard form, so formatting can change.
-Indentation becomes two spaces. Escapes such as `é` become the character.
+Indentation becomes two spaces. Escapes such as `\u00e9` become the character.
 An integer above 2^53 is rounded (9007199254740993 becomes 9007199254740992).
 It writes through a temporary file and a rename, keeps the file's permissions,
 follows symlinks, and keeps no backup. `--uninstall` removes the entry but does

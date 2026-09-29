@@ -82,7 +82,10 @@ reference. Reports therefore contain unchanged code as well as changed hunks;
 keep them private.
 
 Git-range inputs have repository call flows. Patch-only inputs show a short git-range note, not
-invented diagrams. `callFlowAvailability` distinguishes `available`,
+invented diagrams. diffninja reads the repository with read-only git commands.
+It never runs fetch or checkout there. In a partial clone, git itself may fetch
+missing objects from that clone's own remote and store them in `.git` when
+diffninja reads them. `callFlowAvailability` distinguishes `available`,
 `needs-git-range`, `no-changes`, `partial` (call flows left out some source
 files, so paths through them are absent, with or without trees), and `failed`.
 
