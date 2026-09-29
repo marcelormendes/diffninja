@@ -10,6 +10,10 @@ function run(...args: string[]) {
   return spawnSync(process.execPath, ["--import", tsx, cli, ...args], { encoding: "utf8" });
 }
 
+function runWith(env: NodeJS.ProcessEnv, ...args: string[]) {
+  return spawnSync(process.execPath, ["--import", tsx, cli, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
+}
+
 describe("diffninja command", () => {
   it("prints setup-only help with no arguments or --help", () => {
     for (const args of [[], ["--help"]]) {
@@ -42,6 +46,15 @@ describe("diffninja command", () => {
       expect(result.stderr).not.toContain("owner/repo");
       expect(result.stdout).toBe("");
     }
+  });
+
+  it("a malformed DIFFNINJA_NPM_ENV stops setup with its own message, and every other command still runs", () => {
+    const env = { DIFFNINJA_NPM_ENV: "NPM_TOKEN=npm_abc123" };
+    expect(runWith(env, "--help").status).toBe(0);
+    const setup = runWith(env, "setup", "--dry-run");
+    expect(setup.status).toBe(1);
+    expect(setup.stderr).toContain("diffninja: DIFFNINJA_NPM_ENV must list only environment variable names");
+    expect(setup.stderr).not.toContain("npm_abc123");
   });
 
   it("rejects positional arguments to setup", () => {

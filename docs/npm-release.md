@@ -60,7 +60,11 @@ metadata/documentation. Grammar support comes from npm dependencies:
   they ship. Kotlin and Perl ship none: `--build` then runs `npm rebuild` for
   those two packages only. A `.diffninja-grammars.json` marker holding the lock's
   digest is written last, and a cache without it (or with another lock's) is not
-  read. The shared calldiff cache from earlier versions is never read.
+  read. The marker holds only public data, so it is a consistency check, not
+  authentication. A cache directory that belongs to another user, or that another
+  user can write, is not read either, and install refuses it (it tightens a
+  directory of your own to 0700). Windows skips that owner and mode check. The
+  shared calldiff cache from earlier versions is never read.
 
 `tree-sitter-javascript@^0.25.0` is a direct dependency of diffninja, next to
 `tree-sitter-typescript`, so both load from the package's own `node_modules`

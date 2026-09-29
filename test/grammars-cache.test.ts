@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -9,6 +9,9 @@ import { GrammarNotInstalledError, grammarLockDigest, grammarStatus, installPinn
 const lockSchema = z.object({
   packages: z.record(z.string(), z.object({ version: z.string().optional(), integrity: z.string().optional(), resolved: z.string().optional(), dependencies: z.record(z.string(), z.string()).optional() })),
 });
+
+// A cache is read only by a diffninja with the same lock, so the printed command names this exact version.
+const ownVersion = z.object({ version: z.string() }).parse(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))).version;
 
 let cache: string;
 beforeEach(() => { cache = mkdtempSync(join(tmpdir(), "diffninja-grammar-cache-")); vi.stubEnv("DIFFNINJA_GRAMMAR_CACHE", cache); takeMissingGrammars(); });
@@ -51,7 +54,7 @@ describe("the pinned grammar lock", () => {
 describe("a review never downloads a grammar", () => {
   test("without an installed cache the grammar is reported missing, not fetched", () => {
     expect(() => loadGrammarPackage("tree-sitter-python")).toThrow(GrammarNotInstalledError);
-    expect(() => loadGrammarPackage("tree-sitter-python")).toThrow(/npx diffninja grammars install/);
+    expect(() => loadGrammarPackage("tree-sitter-python")).toThrow(`run \`npx -y diffninja@${ownVersion} grammars install\` once`);
     expect(takeMissingGrammars()).toEqual(["tree-sitter-python"]);
     expect(takeMissingGrammars()).toEqual([]);
   });
@@ -83,6 +86,33 @@ describe("a review never downloads a grammar", () => {
     expect(grammarStatus(cache).packages.every((entry) => !entry.installed)).toBe(true);
   });
 
+  // The marker holds only public data, so the directory's owner and mode are what make it trustworthy.
+  test.skipIf(process.platform === "win32")("a cache other users can write is not trusted, whatever its marker says", () => {
+    installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm() });
+    for (const mode of [0o777, 0o775, 0o757]) {
+      chmodSync(cache, mode);
+      expect(grammarStatus(cache).trusted, mode.toString(8)).toBe(false);
+      expect(() => loadGrammarPackage("tree-sitter-python"), mode.toString(8)).toThrow(GrammarNotInstalledError);
+    }
+    chmodSync(cache, 0o755);
+    expect(loadGrammarPackage("tree-sitter-python")).toEqual({ fake: true });
+  });
+
+  test.skipIf(process.platform === "win32")("a cache that belongs to another user is not trusted, and install refuses to write into it", () => {
+    installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm() });
+    const owner = statSync(cache).uid;
+    vi.spyOn(process, "getuid").mockReturnValue(owner + 1);
+    try {
+      expect(grammarStatus(cache).trusted).toBe(false);
+      expect(() => loadGrammarPackage("tree-sitter-python")).toThrow(GrammarNotInstalledError);
+      const calls: string[][] = [];
+      expect(() => installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm({ calls }) })).toThrow(`Refusing to install grammars: ${cache} belongs to another user (uid ${owner})`);
+      expect(calls).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   test("the grammars diffninja ships itself load from its own dependencies, not from the cache", () => {
     expect(loadGrammarPackage("tree-sitter-typescript")).toBeTruthy();
     expect(loadGrammarPackage("tree-sitter-javascript")).toBeTruthy();
@@ -91,7 +121,7 @@ describe("a review never downloads a grammar", () => {
 
   test("Kotlin and Perl stay unavailable until their source build was asked for", () => {
     installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm() });
-    expect(() => loadGrammarPackage("tree-sitter-kotlin")).toThrow(/npx diffninja grammars install --build/);
+    expect(() => loadGrammarPackage("tree-sitter-kotlin")).toThrow(`run \`npx -y diffninja@${ownVersion} grammars install --build\` once`);
     expect(loadGrammarPackage("tree-sitter-go")).toEqual({ fake: true });
     installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm(), build: true });
     expect(loadGrammarPackage("tree-sitter-kotlin")).toEqual({ fake: true });
@@ -109,6 +139,13 @@ describe("installPinnedGrammars", () => {
     expect(result.packages.map((entry) => entry.name)).toEqual(Object.keys(GRAMMAR_PINS));
     expect(JSON.parse(readFileSync(join(target, ".diffninja-grammars.json"), "utf8"))).toMatchObject({ format: 1, lockSha256: grammarLockDigest(), built: false });
     if (process.platform !== "win32") expect(statMode(target)).toBe(0o700);
+  });
+
+  test.skipIf(process.platform === "win32")("install makes an existing directory of one's own private, so the cache it fills is trusted", () => {
+    chmodSync(cache, 0o775);
+    installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm() });
+    expect(statMode(cache)).toBe(0o700);
+    expect(grammarStatus(cache).trusted).toBe(true);
   });
 
   test("runs an install script only for the two build-only grammars, and only when asked", () => {

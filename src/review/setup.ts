@@ -212,8 +212,6 @@ async function exitCode(child: ChildProcess): Promise<number> {
   }
 }
 
-const realNpm = createNpm();
-
 /** `npm root -g`, or undefined when npm is unavailable or fails. */
 async function globalRoot(npm: Npm): Promise<string | undefined> {
   try {
@@ -671,7 +669,7 @@ export async function runSetup(options: SetupOptions = {}, deps: SetupDeps = {})
   let entry: McpEntry | undefined;
   let viaNpx = false;
   if (!uninstall) {
-    const resolved = await resolveEntry(options.noInstall === true, deps.npm ?? realNpm, quiet, dryRun, version);
+    const resolved = await resolveEntry(options.noInstall === true, deps.npm ?? createNpm(), quiet, dryRun, version);
     entry = resolved.entry;
     viaNpx = resolved.viaNpx;
   }

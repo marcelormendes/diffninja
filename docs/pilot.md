@@ -37,8 +37,9 @@ and gives you a `http://127.0.0.1:…/` link. On that page:
 - **Call flows** appear when your clone already has the pull request's commits.
   diffninja never fetches; if you want them, run
   `git fetch origin pull/123/head` in your clone first.
-- The review you write is yours. Nothing is posted until you press Submit, and
-  you do not have to submit through diffninja at all.
+- The review you write is yours. Nothing is posted until Submit is pressed on
+  the page, diffninja tells your agent never to press it, and you do not have
+  to submit through diffninja at all.
 
 ## What to write down, per pull request
 

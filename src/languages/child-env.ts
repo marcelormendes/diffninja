@@ -24,14 +24,29 @@ const KEPT = new Set([
 const BUILD_KEPT = new Set(["CC", "CXX", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "PYTHON", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "INCLUDE", "LIB", "LIBPATH"]);
 const BUILD_PREFIXES = ["GYP_", "VSINSTALLDIR", "VCINSTALLDIR", "VCTOOLS", "VSCMD_", "VS1", "VISUALSTUDIO", "WINDOWSSDK", "UNIVERSALCRT", "UCRT"];
 
+/**
+ * The variables the person running diffninja chose to pass to npm as well, named in
+ * DIFFNINJA_NPM_ENV (for example `NPM_TOKEN,NODE_AUTH_TOKEN`). A private registry whose
+ * `.npmrc` reads its token from the environment answers 401 without it. Names only. Anything
+ * else is refused without being echoed, because what was written there may be the secret itself.
+ */
+function chosenNames(env: NodeJS.ProcessEnv): ReadonlySet<string> {
+  const names = (env["DIFFNINJA_NPM_ENV"] ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "");
+  if (names.some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
+    throw new Error("DIFFNINJA_NPM_ENV must list only environment variable names separated by commas, such as NPM_TOKEN,NODE_AUTH_TOKEN.");
+  }
+  return new Set(names.map((name) => name.toUpperCase()));
+}
+
 /** Compared without regard to case: Windows spells `Path`, `ComSpec` and `SystemRoot` its own way. */
 export function npmEnvironment(env: NodeJS.ProcessEnv = process.env, extra: Readonly<Record<string, string>> = {}, options: { readonly build?: boolean } = {}): NodeJS.ProcessEnv {
+  const chosen = chosenNames(env);
   const out: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(env)) {
     if (value === undefined) continue;
     const upper = name.toUpperCase();
     const forBuild = options.build === true && (BUILD_KEPT.has(upper) || BUILD_PREFIXES.some((prefix) => upper.startsWith(prefix)));
-    if (KEPT.has(upper) || upper.startsWith("NPM_CONFIG_") || upper.startsWith("LC_") || forBuild) out[name] = value;
+    if (KEPT.has(upper) || upper.startsWith("NPM_CONFIG_") || upper.startsWith("LC_") || forBuild || chosen.has(upper)) out[name] = value;
   }
   return { ...out, ...extra };
 }

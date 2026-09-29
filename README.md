@@ -21,14 +21,16 @@ submit the review to GitHub yourself.
   goal. The answers sit above the code.
 - **Suggested comments, never posted for you.** The agent can suggest short
   line comments. You add them with one click, edit them, or dismiss them.
-  Nothing reaches GitHub until you press Submit.
+  None of diffninja's tools posts anything. The review reaches GitHub when
+  Submit is pressed on your review page, and your agent is told never to do
+  that itself.
 - **Facts you can check.** diffninja points at the exact lines that changed a
   comparison, a limit, an input check, or error handling. It also shows call
   flows: which functions call the changed code.
 - **Private by design.** The analysis runs on your machine. diffninja calls no
   AI model, needs no API key, makes no request of its own while it reviews, and
   never downloads or builds code during a review. It uses your existing GitHub
-  CLI login to read the PR and post your review when you press Submit. Your
+  CLI login to read the PR and post your review when Submit is pressed. Your
   agent sends what diffninja returns to its own model, as it does with any tool
   result. What runs, what is written and what is exposed is in
   [docs/security.md](docs/security.md).
@@ -89,16 +91,14 @@ your machine at `127.0.0.1`). On the page:
 Tip: if your agent is running inside a local clone of the repository, it can
 pass the clone to diffninja. You then also get call-flow diagrams for the
 changed files. Call flows read JavaScript and TypeScript out of the box. For
-other languages (Python, Go, Java, Rust, C#, Ruby, and more), run this once;
-it is the only thing diffninja ever downloads, exact versions checked against
-hashes shipped with diffninja, and no install script runs:
-
-```bash
-npx -y diffninja@latest grammars install
-```
-
-Without it the review says which files its call flows skipped. Kotlin and Perl
-also need `--build`, which compiles them on your machine.
+other languages (Python, Go, Java, Rust, C#, Ruby, and more), install their
+grammars once. It is the only thing diffninja ever downloads, exact versions
+checked against hashes shipped with diffninja, and no install script runs. Use
+the version of diffninja your agent runs, because diffninja may not read
+grammars that another version installed. A review that needs them says which
+files its call flows skipped and prints the exact command, which has the form
+`npx -y diffninja@<version> grammars install`. Kotlin and Perl also need
+`--build`, which compiles them on your machine.
 
 You can also review changes that aren't a PR yet:
 

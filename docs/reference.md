@@ -96,8 +96,12 @@ with bounded candidate and excerpt counts. A finding is a source observation,
 not a runtime defect verdict. Unknown bindings, dynamic calls, and unsupported
 syntax remain unproven. The report lists check coverage and limitations.
 
-The optional reference checker runs the repository's **trusted installed**
-TypeScript compiler against immutable before/after trees. It does not run PR
+The optional reference checker runs a TypeScript compiler installed beside
+diffninja (the repository's own only when whoever configured the server set
+`DIFFNINJA_TRUST_PROJECT_COMPILER=1`) against immutable before/after trees.
+diffninja's package ships no compiler. With a global install of diffninja,
+`npm install -g typescript` puts one beside it. A diffninja started through npx
+cannot use one, and the check then reports not checked. It does not run PR
 scripts, install dependencies, emit code, or change the checkout. It compares
 only diagnostics 2304, 2305, 2307, 2339, 2503, 2551, 2552, and 7016, subtracting
 pre-existing errors even when lines moved; unchanged consumers can be findings.
@@ -195,6 +199,11 @@ published): `npm install -g diffninja`. Both bins ship in the package:
 call the `.cmd` form (`diffninja.cmd setup`) without changing the execution
 policy.
 
+- **Private registries.** When `setup` or `grammars install` runs npm, npm
+  gets a minimal environment with no tokens. If your `.npmrc` reads a registry
+  token from an environment variable (`_authToken=${NPM_TOKEN}`), name it in
+  `DIFFNINJA_NPM_ENV`, for example `DIFFNINJA_NPM_ENV=NPM_TOKEN,NODE_AUTH_TOKEN`.
+  It takes variable names only, and the install scripts npm runs see them too.
 - **Linux ARM64 needs a build toolchain at install time.**
   `tree-sitter-typescript@0.23.2` ships an x86-64 binary mislabeled as
   `linux-arm64`. Because it is an `optionalDependency`, that failure no longer
@@ -210,14 +219,18 @@ policy.
   --build-from-source` rebuilds it against the host toolchain.
 - **Grammars.** Call flows read JavaScript and TypeScript with grammars that
   ship in the package. Every other language needs its tree-sitter grammar,
-  and a review never downloads one: run `diffninja grammars install` once (or
-  `npx -y diffninja@latest grammars install`). It installs 20 exact versions
+  and a review never downloads one: run `diffninja grammars install` once, with
+  the diffninja version your agent runs (a review's warning prints the exact
+  `npx -y diffninja@<version> grammars install`; a cache another version's lock
+  installed is not read, so `@latest` can install grammars an older server
+  ignores). It installs 20 exact versions
   (18 usable at once, see `--build` below) with `npm ci --ignore-scripts` from a lock that ships with diffninja (the
   sha512 of every tarball, dependencies included, is checked, and no package
   runs an install script) into `~/.cache/diffninja/grammars`
   (`C:\Users\<you>\.cache\diffninja\grammars` on Windows; `DIFFNINJA_GRAMMAR_CACHE`
   moves it), a private directory diffninja trusts only if it wrote it for this
-  lock. `diffninja grammars status` shows what is installed. Kotlin and Perl
+  lock and it belongs to you with no other user able to write to it (not checked
+  on Windows). `diffninja grammars status` shows what is installed. Kotlin and Perl
   grammars ship no prebuilt binary: `diffninja grammars install --build`
   compiles them on your machine and needs Python and a C/C++ toolchain. A
   review without a grammar still runs on the diff, and its warnings name the
