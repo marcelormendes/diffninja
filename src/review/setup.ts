@@ -19,6 +19,7 @@ import { lstat, mkdir, open, readFile, readlink, realpath, rename, rm, stat } fr
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { z } from "zod";
+import { npmEnvironment, windowsShell } from "../languages/child-env.js";
 import { npmCliPath, npmSpawnSpec } from "../languages/grammars.js";
 import { removeTomlTable, upsertTomlTable, type TomlTable } from "./toml.js";
 import { compareVersions, packageVersion } from "./version.js";
@@ -130,7 +131,7 @@ export function windowsCliEntry(
 ): McpEntry {
   const npmCli = cliPath(`${name}-cli.js`);
   if (npmCli === undefined) {
-    return { command: process.env["ComSpec"] ?? "cmd.exe", args: ["/d", "/s", "/c", name, ...args] };
+    return { command: windowsShell(), args: ["/d", "/s", "/c", name, ...args] };
   }
   return { command: process.execPath, args: [npmCli, ...args] };
 }
@@ -172,7 +173,8 @@ export function globalIsOlder(installed: string | undefined, version: string): b
  */
 export function createNpm(overrides: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): Npm {
   const platform = overrides.platform ?? process.platform;
-  const env = overrides.env;
+  // Installing runs the install scripts of diffninja and its dependencies: they get what npm needs, not the shell's tokens.
+  const env = overrides.env ?? npmEnvironment();
   const run = (args: string[], inherit: boolean): ChildProcess => {
     const spec = npmSpawnSpec(args, platform);
     return spawn(spec.file, spec.args, inherit ? { stdio: "inherit", env } : { env });

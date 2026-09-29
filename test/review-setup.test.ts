@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { parse } from "smol-toml";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CLI_NAMES,
   codexConfigPath,
@@ -208,6 +208,31 @@ describe("createNpm", () => {
         "diffninja@9.9.9",
       ]);
     } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("createNpm's environment", () => {
+  it.skipIf(process.platform === "win32")("gives npm and the install scripts it runs no token from the shell", async () => {
+    const home = fakeHome();
+    try {
+      const bin = join(home, "bin");
+      mkdirSync(bin, { recursive: true });
+      const envFile = join(home, "npm-env");
+      writeFileSync(join(bin, "npm"), `#!/bin/sh\nenv > '${envFile}'\nif [ "$1" = "root" ]; then echo /nowhere; fi\n`, { mode: 0o755 });
+      vi.stubEnv("PATH", `${bin}${delimiter}${process.env["PATH"] ?? ""}`);
+      vi.stubEnv("GITHUB_TOKEN", "ghp_should_not_reach_npm");
+      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws_should_not_reach_npm");
+      vi.stubEnv("NODE_OPTIONS", "--require /tmp/should-not-reach-npm.js");
+      vi.stubEnv("npm_config_registry", "https://registry.example.test/");
+      expect(await createNpm().installG("diffninja@9.9.9")).toBe(true);
+      const seen = readFileSync(envFile, "utf8");
+      expect(seen).not.toMatch(/should_not_reach|should-not-reach/);
+      expect(seen).toContain("npm_config_registry=https://registry.example.test/");
+      expect(seen).toContain(`PATH=${bin}`);
+    } finally {
+      vi.unstubAllEnvs();
       rmSync(home, { recursive: true, force: true });
     }
   });
