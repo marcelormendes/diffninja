@@ -10,7 +10,8 @@
  *   - an exact no-op hunk and a blank-only change to a .md/.txt document pass;
  *   - every other hunk gets its local change facts ({@link changeFactsOf}): a
  *     formatting- or comment-only change passes, a file type diffninja cannot
- *     read is `uncertain` for a human to read, a code or configuration change
+ *     read, or a hunk with a changed line too long to read, is `uncertain` for a
+ *     human to read, a code or configuration change
  *     outside a test file is `attention`, documentation is `attention` when it
  *     changes an instruction, a link, or a limit and `low` otherwise, and a
  *     test-file change is `attention` only when it changes a limit, discards a
@@ -31,6 +32,7 @@ import {
   CHANGE_FACT_QUESTIONS,
   changeFactsOf,
   factQuestionsFor,
+  MAX_READ_LINE_CHARS,
   type ChangeFactQuestion,
   type ChangeFacts,
 } from "./change-facts.js";
@@ -119,7 +121,7 @@ const FACT_LABEL = {
 const STATUS_REASON = {
   attention:
     "attention: code or configuration outside a test file changed, documentation changed an instruction, link, or limit, or a test changed a limit, discarded a failure, or weakened a gate",
-  uncertain: "uncertain: diffninja does not read this file type, so no facts were established and a person reads it",
+  uncertain: `uncertain: diffninja does not read this hunk (a file type it cannot read, or a changed line over ${MAX_READ_LINE_CHARS.toLocaleString("en-US")} characters), so no facts were established and a person reads it`,
   low: "low: a test-file change, an import-only change (read where the names are used), or a documentation change with no instruction, link, or limit change",
   passed: "passed: the text is identical once comments and layout are ignored",
 } satisfies Record<ReviewStatus, string>;

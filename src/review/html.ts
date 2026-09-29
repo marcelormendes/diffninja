@@ -2,7 +2,7 @@ import { hiddenControlsIn } from "./hidden-characters.js";
 import type { UpdateNotice } from "./update-check.js";
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
 import { verdictOf, type ReviewQuestion } from "./questions.js";
-import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
+import { factQuestionsFor, unreadCause, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
 import { renderBusinessView, BUSINESS_STYLES } from "./process-html.js";
@@ -501,7 +501,7 @@ function renderFacts(item: ReviewItem): string {
   const notes: string[] = [];
   let list = "";
   if (facts.language === null) {
-    notes.push("diffninja does not read this file type, so no facts were established. Read this hunk yourself.");
+    notes.push(`diffninja does not read ${unreadCause(item.file)}, so no facts were established. Read this hunk yourself.`);
   } else {
     list = factQuestionsFor(facts.language).map((question) => {
       const evidence = facts.evidence[question];

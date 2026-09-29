@@ -426,7 +426,7 @@ describe("review HTML", () => {
 
   test("an unread file type says so instead of listing answers", () => {
     const html = visible(renderReview(report([item({
-      file: "db/query.sql",
+      file: "schema/query.graphql",
       status: "uncertain",
       facts: { language: null, inert: null, answers: {}, evidence: {} },
     })])));
@@ -434,6 +434,17 @@ describe("review HTML", () => {
     expect(obs).toContain("diffninja does not read this file type");
     expect(obs).not.toContain("<dt>");
     expect(obs).not.toMatch(/bug|defect found|problem with the code/i);
+  });
+
+  test("a hunk left unread for a long line says why, not that its file type is unreadable", () => {
+    const html = visible(renderReview(report([item({
+      file: "src/checkout.ts",
+      status: "uncertain",
+      facts: { language: null, inert: null, answers: {}, evidence: {} },
+    })])));
+    const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
+    expect(obs).toContain("changed line over 4,000 characters");
+    expect(obs).not.toContain("this file type");
   });
 
   test("a formatting-only change says so", () => {

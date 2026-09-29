@@ -11,7 +11,7 @@
  * MCP client that recorded it.
  */
 
-import { CHANGE_FACT_QUESTIONS, type ChangeFactQuestion } from "./change-facts.js";
+import { CHANGE_FACT_QUESTIONS, unreadCause, type ChangeFactQuestion } from "./change-facts.js";
 import { verdictOf, type QuestionKind, type Verdict } from "./questions.js";
 import type { UpdateNotice } from "./update-check.js";
 import type { AgentSummary, ReviewItem, ReviewReport, ReviewStatus, SuggestedComment } from "./types.js";
@@ -184,7 +184,7 @@ function noteOf(item: ReviewItem): string | undefined {
   if (item.facts === undefined && item.status !== "passed") {
     return "Not read by diffninja (binary, rename, mode, or other metadata-only change). Check it yourself.";
   }
-  if (item.facts?.language === null) return "diffninja does not read this file type. Read this hunk yourself.";
+  if (item.facts?.language === null) return `diffninja does not read ${unreadCause(item.file)}. Read this hunk yourself.`;
   if (item.facts?.inert === true) return "Formatting or comments only.";
   if (item.facts?.importsOnly === true) return "Imports only: read where the imported names are used.";
   return undefined;

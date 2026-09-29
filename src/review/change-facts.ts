@@ -118,6 +118,11 @@ const EVIDENCE_TEXT_LIMIT = 160;
  */
 export const MAX_READ_LINE_CHARS = 4000;
 
+/** What diffninja does not read in a hunk whose facts have no language, as a phrase after "does not read". */
+export function unreadCause(file: string): string {
+  return changeFactLanguageOf(file) === null ? "this file type" : `a hunk with a changed line over ${MAX_READ_LINE_CHARS.toLocaleString("en-US")} characters`;
+}
+
 export function changeFactLanguageOf(file: string): ChangeFactLanguage | null {
   if (C_LIKE_FILE.test(file)) return "c-like";
   if (PYTHON_FILE.test(file)) return "python";
