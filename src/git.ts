@@ -252,10 +252,17 @@ function pathAllowed(file: string, pathFilters: string[]): boolean {
 export const MAX_INDEXED_FILE_BYTES = 1024 * 1024;
 export const MAX_INDEXED_FILES = 15_000;
 
-const skipped = { oversized: 0, beyondLimit: 0 };
+export interface SkippedSources {
+  /** Source files over the size bound. */
+  oversized: number;
+  /** Files past the count bound. */
+  beyondLimit: number;
+}
+
+const skipped: SkippedSources = { oversized: 0, beyondLimit: 0 };
 
 /** What was left out of call-flow analysis since the last call; clears the count. */
-export function takeSkippedSources(): { oversized: number; beyondLimit: number } {
+export function takeSkippedSources(): SkippedSources {
   const counts = { ...skipped };
   skipped.oversized = 0;
   skipped.beyondLimit = 0;
