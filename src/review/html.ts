@@ -1,3 +1,4 @@
+import { hiddenControlsIn } from "./hidden-characters.js";
 import type { UpdateNotice } from "./update-check.js";
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
 import { verdictOf, type ReviewQuestion } from "./questions.js";
@@ -607,7 +608,7 @@ function renderDiff(diff: string): string {
         `<span class="ln ln-${row.kind}">` +
         `<span class="old-no" aria-hidden="true">${row.oldNo === null ? "" : String(row.oldNo)}</span>` +
         `<span class="new-no" aria-hidden="true">${row.newNo === null ? "" : String(row.newNo)}</span>` +
-        `<span class="code">${escapeHtml(row.text)}</span>` +
+        `<span class="code${hiddenControlsIn(row.text).length > 0 ? " code-hidden" : ""}">${escapeHtml(row.text)}</span>` +
         "</span>",
     )
     .join("");
@@ -1208,6 +1209,7 @@ pre.diff {
   user-select: none;
 }
 .code { padding: 0 14px; }
+.code-hidden { outline: 1px solid var(--warn); outline-offset: -1px; background: var(--warn-bg); }
 .ln-add > .code { color: var(--add); }
 .ln-del > .code { color: var(--del); }
 .ln-add > .code, .ln-add > .old-no, .ln-add > .new-no { background: var(--add-bg); }

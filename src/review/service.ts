@@ -1,4 +1,5 @@
 import { takeMissingGrammars } from "../languages/grammars.js";
+import { hiddenControlsByFile } from "./hidden-characters.js";
 import { resolve } from "node:path";
 import { runDiff } from "../run.js";
 import { MAX_INDEXED_FILES, MAX_INDEXED_FILE_BYTES, readSnapshotFile, takeSkippedSources } from "../git.js";
@@ -106,6 +107,12 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   }
   if (snapshots && options.pr?.headRef !== undefined && options.pr.headRef !== snapshots.to) {
     throw new Error("The PR head does not match the source snapshot; refusing mismatched intent evidence.");
+  }
+  const hiddenControls = hiddenControlsByFile(units);
+  if (hiddenControls.size > 0) {
+    const files = [...hiddenControls.keys()];
+    const points = [...new Set([...hiddenControls.values()].flat())].sort();
+    warnings.push(`Lines this change adds or removes in ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` and ${files.length - 5} more files` : ""} contain hidden or bidirectional control characters (${points.join(", ")}). They can make code read differently from how it compiles (Trojan Source, CVE-2021-42574); the pages show each as a ⟦U+XXXX⟧ marker. Read those lines with the markers before trusting them.`);
   }
   let evidence = buildReviewEvidence(units);
   const callFlow: string[] = [];

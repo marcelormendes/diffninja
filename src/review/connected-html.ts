@@ -1,6 +1,7 @@
 import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
 import { PALETTE_STYLES } from "./palette.js";
 import { escapeHtml } from "./escape-html.js";
+import { HIDDEN_CHARACTER_SOURCE } from "./hidden-characters.js";
 
 /**
  * The one page the connected session serves.
@@ -240,15 +241,24 @@ function script(csrf: string, base: string): string {
 
   function byId(id) { return document.getElementById(id); }
 
+  // Bidirectional and other invisible control characters would let untrusted text reorder or hide
+  // what the reviewer reads; every string from the pull request is shown with visible markers instead.
+  var HIDDEN = new RegExp(${JSON.stringify(HIDDEN_CHARACTER_SOURCE).replaceAll("<", "\\u003c")}, 'gu');
+  function visible(value) {
+    return String(value).replace(HIDDEN, function (character) {
+      return '\u27E6U+' + character.codePointAt(0).toString(16).toUpperCase().padStart(4, '0') + '\u27E7';
+    });
+  }
+
   function make(tag, className, textValue) {
     var node = document.createElement(tag);
     if (className) node.className = className;
-    if (textValue !== undefined && textValue !== null) node.textContent = String(textValue);
+    if (textValue !== undefined && textValue !== null) node.textContent = visible(textValue);
     return node;
   }
 
   function setText(node, value) {
-    node.textContent = value === undefined || value === null ? '' : String(value);
+    node.textContent = value === undefined || value === null ? '' : visible(value);
   }
 
   function show(node, visible) { node.hidden = !visible; }
@@ -1759,6 +1769,9 @@ function script(csrf: string, base: string): string {
 
   function codeNode(text, language, state) {
     var code = make('code', 'diff-code');
+    var shown = visible(text);
+    if (shown !== text) code.classList.add('diff-code-hidden');
+    text = shown;
     if (!language || text.length > 2000) { code.textContent = text; return code; }
     var tokens = tokenize(text, language, state);
     for (var t = 0; t < tokens.length; t += 1) {
@@ -3071,6 +3084,7 @@ kbd {
 .diff-action.has-comment { opacity: 1; transform: scale(1); background: var(--warn); }
 .diff-action.is-armed { opacity: 1; transform: scale(1); width: auto; padding: 0 6px; font-size: 11px; color: #fff; }
 .diff-mark { flex: 0 0 auto; width: 20px; text-align: center; color: var(--ink-faint); user-select: none; }
+.diff-code-hidden { outline: 1px solid var(--warn); outline-offset: -1px; background: var(--warn-soft); }
 .diff-code { display: block; flex: 1 1 auto; min-width: 0; padding: 0 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .kind-add { background: var(--add-bg); }
 .kind-delete { background: var(--del-bg); }
