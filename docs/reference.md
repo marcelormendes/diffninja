@@ -222,7 +222,10 @@ viewed }`, and it sits behind the same gate as `api/submit`. It is refused
 before any `gh` call when the snapshot id is not the loaded one, when `path` is
 not exactly one of the loaded pull request's changed file paths (a renamed file
 by its new path), when `viewed` is not a boolean, when a key is extra or missing,
-and when the marks are not synced. Otherwise it runs one `gh api graphql` call
+and when the marks are not synced. It then reads the pull request's base and head
+again and refuses when either moved since the load, because GitHub applies a mark
+to the file as it is now and a push would make it cover changes you did not read.
+Otherwise it runs one `gh api graphql` call
 with one of two fixed documents (`markFileAsViewed`, `unmarkFileAsViewed`). The
 pull request's node id is the one diffninja stored at load, never one from the
 request, and the id and the path are separate variables, never part of the

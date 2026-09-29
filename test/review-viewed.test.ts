@@ -43,6 +43,13 @@ class ViewedGh implements GhRunner {
   pageSize = 100;
   nodeId: string | null = NODE_ID;
   state = "OPEN";
+  head = "2".repeat(40);
+  base = "1".repeat(40);
+  /** Paths GitHub's Viewed read leaves out of its answer. */
+  readonly omitted = new Set<string>();
+  /** Failure of the `pr view` that re-reads the head before a mark. */
+  headReadFailure: GhCommandError | null = null;
+  private metadataReads = 0;
   readFailure: GhCommandError | null = null;
   writeFailure: GhCommandError | null = null;
   readReply: string | null = null;
@@ -72,7 +79,12 @@ class ViewedGh implements GhRunner {
     this.calls.push(args);
     this.deadlines.push(invocation.timeoutMs);
     if (args[0] === "--version") return out("gh version 2.101.0 (2026-01-01)\n");
-    if (args[0] === "pr") return out(this.metadata());
+    if (args[0] === "pr") {
+      this.metadataReads += 1;
+      // The two reads of a load come first; any later read is the one before a mark.
+      if (this.metadataReads > 2 && this.headReadFailure !== null) throw this.headReadFailure;
+      return out(this.metadata());
+    }
     if (args[3] === "graphql") return this.graphql(args);
     const endpoint = args[args.length - 1] ?? "";
     if (endpoint === "user") return out(JSON.stringify({ login: "octocat", id: 42 }));
@@ -113,16 +125,17 @@ class ViewedGh implements GhRunner {
     if (this.readFailure !== null) throw this.readFailure;
     if (this.readReply !== null) return out(this.readReply);
     const start = Number((valueOf(args, "after") ?? "c0").slice(1));
-    const page = this.files.slice(start, start + this.pageSize);
+    const page = this.files.filter((path) => !this.omitted.has(path)).slice(start, start + this.pageSize);
     const end = start + page.length;
+    const total = this.files.filter((path) => !this.omitted.has(path)).length;
     const nodes = page.map((path) => ({ path, viewerViewedState: this.marks.get(path) ?? "UNVIEWED" }));
-    return out(JSON.stringify({ data: { node: { files: { nodes, pageInfo: { hasNextPage: end < this.files.length, endCursor: `c${end}` } } } } }));
+    return out(JSON.stringify({ data: { node: { files: { nodes, pageInfo: { hasNextPage: end < total, endCursor: `c${end}` } } } } }));
   }
 
   private metadata(): string {
     const metadata = {
       url: PR_URL, number: 7, state: this.state, title: "Title", body: "Body",
-      baseRefOid: "1".repeat(40), headRefOid: "2".repeat(40), isCrossRepository: false,
+      baseRefOid: this.base, headRefOid: this.head, isCrossRepository: false,
       headRepository: { id: "R_1", name: "hello", nameWithOwner: "octocat/hello" }, headRepositoryOwner: { id: "O_1", login: "octocat" },
       baseRefName: "main", headRefName: "feature",
     };
@@ -227,6 +240,17 @@ describe("reading the Viewed marks when a pull request loads", () => {
         { path: "src/renamed.ts", viewed: true }, { path: ODD_PATH, viewed: false }, { path: AT_PATH, viewed: false },
       ],
     });
+  });
+
+  it("counts a changed file that GitHub's answer leaves out as not viewed", async () => {
+    const api = await open((gh) => {
+      gh.marks.set("app.ts", "VIEWED");
+      gh.marks.set("lib/util.ts", "VIEWED");
+      gh.omitted.add("lib/util.ts");
+    });
+    const viewed = (await api.state()).viewed;
+    expect(viewed?.available === true && viewed.files.find((file) => file.path === "lib/util.ts")).toEqual({ path: "lib/util.ts", viewed: false });
+    expect(viewed?.available === true && viewed.files.find((file) => file.path === "app.ts")).toEqual({ path: "app.ts", viewed: true });
   });
 
   it("asks with the fixed query and the pull request's node id as a variable", async () => {
@@ -386,6 +410,47 @@ describe("marking a file Viewed on GitHub", () => {
       expect(args[args.indexOf(`path=${path}`) - 1]).toBe("-f");
       expect(args.filter((arg) => arg.includes("evil") || arg.includes(path)).length).toBe(1);
     }
+  });
+});
+
+describe("a mark after the pull request moved", () => {
+  const moved = "The pull request changed since it was loaded. Load it again, then mark the file.";
+
+  it("reads the head again first and sends the mutation only when it is the one that was loaded", async () => {
+    const api = await open();
+    const snapshotId = await api.snapshotId();
+    const before = api.gh.calls.length;
+    expect((await api.postJson("api/viewed", { snapshotId, path: "app.ts", viewed: true })).status).toBe(200);
+    const issued = api.gh.calls.slice(before);
+    expect(issued.map((args) => (args[0] === "pr" ? "pr" : args[3]))).toEqual(["pr", "graphql"]);
+    expect(issued[0]?.slice(0, 3)).toEqual(["pr", "view", PR_URL]);
+  });
+
+  it.each([
+    ["a push to the head", (gh: ViewedGh) => { gh.head = "3".repeat(40); }],
+    ["a change of the base", (gh: ViewedGh) => { gh.base = "4".repeat(40); }],
+  ])("refuses the mark after %s, and sends no mutation", async (_name, move) => {
+    const api = await open();
+    const snapshotId = await api.snapshotId();
+    move(api.gh);
+    const refused = await api.postJson("api/viewed", { snapshotId, path: "app.ts", viewed: true });
+    expect(refused.status).toBe(400);
+    expect(refused.json.error).toBe(moved);
+    expect(mutationCalls(api.gh)).toEqual([]);
+    expect(api.gh.marks.get("app.ts")).toBe("UNVIEWED");
+    // Loading it again binds the new head, and a mark then goes through.
+    expect((await api.postJson("api/load", { url: PR_URL })).status).toBe(200);
+    expect((await api.postJson("api/viewed", { snapshotId: await api.snapshotId(), path: "app.ts", viewed: true })).status).toBe(200);
+    expect(api.gh.marks.get("app.ts")).toBe("VIEWED");
+  });
+
+  it("sends no mutation when the head cannot be read, and shows a safe message", async () => {
+    const api = await open();
+    api.gh.headReadFailure = failure("gh: HTTP 403", JSON.stringify({ message: "Resource not accessible" }), "gh: HTTP 403\nAuthorization: token ghp_SECRETTOKEN0123456789");
+    const refused = await api.postJson("api/viewed", { snapshotId: await api.snapshotId(), path: "app.ts", viewed: true });
+    expect(refused.status).toBe(400);
+    expect(JSON.stringify(refused.json)).not.toContain("ghp_SECRETTOKEN0123456789");
+    expect(mutationCalls(api.gh)).toEqual([]);
   });
 });
 
@@ -573,7 +638,8 @@ describe("when GitHub refuses or fails the mark", () => {
   it("does not count an answer it cannot read as a mark", async () => {
     const api = await open();
     const snapshotId = await api.snapshotId();
-    for (const reply of ["", "not json", "{}", JSON.stringify({ data: {} }), JSON.stringify({ data: { unmarkFileAsViewed: {} } }), JSON.stringify({ data: { markFileAsViewed: null } })]) {
+    for (const reply of ["", "not json", "{}", JSON.stringify({ data: {} }), JSON.stringify({ data: { unmarkFileAsViewed: {} } }), JSON.stringify({ data: { markFileAsViewed: null } }),
+      JSON.stringify({ data: { markFileAsViewed: { clientMutationId: null } }, errors: [{ message: "partial" }] })]) {
       api.gh.writeReply = reply;
       const response = await api.postJson("api/viewed", { snapshotId, path: "app.ts", viewed: true });
       expect(response.status, reply).toBe(400);

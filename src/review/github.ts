@@ -1305,6 +1305,12 @@ export class ConnectedReview {
       throw new Error(`Viewed marks are not synced with GitHub for this pull request${sync === undefined ? "" : ` (${sync.reason})`}.`);
     }
     if (!sync.files.has(input.path)) throw new Error("That file is not one of this pull request's changed files.");
+    // A mark has no commit of its own: GitHub applies it to the file as it is now. A push since the load
+    // would turn "every hunk I read" into "the file", so the head is read again first, as a submit does.
+    const meta = await this.readMetadata({ owner: snapshot.owner, repo: snapshot.repo, number: snapshot.number, url: snapshot.url });
+    if (meta.baseSha !== snapshot.baseSha || meta.headSha !== snapshot.headSha) {
+      throw new Error("The pull request changed since it was loaded. Load it again, then mark the file.");
+    }
     const mutation = input.viewed ? VIEWED_MUTATIONS.mark : VIEWED_MUTATIONS.unmark;
     let stdout: string;
     try {

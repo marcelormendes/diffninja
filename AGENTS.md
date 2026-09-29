@@ -224,7 +224,10 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     gate of `api/submit`. Refused before any `gh` call: a stale snapshot id, a
     path that is not exactly one of the loaded snapshot's changed file paths
     (the new path of a rename), a `viewed` that is not a boolean, extra or
-    missing keys, and marks that are not synced. It runs one `gh api --hostname
+    missing keys, and marks that are not synced. It then reads the pull request's
+    base and head again (one `gh pr view`) and refuses when either moved since
+    the load, because GitHub applies a mark to the file as it is now, and only
+    then runs one `gh api --hostname
     github.com graphql -f query=<fixed document> -f pullRequestId=<the snapshot's
     stored node id> -f path=<path>`, where the document is
     `MARK_VIEWED_MUTATION` or `UNMARK_VIEWED_MUTATION` (`markFileAsViewed`,

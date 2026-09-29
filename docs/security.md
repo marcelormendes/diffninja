@@ -54,7 +54,7 @@ sections below list each exception.
 | --- | --- | --- |
 | `gh` (your GitHub CLI) | Reviewing a pull request link | Runs a few read commands (a version check, your login, the PR's metadata, diff and file list, and a GraphQL read of which changed files you marked Viewed) with the login you already have. The Viewed read runs again each time the page loads the pull request, including a load from **Check GitHub state**. diffninja sets `GH_TELEMETRY=false` and `DO_NOT_TRACK=1` so `gh` does not report usage. |
 | `gh` | **Submit** is pressed on the review page | Posts the review to GitHub as you, after a preview of the identical review. Only someone holding the page's link can submit. Your agent holds it, so an agent that can run commands or fetch web pages could submit too. diffninja tells it never to. A program that was never given the link cannot. |
-| `gh` | A file's Viewed state changes on the review page, because you ticked or unticked a change | Marks the file **Viewed** or not Viewed on GitHub as you, with one GraphQL mutation (`markFileAsViewed` or `unmarkFileAsViewed`). It goes through the same gated route as Submit, has no preview, and is sent only for a changed file of the loaded pull request. The mutation text is fixed, and the file path and the pull request's id travel as separate variables, never inside the text. Someone holding the page's link, your agent included, can send it. A program that was never given the link cannot. |
+| `gh` | A file's Viewed state changes on the review page, because you ticked or unticked a change | Reads the pull request's head again, then marks the file **Viewed** or not Viewed on GitHub as you, with one GraphQL mutation (`markFileAsViewed` or `unmarkFileAsViewed`), and only if the head is still the one that was loaded. It goes through the same gated route as Submit, has no preview, and is sent only for a changed file of the loaded pull request. The mutation text is fixed, and the file path and the pull request's id travel as separate variables, never inside the text. Someone holding the page's link, your agent included, can send it. A program that was never given the link cannot. |
 | `npm` | You run `diffninja setup` | `npm root -g`, then `npm install -g diffninja@<version>` when there is no global install or it is older than setup. npm downloads diffninja and its dependencies and runs the install scripts of `diffninja`, `tree-sitter`, `tree-sitter-javascript` and `tree-sitter-typescript`. `--dry-run` and `--no-install` still run `npm root -g` and install nothing. `--uninstall` runs no npm. |
 | `npm` | You run `diffninja grammars install` | Downloads the 20 pinned grammar packages. With `--build`, `node-gyp` also downloads the Node headers from nodejs.org unless they are already cached. |
 | `npm` (the postinstall script) | After an npm install of diffninja, only where the parser or the TypeScript grammar does not load (Linux ARM64 is the known case) | Installs `tree-sitter-typescript` if it is missing, then rebuilds it from source. The rebuild runs install scripts and can download the Node headers. Where the grammar loads, it does nothing. |
@@ -257,7 +257,8 @@ path, Host, Origin, `Sec-Fetch-Site` and CSRF checks, a 256 KiB body limit and a
 15 second request time limit). No route is a general GitHub or command proxy. The
 Viewed route takes a snapshot id, a file path and a true or false. It refuses a
 snapshot other than the loaded one, and a path that is not one of that pull
-request's changed files, before it runs `gh`. It takes the pull request's id
+request's changed files, before it runs `gh`. It reads the pull request's head
+again and refuses when it moved since the load. It takes the pull request's id
 from what it loaded, never from the request, and sends one of two fixed GraphQL
 documents. The path is a separate variable and is never part of the document.
 A mark whose outcome is unknown, because of a timeout or a lost connection,
@@ -382,6 +383,9 @@ as described above.
   viewed, like `UNVIEWED`), who besides you can see a mark, paging on a very
   large pull request, and rate limits. diffninja talks to github.com only, so
   GitHub Enterprise Server was not tried.
+- A push that lands between the head check and the mark. GitHub has no atomic
+  check-and-mark, so a mark can still cover a file that changed in that instant,
+  as a review can (see [reference.md](reference.md)).
 - Which accounts and tokens may mark a file Viewed. A token without the scope, or
   an account without access, was not tried against GitHub. When GitHub refuses,
   diffninja shows GitHub's named message, cleaned and cut to 400 characters, or

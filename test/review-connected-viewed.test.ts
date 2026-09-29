@@ -494,6 +494,18 @@ describe("a file is viewed on GitHub exactly when every one of its hunks is", ()
     expect(sent(built)).toEqual([request("docs/notes.md", true), request("src/listener.ts", true)]);
   });
 
+  it("keeps a click whose request is out when the page reads GitHub's state again in the meantime", async () => {
+    const built = build({ viewed: unmarked });
+    built.clickBox("hunk-2");
+    expect(sent(built)).toEqual([request("docs/notes.md", true)]);
+    // A load that started before the click answers now: GitHub's copy says the file is not viewed yet.
+    built.setState({ viewed: unmarked });
+    expect(built.viewedIds()).toEqual(["hunk-2"]);
+    await built.answer("ok");
+    expect(built.viewedIds()).toEqual(["hunk-2"]);
+    expect(built.calls).toEqual([]);
+  });
+
   it("does not undo a confirmed mark when a later failure elsewhere makes the page read GitHub's state again", async () => {
     const built = build({ viewed: unmarked });
     built.clickBox("hunk-2");
@@ -521,6 +533,16 @@ describe("a request that fails puts the click back", () => {
     built.clickBox("hunk-5");
     expect(built.calls).toHaveLength(1);
     expect(built.el.railViewedError.hidden).toBe(true);
+  });
+
+  it("puts back the hunk whose click sent the request, not one clicked while it was out", async () => {
+    const built = build({ viewed: unmarked, stored: ["hunk-3", "hunk-4"] });
+    built.clickBox("hunk-5");
+    expect(built.calls).toHaveLength(1);
+    // While that request is out the reader un-views another hunk of the file.
+    built.clickBox("hunk-3");
+    await built.answer({ fail: "GitHub rejected the Viewed mark." });
+    expect(built.viewedIds()).toEqual(["hunk-4"]);
   });
 
   it("puts a hunk back to viewed when un-viewing it failed", async () => {
