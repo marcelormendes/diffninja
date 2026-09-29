@@ -135,6 +135,8 @@ function snapshotAnalyzer(review: ConnectedReview, url: string, reports: ReportP
   let repo: string | undefined;
   /** The one report the session's page links to now; older ones are ordinary pages again. */
   let pinnedReviewId: string | undefined;
+  /** Set when the session closes: an analysis still running then must not pin the report it publishes. */
+  let released = false;
   const analyze = async () => {
     const snapshot = review.getState().snapshot;
     if (snapshot === undefined) return { unavailable: "No pull request is loaded." };
@@ -162,9 +164,13 @@ function snapshotAnalyzer(review: ConnectedReview, url: string, reports: ReportP
               scope = { source: "patch", note: `Patch-only: the local clone could not be used (${error instanceof Error ? error.message : "unknown error"}).` };
             }
           }
-          const published = await reports.publish(report, { pinned: true });
-          if (pinnedReviewId !== undefined) reports.setPinned(pinnedReviewId, false);
-          pinnedReviewId = published.reviewId;
+          const published = await reports.publish(report, { pinned: !released });
+          if (released) {
+            reports.setPinned(published.reviewId, false);
+          } else {
+            if (pinnedReviewId !== undefined) reports.setPinned(pinnedReviewId, false);
+            pinnedReviewId = published.reviewId;
+          }
           return { snapshotId, report, reviewId: published.reviewId, reportUrl: published.url, scope };
         } catch (error) {
           return { unavailable: `Local analysis failed: ${error instanceof Error ? error.message : "unknown error"}` };
@@ -181,6 +187,7 @@ function snapshotAnalyzer(review: ConnectedReview, url: string, reports: ReportP
       current = undefined;
     },
     release() {
+      released = true;
       if (pinnedReviewId !== undefined) reports.setPinned(pinnedReviewId, false);
       pinnedReviewId = undefined;
     },

@@ -1707,6 +1707,28 @@ describe("how many pages one connection keeps open", () => {
     });
   }, 120_000);
 
+  // Detects a pull request evicted while it was still loading keeping its report pinned for the
+  // rest of the connection: release() ran before the analysis pinned anything, so the report it
+  // then published was never unpinned, and every parallel batch of pull requests past ten kept
+  // the surplus reports, each with its whole diff, out of the twenty-page limit.
+  test("a pull request evicted while it is still loading keeps its report no longer than any other", async () => {
+    await withFakeGh(async (gh) => {
+      blockNetwork();
+      gh.slow(400);
+      const client = await connectReview();
+      const results = await Promise.all(Array.from({ length: 11 }, (_, index) => review(client, { mode: "connected", pr: prUrl(index + 1) })));
+      const evicted = connectedOf(results[0]!);
+      expect(evicted.reviewId).toBeDefined();
+      const order = evicted.report!.items.map(item => item.id);
+      const orderEvicted = async () => CallToolResultSchema.parse(await client.callTool({ name: "record_order", arguments: { reviewId: evicted.reviewId!, order } }));
+      expect((await orderEvicted()).isError).not.toBe(true);
+      for (let index = 0; index < 22; index += 1) await review(client, { diff: patch });
+      const later = await orderEvicted();
+      expect(later.isError).toBe(true);
+      expect(textOf(later)).toMatch(/No review with that reviewId/);
+    });
+  }, 180_000);
+
   test("the report a live session links to survives twenty other reports, and is an ordinary page again when the session is evicted", async () => {
     await withFakeGh(async () => {
       blockNetwork();
