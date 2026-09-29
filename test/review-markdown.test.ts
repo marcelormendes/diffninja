@@ -140,6 +140,23 @@ describe("description markdown", () => {
     expect(textOf(parsed.blocks)).toContain("v0");
   });
 
+  test("a description whose emphasis makes the lexer quadratic is never lexed, so it cannot hold the server", () => {
+    // 65,000 characters of this took 19 s; 16,000 took 1.3 s.
+    for (const pattern of ["_a*", "*a_", "**a__"]) {
+      const hostile = pattern.repeat(Math.ceil(65_000 / pattern.length));
+      const started = performance.now();
+      const parsed = markdownBlocks(hostile);
+      expect(performance.now() - started, pattern).toBeLessThan(500);
+      expect(parsed.truncated).toBe(true);
+    }
+    // Just under the cap is still formatted.
+    const ordinary = "A line with **bold** and `code`.\n\n".repeat(300);
+    expect(ordinary.length).toBeLessThan(12_000);
+    const parsed = markdownBlocks(ordinary);
+    expect(parsed.truncated).toBe(false);
+    expect(parsed.blocks.length).toBeGreaterThan(100);
+  });
+
   test("an ordinary description is not reported as truncated", () => {
     const parsed = markdownBlocks("# Title\n\nA short body with **emphasis**.\n\n- one\n- two\n");
     expect(parsed.truncated).toBe(false);

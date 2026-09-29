@@ -44,14 +44,28 @@ function schemeStart(head: string): number {
   return start;
 }
 
+/**
+ * How far a token is read on each side of its `/pull/`, and how many markers of
+ * one string are read. A real link is about 170 characters and a message names
+ * one or two of them; without the bounds, text that is one long token full of
+ * `/pull/` (a minified file, a base64 blob) cost quadratic time: 96,000
+ * characters took 14.6 s of the server's only thread.
+ */
+const MAX_TOKEN_SIDE = 300;
+const MAX_MARKERS = 500;
+
 /** Every `/pull/`-shaped token in one string; a bare host or repo is not one. */
 function pullTokens(text: string): string[] {
   const tokens: string[] = [];
-  for (let index = text.indexOf(PR_MARKER); index !== -1; index = text.indexOf(PR_MARKER, index + PR_MARKER.length)) {
+  let markers = 0;
+  for (let index = text.indexOf(PR_MARKER); index !== -1 && markers < MAX_MARKERS; index = text.indexOf(PR_MARKER, index + PR_MARKER.length)) {
+    markers += 1;
     let start = index;
-    while (start > 0 && !TOKEN_BREAK.test(text[start - 1])) start--;
+    const lowest = Math.max(0, index - MAX_TOKEN_SIDE);
+    while (start > lowest && !TOKEN_BREAK.test(text[start - 1])) start--;
     let end = index + PR_MARKER.length;
-    while (end < text.length && !TOKEN_BREAK.test(text[end])) end++;
+    const highest = Math.min(text.length, end + MAX_TOKEN_SIDE);
+    while (end < highest && !TOKEN_BREAK.test(text[end])) end++;
     // Text glued to a link keeps its own words in the token (`PR:https://…`,
     // a page whose path holds the link); the link itself starts at the last
     // scheme before the marker, so glue can never hide a real link.

@@ -92,4 +92,20 @@ describe("pull request detection", () => {
     expect(() => detectPullRequest([CANONICAL, "https://github.com/octocat/hello/pull/8"])).toThrow(/different pull requests/);
     expect(() => detectPullRequest(["--pr=" + CANONICAL, "https://github.com/other/repo/pull/1"])).toThrow(/different pull requests/);
   });
+
+  it("text that is one long run of /pull/ is read in bounded time (it took 14.6 s for 96,000 characters)", () => {
+    for (const hostile of ["/pull/".repeat(200_000), "a/pull/".repeat(150_000), `x${"/pull/9".repeat(100_000)}`]) {
+      const started = performance.now();
+      try { detectPullRequest([hostile]); } catch { /* a refusal is fine; time is the point */ }
+      expect(performance.now() - started).toBeLessThan(1500);
+    }
+  });
+
+  it("a real link is still found at the edges of a long message", () => {
+    const link = "https://github.com/acme/widgets/pull/42";
+    expect(detectPullRequest([`${"word ".repeat(50_000)}${link}`])).toBe(link);
+    expect(detectPullRequest([`${link} ${"word ".repeat(50_000)}`])).toBe(link);
+    expect(detectPullRequest([`PR:${link}/files`])).toBe(link);
+    expect(detectPullRequest([`${"x ".repeat(250)}${link}`])).toBe(link);
+  });
 });

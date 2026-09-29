@@ -122,6 +122,14 @@ const tokensSchema = z.array(tokenSchema);
 const MAX_DEPTH = 12;
 /** Nodes one description may become; past this the rest is named, not rendered. */
 const MAX_NODES = 50_000;
+/**
+ * The longest description that is lexed. Emphasis resolution in `marked` is
+ * quadratic on some short repeated patterns (`_a*` repeated: 16,000 characters
+ * took 1.3 s, 65,000 took 19 s, with the whole single-threaded server waiting),
+ * so a longer body is shown as plain text instead, which the page already does
+ * for a body past the node budget.
+ */
+const MAX_SOURCE_CHARS = 12_000;
 
 const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
   ["amp", "&"], ["lt", "<"], ["gt", ">"], ["quot", "\""], ["apos", "'"], ["nbsp", "\u00a0"],
@@ -366,6 +374,8 @@ export interface ParsedDescription {
  */
 export function markdownBlocks(source: string): ParsedDescription {
   if (cached !== undefined && cached.source === source) return cached.parsed;
+  // Past the cap the beginning is kept as plain text, never lexed: `truncated` tells the page to show the body as text.
+  if (source.length > MAX_SOURCE_CHARS) return { blocks: [{ t: "para", c: [textNode(source.slice(0, MAX_SOURCE_CHARS))] }], truncated: true };
   let parsed: ParsedDescription;
   try {
     const budget = new Budget();
