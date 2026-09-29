@@ -110,9 +110,9 @@ Proof standards:
 - **Check side effects beside the visible output.**
   - diffninja must not write report files: run `git status --short` in the reviewed repo before and after the drive, and expect no change.
   - A git range must not modify the repo.
-  - A connected review must not submit anything to GitHub.
+  - A connected review must not submit anything to GitHub, and must not mark a file Viewed on it. Ticking a change on the pull request page writes a Viewed mark, so drive that only through a fake `gh` (see `features/connected-pr-review.md`).
 - **Check what a safe mode actually skips.** `setup --dry-run` writes no config files, but it still runs `npm root -g` and npm writes a debug log under `$HOME/.npm/_logs`. Run it with a temporary `HOME` and `CODEX_HOME` (see `features/setup.md`).
-- **Do not mock.** Inline diffs are fully offline, so nothing needs a mock. Connected review really calls GitHub through `gh`.
+- **Do not mock.** Inline diffs are fully offline, so nothing needs a mock. Connected review really calls GitHub through `gh`, for reading. The one exception is the Viewed marks, which write to GitHub, so they are driven against a fake `gh` and never against a real pull request.
 
 For a visual proof of a page, drive with `--hold 120`, open the printed URL with the claude-in-chrome tools, and save the screenshots in the same evidence directory.
 
@@ -129,4 +129,4 @@ For a visual proof of a page, drive with `--hold 120`, open the printed URL with
 - Node's `fetch()` silently sends the URL's own host even when you set a `Host` header. The helper uses `node:http` for that reason. Do not "simplify" it back to `fetch`, or the foreign-Host check passes for the wrong reason.
 - Pages and `reviewId`s belong to one connection. A `reviewId` from another drive is refused.
 - `review_diff` in mode `auto` (the default) treats any github.com pull request link anywhere in `diff` as a connected review request. Pass `"mode":"static"` for inline diffs that might contain one.
-- rbp-api (SecondNature-com) pull requests are read-only for this project. Connected drives against them may load and read only: never POST `/api/submit` and never click Submit.
+- rbp-api (SecondNature-com) pull requests are read-only for this project. Connected drives against them may load and read only: never POST `/api/submit` or `/api/viewed`, never click Submit, and never tick a change in the left list (it marks a file Viewed on GitHub).
