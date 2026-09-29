@@ -387,8 +387,8 @@ as described above.
   diffninja shows GitHub's named message, cleaned and cut to 400 characters, or
   a fixed sentence, and never `gh`'s raw output. That was checked against a fake
   `gh` that refuses.
-- Browsers other than Chromium. The Viewed ticks were driven in headless
-  Chromium only.
+- Browsers other than Chrome. The Viewed ticks were driven in headless Google
+  Chrome 154 only, through playwright-core.
 - File names that git quotes in a diff (non-ASCII characters, quotes, backslashes).
   The page cannot match such a file to the path GitHub lists, so its ticks stay in
   the tab and never reach GitHub.

@@ -36,7 +36,7 @@ Preconditions:
 Preconditions:
 
 - A fake `gh`, described below, first on PATH for this drive only. Check with `command -v gh` in the same shell that starts the drive. After the load, the fake's call log must show the loader's calls, starting with `--version`. An empty log means the real `gh` ran, so stop.
-- A browser that can reach `127.0.0.1`. If the claude-in-chrome tools cannot, use a local headless Chromium through playwright-core. Record which browser and version you used.
+- A browser that can reach `127.0.0.1`. If the claude-in-chrome tools cannot, use a local headless Chrome or Chromium through playwright-core. Record which browser and version you used.
 
 - **Build the fake `gh`.** It is an executable named `gh` in a scratch directory outside the repository. Start the drive with `PATH=<scratch>/bin:$PATH`. It answers exactly the argv the loader sends and exits non-zero with a loud message for any other argv, so a call that would have reached GitHub fails visibly.
   - `gh --version` (2.45.0 or newer), `gh auth status` (for doctor), and `gh api --hostname github.com -H <accept> user`.
@@ -45,7 +45,7 @@ Preconditions:
   - `gh api --hostname github.com graphql -f query=<document> -f pullRequestId=<id>` with an optional `-f after=<cursor>` for the read, and a `-f path=<file>` for a mutation. The read answers `{"data":{"node":{"files":{"nodes":[{"path","viewerViewedState"}],"pageInfo":{"hasNextPage","endCursor"}}}}}`. A mutation answers `{"data":{"markFileAsViewed":{"clientMutationId":null}}}`, or the same with `unmarkFileAsViewed`.
   - Keep the fake GitHub's state in a file (path to `VIEWED`, `UNVIEWED` or `DISMISSED`), append one line per call with its argv to a call log, and read a control file for failure injection. Useful switches are a refused mutation (a GitHub-style `FORBIDDEN` body), a `502`, a delay in the mutation, a failing read, and a page size of 2 for the read.
   - Make it strict. It should reject a mutation whose keys are not exactly `query`, `pullRequestId` and `path`, and a `pullRequestId` it does not know. Then a wrong argument shows up as a failure of the fake, not as a pass.
-  - The fixture needs a file with three hunks, a single-hunk file, a renamed file, and a file the fake reports `DISMISSED`.
+  - The fixture needs a file with three hunks, a single-hunk file, and a file the fake reports `DISMISSED`. A renamed file is worth adding, because its mark must use the new path.
   - An example built for this feature is at `/tmp/viewed/kit/bin/gh` while it lasts, with its state in `/tmp/viewed/state/viewed.json`, `calls.log` and `ctl.json`. Treat it as a sketch of the approach. Nothing in this repository depends on it.
 - **Load it.** Run the drive with the fake on PATH and the fixture's link: `PATH=<scratch>/bin:$PATH node .claude/skills/verify/drive.mjs review --args '{"mode":"connected","pr":"https://github.com/OWNER/REPO/pull/N"}' --summary '<your own reading of the fixture pull request>' --explain FILE --hold 600`. Open the printed `url`.
 - **Read the marks.** `GET <url>api/state` (with the loopback `Host`) has `viewed.available: true` and one `{ path, viewed }` per changed file, `true` only where the fake says `VIEWED`. On the page, every hunk of a viewed file starts ticked and `DISMISSED` does not.
@@ -58,7 +58,7 @@ Preconditions:
 - **An unknown outcome.** Make the mutation return a `502`, or hold it past 15 seconds. The click reverts, and `GET api/state` has `viewed.available: false` with the reason "the last Viewed mark did not finish". The page shows "not synced with GitHub: the last Viewed mark did not finish", keeps ticks in the tab, and sends nothing more until the pull request is loaded again.
 - **A failed read.** Fail the read in the control file and load again. The page still loads, `viewed.available` is `false` with a short fixed reason, the note reads "not synced with GitHub: <reason>", and a click sends no request.
 - **The route on its own.** Read the CSRF token from the page (`var CSRF = "..."`) and POST `<url>api/viewed` with it and `Origin` set to the page's origin. For each of these, expect a refusal and no new line in the call log. A snapshot id that is not the loaded one, a path that is not in the pull request (also `./app.ts`, or another case), `"viewed":"true"`, an extra key (`pullRequestId`, `query`), and a missing key each get a 400. A missing or wrong CSRF token, a wrong `Origin`, `Sec-Fetch-Site: cross-site`, and a foreign `Host` each get a 403. A GET gets a 404, and so does any path without the secret prefix.
-- **Look at it.** Take screenshots and read them, in the light and dark themes and in a 390 px window. Check that a ticked item is readable, the checkbox is reachable by keyboard with a visible focus, the error message is legible, and the note fits.
+- **Look at it.** Take screenshots and read them, in the light and dark themes and in a 420 px window. Check that a ticked item is readable, the checkbox is reachable by keyboard with a visible focus, the error message is legible, and the note fits.
 - **Proof.** Keep the fake's call log (every gh argv of the drive), its state file before and after each step, `api/state` before and after, the `GET api/state` from the failure cases, and the screenshots. Record the browser and version.
 
 ## Gotchas
@@ -66,6 +66,6 @@ Preconditions:
 - The page can POST `/api/submit`, which posts a real GitHub review as the `gh` user, and `/api/viewed`, which marks a file Viewed on GitHub as the `gh` user. Never choose Submit, and never tick a change, on a real pull request. Use `/api/preview` only. Drive `/api/viewed` and the checkboxes against the fake `gh` and nothing else.
 - SecondNature-com/rbp-api pull requests are strictly read-only for this project. Load and read them, but never comment, preview-then-submit, reconcile, or tick a change (which marks a file Viewed).
 - A file whose name git quotes in a diff (non-ASCII characters, quotes, backslashes) cannot be matched to the path GitHub lists, so the page keeps its ticks in the tab and sends nothing for it. Do not expect a mutation for such a file.
-- The fake proves diffninja's side only. GitHub's real behavior of the two mutations and of the files query, GHES, token scopes, rate limits, `DISMISSED` semantics, and browsers other than Chromium were not verified. Say so in the report.
+- The fake proves diffninja's side only. GitHub's real behavior of the two mutations and of the files query, GHES, token scopes, rate limits, `DISMISSED` semantics, and browsers other than the one you drove were not verified. Say so in the report.
 - A pull request link anywhere in the inputs of an `auto` call starts connected review. That includes a link inside diff text.
 - Connected review reads GitHub on every load, so its results change as the pull request changes. Record `snapshot.headSha` with the evidence.
