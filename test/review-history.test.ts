@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -155,7 +155,7 @@ describe("a repository cannot make line history run its helpers", () => {
       run("config", "diff.evil.textconv", `sh -c 'echo ran >> "${marker}"; cat "$0"'`);
       const report = await reviewDiff({ repo, from: "HEAD~1", to: "HEAD" }, {});
       expect(report.items.some((item) => item.file === "a.ts")).toBe(true);
-      expect(() => execFileSync("test", ["-e", marker])).toThrow();
+      expect(existsSync(marker)).toBe(false);
       // The line origins are still found: the protection removes the helper, not the history.
       expect(report.items.find((item) => item.file === "a.ts")?.history?.origins.length).toBeGreaterThan(0);
     } finally {

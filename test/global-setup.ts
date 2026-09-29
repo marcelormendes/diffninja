@@ -20,7 +20,12 @@ export default function setup(): void {
     if (problem !== undefined) throw new Error(`grammar test cache: ${problem}. Remove it, or point TMPDIR at a directory of your own.`);
   }
   const status = grammarStatus(MASTER_GRAMMAR_CACHE);
-  if (status.trusted && status.packages.every((entry) => entry.installed)) return;
+  const missing = status.packages.filter((entry) => !entry.installed);
+  // Without a compiler the source build fails every time, so a cache missing only what it builds is kept.
+  if (status.trusted && missing.every((entry) => entry.needsBuild)) {
+    if (missing.length > 0) console.error(`grammar test cache: ${missing.map((entry) => entry.name).join(" and ")} were not compiled when ${MASTER_GRAMMAR_CACHE} was installed, so their tests fail. Delete that directory to try the build again.`);
+    return;
+  }
   try {
     // The Kotlin and Perl grammars have no prebuilt binary: their tests need the opt-in source build.
     installPinnedGrammars({ cacheDir: MASTER_GRAMMAR_CACHE, build: true });

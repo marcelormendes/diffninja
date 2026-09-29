@@ -276,7 +276,10 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   cover the pinned grammar install and its refusals; `review-hidden-characters.test.ts`,
   `review-result-budget.test.ts`, `executables.test.ts`, `index-limits.test.ts`
   and `package-shrinkwrap.test.ts` the matching hardening. Tests share one grammar cache
-  that `test/global-setup.ts` installs with the same installer users run. `review-explanation.test.ts`
+  that `test/global-setup.ts` installs once with the same installer users run.
+  A cache missing only Kotlin and Perl (no compiler) is kept, not reinstalled
+  every run (`global-setup.test.ts`). Check a file a test says was not written
+  with `existsSync`, never by running `test -e`, which Windows lacks. `review-explanation.test.ts`
   covers the functions list, the explanation checks, and the business view. `review-history.test.ts`
   covers the project context against temporary repositories (full and shallow). `review-mcp.test.ts` covers the MCP tool through
   `createReviewServer()`: input validation, the structured report, its JSON

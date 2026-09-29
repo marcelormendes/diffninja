@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -43,7 +43,8 @@ describe("call flows and grammars that are not installed", () => {
       expect(warning[0]).toContain("tree-sitter-python");
       expect(warning[0]).toContain(`run \`npx -y diffninja@${ownVersion} grammars install\` once`);
       expect(warning[0]).toContain("not evidence of safety");
-      expect(() => execFileSync("test", ["-e", marker])).toThrow();
+      // Only a POSIX PATH carries the fake npm; Windows runs npm through npm-cli.js.
+      if (process.platform !== "win32") expect(existsSync(marker)).toBe(false);
     } finally {
       rmSync(empty, { recursive: true, force: true });
       rmSync(bin, { recursive: true, force: true });
