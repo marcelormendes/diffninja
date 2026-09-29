@@ -91,7 +91,7 @@ export interface GitDiffInput { diff: string; from: string; to: string }
 
 export function gitDiff(cwd: string, from: string, to: string): GitDiffInput {
   const base = resolveCommit(cwd, from), head = resolveCommit(cwd, to);
-  const diff = execFileSync(resolveExecutable("git"), ["--no-replace-objects", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=5", base, head, "--"],
+  const diff = execFileSync(resolveExecutable("git"), ["--no-replace-objects", "-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=5", base, head, "--"],
     { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: GIT_TIMEOUT_MS });
   return { diff, from: base, to: head };
 }
