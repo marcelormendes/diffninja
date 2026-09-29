@@ -210,8 +210,11 @@ policy.
   --build-from-source` rebuilds it against the host toolchain.
 - **Grammars.** Call flows read JavaScript and TypeScript with grammars that
   ship in the package. Every other language needs its tree-sitter grammar,
-  and a review never downloads one: run `diffninja grammars install` once (or
-  `npx -y diffninja@latest grammars install`). It installs 20 exact versions
+  and a review never downloads one: run `diffninja grammars install` once, with
+  the diffninja version your agent runs (a review's warning prints the exact
+  `npx -y diffninja@<version> grammars install`; a cache another version's lock
+  installed is not read, so `@latest` can install grammars an older server
+  ignores). It installs 20 exact versions
   (18 usable at once, see `--build` below) with `npm ci --ignore-scripts` from a lock that ships with diffninja (the
   sha512 of every tarball, dependencies included, is checked, and no package
   runs an install script) into `~/.cache/diffninja/grammars`

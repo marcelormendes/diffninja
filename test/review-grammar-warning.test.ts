@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { z } from "zod";
 import { reviewDiff } from "../src/review/service.js";
+
+// A cache is read only by a diffninja with the same lock, so the printed command names this exact version.
+const ownVersion = z.object({ version: z.string() }).parse(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))).version;
 
 let repo = "";
 let fromSha = "";
@@ -37,12 +41,28 @@ describe("call flows and grammars that are not installed", () => {
       const warning = report.warnings.filter((text) => text.includes("grammars would read"));
       expect(warning).toHaveLength(1);
       expect(warning[0]).toContain("tree-sitter-python");
-      expect(warning[0]).toContain("npx diffninja grammars install");
+      expect(warning[0]).toContain(`run \`npx -y diffninja@${ownVersion} grammars install\` once`);
       expect(warning[0]).toContain("not evidence of safety");
       expect(() => execFileSync("test", ["-e", marker])).toThrow();
     } finally {
       rmSync(empty, { recursive: true, force: true });
       rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test("a Kotlin change names the install command with --build, the only one that makes Kotlin readable", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "diffninja-empty-cache-"));
+    try {
+      writeFileSync(join(repo, "App.kt"), "fun helper(): Int = 1\nfun main() { helper() }\n");
+      git("add", "-A");
+      git("commit", "-q", "-m", "kotlin");
+      vi.stubEnv("DIFFNINJA_GRAMMAR_CACHE", empty);
+      const report = await reviewDiff({ repo, from: toSha, to: git("rev-parse", "HEAD") }, {});
+      const warning = report.warnings.filter((text) => text.includes("grammars would read"));
+      expect(warning).toHaveLength(1);
+      expect(warning[0]).toContain(`run \`npx -y diffninja@${ownVersion} grammars install --build\` once`);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
     }
   });
 

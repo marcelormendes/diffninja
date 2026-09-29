@@ -89,16 +89,14 @@ your machine at `127.0.0.1`). On the page:
 Tip: if your agent is running inside a local clone of the repository, it can
 pass the clone to diffninja. You then also get call-flow diagrams for the
 changed files. Call flows read JavaScript and TypeScript out of the box. For
-other languages (Python, Go, Java, Rust, C#, Ruby, and more), run this once;
-it is the only thing diffninja ever downloads, exact versions checked against
-hashes shipped with diffninja, and no install script runs:
-
-```bash
-npx -y diffninja@latest grammars install
-```
-
-Without it the review says which files its call flows skipped. Kotlin and Perl
-also need `--build`, which compiles them on your machine.
+other languages (Python, Go, Java, Rust, C#, Ruby, and more), install their
+grammars once. It is the only thing diffninja ever downloads, exact versions
+checked against hashes shipped with diffninja, and no install script runs. Use
+the version of diffninja your agent runs, because diffninja may not read
+grammars that another version installed. A review that needs them says which
+files its call flows skipped and prints the exact command, which has the form
+`npx -y diffninja@<version> grammars install`. Kotlin and Perl also need
+`--build`, which compiles them on your machine.
 
 You can also review changes that aren't a PR yet:
 

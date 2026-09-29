@@ -183,7 +183,10 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     consistency check, not authentication. Install tightens a directory of the
     user's own to 0700 and refuses anyone else's; `test/global-setup.ts` checks
     both levels of the shared test cache path the same way. A missing grammar raises `GrammarNotInstalledError`; the review
-    warns once which grammars its call flows skipped. Call-flow indexing skips
+    warns once which grammars its call flows skipped. Both print
+    the command from `grammarsInstallCommand`, `npx -y diffninja@<this version> grammars install`
+    (plus `--build` for Kotlin or Perl), since a cache another lock installed is
+    not read and `@latest` may carry another lock. Call-flow indexing skips
     source files over 1 MiB and files past the first 15,000 per revision, and
     says so.
   - No output files, no CLI flags, no key arguments. The environment is read

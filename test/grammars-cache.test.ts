@@ -10,6 +10,9 @@ const lockSchema = z.object({
   packages: z.record(z.string(), z.object({ version: z.string().optional(), integrity: z.string().optional(), resolved: z.string().optional(), dependencies: z.record(z.string(), z.string()).optional() })),
 });
 
+// A cache is read only by a diffninja with the same lock, so the printed command names this exact version.
+const ownVersion = z.object({ version: z.string() }).parse(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))).version;
+
 let cache: string;
 beforeEach(() => { cache = mkdtempSync(join(tmpdir(), "diffninja-grammar-cache-")); vi.stubEnv("DIFFNINJA_GRAMMAR_CACHE", cache); takeMissingGrammars(); });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(cache, { recursive: true, force: true }); });
@@ -51,7 +54,7 @@ describe("the pinned grammar lock", () => {
 describe("a review never downloads a grammar", () => {
   test("without an installed cache the grammar is reported missing, not fetched", () => {
     expect(() => loadGrammarPackage("tree-sitter-python")).toThrow(GrammarNotInstalledError);
-    expect(() => loadGrammarPackage("tree-sitter-python")).toThrow(/npx diffninja grammars install/);
+    expect(() => loadGrammarPackage("tree-sitter-python")).toThrow(`run \`npx -y diffninja@${ownVersion} grammars install\` once`);
     expect(takeMissingGrammars()).toEqual(["tree-sitter-python"]);
     expect(takeMissingGrammars()).toEqual([]);
   });
@@ -118,7 +121,7 @@ describe("a review never downloads a grammar", () => {
 
   test("Kotlin and Perl stay unavailable until their source build was asked for", () => {
     installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm() });
-    expect(() => loadGrammarPackage("tree-sitter-kotlin")).toThrow(/npx diffninja grammars install --build/);
+    expect(() => loadGrammarPackage("tree-sitter-kotlin")).toThrow(`run \`npx -y diffninja@${ownVersion} grammars install --build\` once`);
     expect(loadGrammarPackage("tree-sitter-go")).toEqual({ fake: true });
     installPinnedGrammars({ cacheDir: cache, runNpm: fakeNpm(), build: true });
     expect(loadGrammarPackage("tree-sitter-kotlin")).toEqual({ fake: true });

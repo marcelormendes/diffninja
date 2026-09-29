@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, st
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
+import { packageVersion } from "../review/version.js";
 import { npmEnvironment } from "./child-env.js";
 import { GRAMMAR_BUILD_ONLY, GRAMMAR_PACKAGE_JSON, GRAMMAR_PACKAGE_LOCK, GRAMMAR_PINS } from "./grammar-lock.js";
 
@@ -123,6 +124,15 @@ function pinnedGrammarRoot(cacheDir: string, npmPackage: string): string | undef
 }
 
 /**
+ * The command that installs these grammars where this diffninja reads them. It names this
+ * version, because a cache is read only by a diffninja with the same lock, and `@latest` or
+ * whatever `diffninja` is on PATH may have another. Kotlin and Perl need `--build`.
+ */
+export function grammarsInstallCommand(npmPackages: readonly string[]): string {
+  return `npx -y diffninja@${packageVersion()} grammars install${npmPackages.some(needsBuild) ? " --build" : ""}`;
+}
+
+/**
  * A grammar this review needed is not installed. diffninja never downloads code
  * while it reviews; the person installs the pinned set once, on purpose.
  */
@@ -132,8 +142,8 @@ export class GrammarNotInstalledError extends Error {
       pinnedVersion(npmPackage) === undefined
         ? `${npmPackage} is not one of the grammars diffninja installs, so call flows skip its files.`
         : needsBuild(npmPackage)
-          ? `The ${npmPackage} grammar ships no prebuilt binary, so call flows skip its files until it is compiled on this machine. diffninja does not download or build code while it reviews: run \`npx diffninja grammars install --build\` once (needs Python and a C/C++ compiler), then review again.`
-          : `The ${npmPackage} grammar is not installed, so call flows skip its files. diffninja does not download code while it reviews: run \`npx diffninja grammars install\` once to add the pinned grammars, then review again.`,
+          ? `The ${npmPackage} grammar ships no prebuilt binary, so call flows skip its files until it is compiled on this machine. diffninja does not download or build code while it reviews: run \`${grammarsInstallCommand([npmPackage])}\` once (needs Python and a C/C++ compiler), then review again.`
+          : `The ${npmPackage} grammar is not installed, so call flows skip its files. diffninja does not download code while it reviews: run \`${grammarsInstallCommand([npmPackage])}\` once to add the pinned grammars, then review again.`,
     );
     this.name = "GrammarNotInstalledError";
   }

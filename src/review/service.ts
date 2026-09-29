@@ -1,4 +1,4 @@
-import { takeMissingGrammars } from "../languages/grammars.js";
+import { grammarsInstallCommand, takeMissingGrammars } from "../languages/grammars.js";
 import { hiddenControlsByFile } from "./hidden-characters.js";
 import { resolve } from "node:path";
 import { runDiff } from "../run.js";
@@ -189,7 +189,7 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
     }
     const missing = takeMissingGrammars();
     if (missing.length > 0) {
-      warnings.push(`Call flows skip the files these grammars would read: ${missing.join(", ")}. diffninja does not download code while it reviews; run \`npx diffninja grammars install\` once and review again to include them. Flows through those files are absent, which is not evidence of safety.`);
+      warnings.push(`Call flows skip the files these grammars would read: ${missing.join(", ")}. diffninja does not download code while it reviews; run \`${grammarsInstallCommand(missing)}\` once and review again to include them. Flows through those files are absent, which is not evidence of safety.`);
     }
   }
   if (options.referenceProject !== undefined) {

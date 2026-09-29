@@ -106,7 +106,7 @@ try {
     import assert from "node:assert/strict";
     const { extractFunctions } = await import(process.argv[1]);
     assert.equal(extractFunctions("sample.ts", "export function greet() { return 42; }")[0].key, "greet");
-    assert.throws(() => extractFunctions("sample.py", "def greet():\\n    return 42\\n"), /diffninja grammars install/);
+    assert.throws(() => extractFunctions("sample.py", "def greet():\\n    return 42\\n"), (error) => error.message.includes(${JSON.stringify(`npx -y diffninja@${manifest.version} grammars install`)}));
   `, pathToFileURL(join(packageDir, "dist/extract.js")).href], { env: grammarEnv });
   run(process.execPath, [join(packageDir, manifest.bin.diffninja), "grammars", "install"], { env: grammarEnv });
   run(process.execPath, ["--input-type=module", "-e", `
