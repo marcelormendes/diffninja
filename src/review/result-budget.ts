@@ -144,6 +144,6 @@ export function boundedForAgent(snapshot: ConnectedSnapshot | undefined, report:
     const hunks = report.items.length === 1 ? "1 hunk" : `${report.items.length} hunks`;
     throw new Error(`This result is too large to send: with every diff, fact, and reason left out, the review of this change's ${hunks} is still ${(size / 1024 / 1024).toFixed(1)} MiB, over the ${budget / 1024 / 1024} MiB a client accepts in one message. Review the change in parts, with a narrower git range or a diff of fewer files.`);
   }
-  const warning = `This result was over ${budget / 1024 / 1024} MiB, more than a client accepts in one message, so it was trimmed: ${notes.join("; ")}. The review page has the complete report.`;
+  const warning = `This result was over ${budget / 1024 / 1024} MiB, and the message carries it twice, so it was trimmed to stay under what a client accepts: ${notes.join("; ")}. The review page has the complete report.`;
   return { snapshot: current.snapshot, report: { ...current.report, warnings: [...current.report.warnings, warning] } };
 }

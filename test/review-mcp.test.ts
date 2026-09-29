@@ -1551,7 +1551,7 @@ describe("review_diff on a very large change", () => {
     expect(JSON.stringify(result.structuredContent)).toBe(text);
     const report = reportOf(result);
     expect(report.items).toHaveLength(files);
-    expect(report.warnings.at(-1)).toMatch(/^This result was over 4 MiB, more than a client accepts in one message, so it was trimmed: \S/);
+    expect(report.warnings.at(-1)).toMatch(/^This result was over 4 MiB, and the message carries it twice, so it was trimmed to stay under what a client accepts: \S/);
     if (zwsp > 0) {
       expect(text).not.toContain("\u200B");
       expect(text).toContain("⟦U+200B⟧");
@@ -1568,7 +1568,7 @@ describe("review_diff on a very large change", () => {
     expect(Buffer.byteLength(JSON.stringify(textOf(result)), "utf8")).toBeLessThanOrEqual(MAX_RESULT_BYTES);
     // Once measured on the unescaped copy, this message came to 11.2 MiB and a client dropped it.
     expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThan(10 * 1024 * 1024);
-    expect(reportOf(result).warnings.at(-1)).toMatch(/was trimmed: \S/);
+    expect(reportOf(result).warnings.at(-1)).toMatch(/so it was trimmed to stay under what a client accepts: \S/);
   }, 60_000);
 });
 
