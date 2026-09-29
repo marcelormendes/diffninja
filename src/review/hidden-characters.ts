@@ -26,6 +26,13 @@ const SCRIPT = `(?![\\x00-\\x7F${ALWAYS}${BESIDE_ASCII}${BYTE_ORDER_MARK}]|\\p{D
 /** Matches one hidden character at a time, so each match is one code point to mark. */
 export const HIDDEN_CHARACTER_SOURCE = `[${ALWAYS}]|(?<!${SCRIPT})[${BESIDE_ASCII}](?!${SCRIPT})|(?<!${SCRIPT}|(?:^|\\n)[+\\- ]?)${BYTE_ORDER_MARK}(?!${SCRIPT})`;
 
+/**
+ * Every character of both tiers, with no lookaround, for a browser too old to compile
+ * {@link HIDDEN_CHARACTER_SOURCE} (lookbehind arrived in Safari 16.4). It marks the
+ * joiners of emoji and Persian text too, which reads worse but shows everything.
+ */
+export const HIDDEN_CHARACTER_FALLBACK_SOURCE = `[${ALWAYS}${BESIDE_ASCII}${BYTE_ORDER_MARK}]`;
+
 const hidden = new RegExp(HIDDEN_CHARACTER_SOURCE, "gu");
 const anyHidden = new RegExp(HIDDEN_CHARACTER_SOURCE, "u");
 

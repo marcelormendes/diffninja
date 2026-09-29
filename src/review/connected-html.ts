@@ -1,7 +1,7 @@
 import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
 import { PALETTE_STYLES } from "./palette.js";
 import { escapeHtml } from "./escape-html.js";
-import { HIDDEN_CHARACTER_SOURCE } from "./hidden-characters.js";
+import { HIDDEN_CHARACTER_FALLBACK_SOURCE, HIDDEN_CHARACTER_SOURCE } from "./hidden-characters.js";
 
 /**
  * The one page the connected session serves.
@@ -243,7 +243,13 @@ function script(csrf: string, base: string): string {
 
   // Bidirectional and other invisible control characters would let untrusted text reorder or hide
   // what the reviewer reads; every string from the pull request is shown with visible markers instead.
-  var HIDDEN = new RegExp(${JSON.stringify(HIDDEN_CHARACTER_SOURCE).replaceAll("<", "\\u003c")}, 'gu');
+  var HIDDEN;
+  try {
+    HIDDEN = new RegExp(${JSON.stringify(HIDDEN_CHARACTER_SOURCE).replaceAll("<", "\\u003c")}, 'gu');
+  } catch (unsupported) {
+    // A browser that cannot compile the lookbehind marks every such character rather than lose the page.
+    HIDDEN = new RegExp(${JSON.stringify(HIDDEN_CHARACTER_FALLBACK_SOURCE)}, 'gu');
+  }
   function visible(value) {
     return String(value).replace(HIDDEN, function (character) {
       return '\u27E6U+' + character.codePointAt(0).toString(16).toUpperCase().padStart(4, '0') + '\u27E7';

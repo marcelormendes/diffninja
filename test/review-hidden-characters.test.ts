@@ -123,7 +123,7 @@ describe("hidden and bidirectional control characters", () => {
 
   test("the connected page's script shows them too, for every string it puts on the page", () => {
     const page = renderConnectedPage({ csrf: "c".repeat(64), nonce: "n", base: "/b/" });
-    const start = page.indexOf("var HIDDEN = new RegExp(");
+    const start = page.indexOf("var HIDDEN;");
     const end = page.indexOf("function make(");
     expect(start).toBeGreaterThan(0);
     // Run just the marker function, as the browser would define it.
@@ -138,5 +138,19 @@ describe("hidden and bidirectional control characters", () => {
     expect(page).toContain("node.textContent = visible(textValue)");
     expect(page).toContain("node.textContent = value === undefined || value === null ? '' : visible(value)");
     expect(page).toContain("var shown = visible(text);");
+  });
+
+  test("a browser that cannot compile the lookbehind still marks every hidden character", () => {
+    const page = renderConnectedPage({ csrf: "c".repeat(64), nonce: "n", base: "/b/" });
+    const script = page.slice(page.indexOf("var HIDDEN;"), page.indexOf("function make("));
+    // An engine without lookbehind refuses the source while it is compiled, as Safari before 16.4 does.
+    const NoLookbehind = function (source: string, flags: string): RegExp {
+      if (source.includes("(?<")) throw new SyntaxError("Invalid regular expression: invalid group specifier name");
+      return new RegExp(source, flags);
+    };
+    const visible: (value: string) => string = new Function("RegExp", `${script}; return visible;`)(NoLookbehind);
+    expect(visible(`a${RLO}b${ZWSP}`)).toBe("a⟦U+202E⟧b⟦U+200B⟧");
+    expect(visible("a\u3164b")).toBe("a⟦U+3164⟧b");
+    expect(visible("\u{1F469}\u200D\u{1F4BB}")).toBe("\u{1F469}⟦U+200D⟧\u{1F4BB}");
   });
 });
