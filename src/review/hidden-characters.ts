@@ -5,8 +5,9 @@
  * shows them as visible markers instead of letting the browser act on them.
  *
  * Every Unicode bidirectional control (the left-to-right and right-to-left marks,
- * embeddings, overrides and isolates, and the Arabic letter mark), the Unicode
- * tag block, and the supplementary variation selectors are always shown. The
+ * embeddings, overrides and isolates, and the Arabic letter mark) and the whole
+ * plane-14 block (the tag characters, the supplementary variation selectors, and
+ * the unassigned code points between them) are always shown. The
  * other invisible characters (joiners, zero-width spaces, fillers, variation
  * selectors, marks) are also how emoji, Persian, Indic, Mongolian, and Hangul
  * text is written, so one is shown only where no such script surrounds it:
@@ -15,8 +16,8 @@
  * line's `+`, `-`, or space is left alone; anywhere else, a path or an id
  * included, it is shown.
  */
-const ALWAYS = "\\u061C\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u206F\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}";
-const BESIDE_ASCII = "\\u00AD\\u034F\\u115F\\u1160\\u180B-\\u180F\\u200B-\\u200D\\u2060-\\u2064\\u2800\\u3164\\uFE00-\\uFE0F\\uFFA0";
+const ALWAYS = "\\u061C\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u206F\\u{E0000}-\\u{E0FFF}";
+const BESIDE_ASCII = "\\u00AD\\u034F\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200D\\u2060-\\u2065\\u2800\\u3164\\uFE00-\\uFE0F\\uFFA0\\uFFF0-\\uFFF8\\u{1BCA0}-\\u{1BCA3}\\u{1D173}-\\u{1D17A}";
 const BYTE_ORDER_MARK = "\\uFEFF";
 /**
  * One visible character of a script: a non-ASCII letter, mark, digit, symbol,

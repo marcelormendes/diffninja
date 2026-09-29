@@ -20,8 +20,8 @@ describe("hidden and bidirectional control characters", () => {
 
   const hex = (point: number) => `U+${point.toString(16).toUpperCase().padStart(4, "0")}`;
   const span = (first: number, last: number) => Array.from({ length: last - first + 1 }, (_, index) => first + index);
-  const ALWAYS = [0x061c, 0x200e, 0x200f, ...span(0x202a, 0x202e), ...span(0x2066, 0x206f), ...span(0xe0000, 0xe007f), ...span(0xe0100, 0xe01ef)];
-  const BESIDE_ASCII = [0x00ad, 0x034f, 0x115f, 0x1160, ...span(0x180b, 0x180f), ...span(0x200b, 0x200d), ...span(0x2060, 0x2064), 0x2800, 0x3164, ...span(0xfe00, 0xfe0f), 0xfeff, 0xffa0];
+  const ALWAYS = [0x061c, 0x200e, 0x200f, ...span(0x202a, 0x202e), ...span(0x2066, 0x206f), ...span(0xe0000, 0xe0fff)];
+  const BESIDE_ASCII = [0x00ad, 0x034f, 0x115f, 0x1160, 0x17b4, 0x17b5, ...span(0x180b, 0x180f), ...span(0x200b, 0x200d), ...span(0x2060, 0x2065), 0x2800, 0x3164, ...span(0xfe00, 0xfe0f), 0xfeff, 0xffa0, ...span(0xfff0, 0xfff8), ...span(0x1bca0, 0x1bca3), ...span(0x1d173, 0x1d17a)];
   const PERSIAN = ["\u0645", "\u06CC"];
 
   test("bidirectional controls, the tag block and the supplementary variation selectors are shown everywhere, even inside another script", () => {
@@ -74,6 +74,19 @@ describe("hidden and bidirectional control characters", () => {
 
   // Detects a name that starts with a byte order mark reading as the file it copies: the mark
   // opens the string, so it was exempt, and `\uFEFFsrc/auth.ts` looked exactly like `src/auth.ts`.
+  // Detects an invisible code point that falls in no tier. The list is Unicode's own property, so
+  // a code point that a newer Unicode makes default-ignorable fails here instead of shipping unmarked.
+  test("every default-ignorable code point is shown between ASCII letters", () => {
+    const ignorable = /\p{Default_Ignorable_Code_Point}/u;
+    const unmarked: string[] = [];
+    for (let point = 0; point <= 0x10ffff; point += 1) {
+      if (point >= 0xd800 && point <= 0xdfff) continue;
+      const character = String.fromCodePoint(point);
+      if (ignorable.test(character) && visibleControls(`a${character}b`) !== `a⟦${hex(point)}⟧b`) unmarked.push(hex(point));
+    }
+    expect(unmarked).toEqual([]);
+  });
+
   test("a byte order mark opening a path or an id is shown, one after a diff line's marker is not", () => {
     expect(visibleControls("\uFEFFsrc/auth.ts")).toBe("⟦U+FEFF⟧src/auth.ts");
     expect(visibleControls("\uFEFFsrc/auth.ts#login")).toBe("⟦U+FEFF⟧src/auth.ts#login");
@@ -95,7 +108,7 @@ describe("hidden and bidirectional control characters", () => {
     expect(visibleControls("let isAdmin\u200D\u00A0= true;")).toBe("let isAdmin⟦U+200D⟧\u00A0= true;");
     expect(visibleControls('if (op === "a\u00A0\u200F<\u200F\u00A0b") grant();')).toBe('if (op === "a\u00A0⟦U+200F⟧<⟦U+200F⟧\u00A0b") grant();');
     expect(visibleControls("const { timeout,\u2009\u3164} = req.query;")).toBe("const { timeout,\u2009⟦U+3164⟧} = req.query;");
-    expect(visibleControls('if (level != "user\u200B\u2065") admin();')).toBe('if (level != "user⟦U+200B⟧\u2065") admin();');
+    expect(visibleControls('if (level != "user\u200B\u0085") admin();')).toBe('if (level != "user⟦U+200B⟧\u0085") admin();');
   });
 
   test("hiddenControlsIn keeps no copy per match: 12 MiB of zero-width spaces is one small scan", () => {

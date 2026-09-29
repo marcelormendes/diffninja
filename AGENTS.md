@@ -317,20 +317,22 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   (`escapeHtml`, the connected page's `make`/`setText`/diff cell) and in both
   copies of the tool result, and the review warns which files add them. Three
   rules. Always shown: U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to
-  U+206F, the tag block (U+E0000 to U+E007F) and the supplementary variation
-  selectors (U+E0100 to U+E01EF). Shown unless a visible non-ASCII character (a
+  U+206F, and the whole plane-14 block U+E0000 to U+E0FFF (the tag characters,
+  the supplementary variation selectors and the unassigned code points between
+  them). Shown unless a visible non-ASCII character (a
   letter, mark, digit, symbol or punctuation mark; U+00A0 is not one) sits
-  directly beside them: U+00AD, U+034F, U+115F, U+1160, U+180B to U+180F,
-  U+200B to U+200D, U+2060 to U+2064, U+2800, U+3164, U+FE00 to U+FE0F and
-  U+FFA0. A byte order mark is shown wherever it appears, except directly after
+  directly beside them: U+00AD, U+034F, U+115F, U+1160, U+17B4, U+17B5,
+  U+180B to U+180F, U+200B to U+200D, U+2060 to U+2065, U+2800, U+3164, U+FE00 to
+  U+FE0F, U+FFA0, U+FFF0 to U+FFF8, U+1BCA0 to U+1BCA3 and U+1D173 to U+1D17A. A
+  byte order mark is shown wherever it appears, except directly after
   the `+`, `-` or space that starts a diff line, where it is left alone (so it is
   shown at the start of a path or an id). A hidden character of the second rule
   that touches a visible non-ASCII character is spared, so a zero-width space
   next to an accented letter, a quotation mark, a dash, a currency sign or an
   emoji is not marked, and in a run between two such characters only the ends
   are spared (two between Arabic letters are both unmarked, three mark the
-  middle one). Other invisible code points (for example U+17B4 and U+1D173) are
-  on none of the lists and are not marked. Ids and paths the agent echoes
+  middle one). Every code point Unicode marks Default_Ignorable_Code_Point is on
+  one of the lists, and a test walks that property to keep it so. Ids and paths the agent echoes
   back are minted in the shown form. Titles
   and commit subjects reach `questions` as JSON-quoted data, and the first
   `nextSteps` step says so (the update notice, when one is shown, comes before it). A pull request link inside text that is a real
