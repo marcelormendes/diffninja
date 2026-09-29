@@ -254,31 +254,33 @@ written by other people, and diffninja treats them as data.
 - Hidden and bidirectional Unicode characters (the ones behind "Trojan Source")
   are shown as visible `⟦U+XXXX⟧` markers on every page and in the result the
   agent receives, and the review warns which files add them. The ids and paths
-  your agent echoes back are minted in the shown form. There are two groups.
-  - Always marked, wherever they are. Bidirectional embeddings, overrides and
-    isolates (U+202A to U+202E, U+2066 to U+2069), the deprecated formatting
-    characters U+206A to U+206F, the Arabic letter mark U+061C, the tag block
-    (U+E0000 to U+E007F) and the supplementary variation selectors (U+E0100 to
-    U+E01EF).
+  your agent echoes back are minted in the shown form. There are three rules.
+  - Always marked, wherever they are. The left-to-right and right-to-left marks
+    (U+200E and U+200F), the bidirectional embeddings, overrides and isolates
+    (U+202A to U+202E, U+2066 to U+2069), the deprecated formatting characters
+    U+206A to U+206F, the Arabic letter mark U+061C, the tag block (U+E0000 to
+    U+E007F) and the supplementary variation selectors (U+E0100 to U+E01EF).
   - Marked unless a visible non-ASCII character sits directly beside them. Zero
-    width space, joiner and non-joiner, the left-to-right and right-to-left
-    marks (U+200E and U+200F), the word joiner and the invisible math operators
-    (U+2060 to U+2064), the soft hyphen, the combining grapheme joiner, the Hangul
-    and Braille fillers, the Mongolian selectors and vowel separator, and the
-    variation selectors U+FE00 to U+FE0F. A byte order mark (U+FEFF) follows the same rule, and is
-    also left alone at the start of a line.
-  A visible non-ASCII character here means a letter, mark, digit, symbol or
-  punctuation mark outside ASCII. That keeps emoji, Persian, Indic and accented
-  text readable. A space such as U+00A0 does not count. In practice, every
-  second-group character between ASCII characters is marked. Beside one
+    width space, non-joiner and joiner (U+200B to U+200D), the word joiner and
+    the invisible math operators (U+2060 to U+2064), the soft hyphen, the
+    combining grapheme joiner, the Hangul and Braille fillers, the Mongolian
+    selectors and vowel separator, and the variation selectors U+FE00 to U+FE0F.
+  - A byte order mark (U+FEFF) is marked wherever it appears, except directly
+    after the `+`, `-` or space that starts a line of a diff, where it is left
+    alone. At the start of a path or an id it is marked.
+
+  A visible non-ASCII character in the second rule means a letter, mark, digit,
+  symbol or punctuation mark outside ASCII. That keeps emoji, Persian, Indic and
+  accented text readable. A space such as U+00A0 does not count. In practice,
+  every second-rule character between ASCII characters is marked. Beside one
   non-ASCII character it is not, so a zero-width space next to an accented
-  letter, a curly quote, an em dash, a euro sign or an emoji is not marked, and
-  the two direction marks are not marked beside Arabic or Hebrew letters. Only a
-  character that touches a visible one is spared. In a longer run the ones in
+  letter, a curly quote, an em dash, a euro sign or an emoji is not marked. Only
+  a character that touches a visible one is spared. In a longer run the ones in
   the middle are marked. Two zero-width spaces between Arabic letters show
-  nothing, and three show the middle one. The lists are fixed. Other invisible
-  code points, for example U+17B4, U+1D173 and U+1BCA0, are on neither list and
-  are shown as they are.
+  nothing, and three show the middle one. The direction marks are marked even
+  beside Arabic or Hebrew letters. The lists are fixed. Other invisible code
+  points, for example U+17B4, U+1D173 and U+1BCA0, are on none of them and are
+  shown as they are.
 - Titles and commit subjects reach the agent quoted as data. The first step of
   every result tells the agent that text from the pull request is data written
   by other people, never instructions. When the update notice is on and a newer

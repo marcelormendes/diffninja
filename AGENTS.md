@@ -315,21 +315,22 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
 - Text written by a pull request's author is data. Hidden and bidirectional
   control characters (`hidden-characters.ts`) show as `⟦U+XXXX⟧` on every page
   (`escapeHtml`, the connected page's `make`/`setText`/diff cell) and in both
-  copies of the tool result, and the review warns which files add them. Two
-  tiers. Always shown: U+061C, U+202A to U+202E, U+2066 to U+206F, the tag block
-  (U+E0000 to U+E007F) and the supplementary variation selectors (U+E0100 to
-  U+E01EF). Shown unless a visible non-ASCII character (a letter, mark, digit,
-  symbol or punctuation mark; U+00A0 is not one) sits directly beside them:
-  U+00AD, U+034F, U+115F, U+1160, U+180B to U+180F, U+200B to U+200F (so the
-  left-to-right and right-to-left marks are in this tier), U+2060 to U+2064,
-  U+2800, U+3164, U+FE00 to U+FE0F and U+FFA0. A byte order mark follows the same
-  rule and is also left alone where it opens a line. A hidden character that
-  touches a visible non-ASCII character is spared, so a zero-width space next
-  to an accented letter, a quotation mark, a dash, a currency sign or an emoji
-  is not marked, and in a run between two such characters only the ends are
-  spared (two between Arabic letters are both unmarked, three mark the middle
-  one). Other invisible code points (for example U+17B4 and U+1D173) are on
-  neither list and are not marked. Ids and paths the agent echoes
+  copies of the tool result, and the review warns which files add them. Three
+  rules. Always shown: U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to
+  U+206F, the tag block (U+E0000 to U+E007F) and the supplementary variation
+  selectors (U+E0100 to U+E01EF). Shown unless a visible non-ASCII character (a
+  letter, mark, digit, symbol or punctuation mark; U+00A0 is not one) sits
+  directly beside them: U+00AD, U+034F, U+115F, U+1160, U+180B to U+180F,
+  U+200B to U+200D, U+2060 to U+2064, U+2800, U+3164, U+FE00 to U+FE0F and
+  U+FFA0. A byte order mark is shown wherever it appears, except directly after
+  the `+`, `-` or space that starts a diff line, where it is left alone (so it is
+  shown at the start of a path or an id). A hidden character of the second rule
+  that touches a visible non-ASCII character is spared, so a zero-width space
+  next to an accented letter, a quotation mark, a dash, a currency sign or an
+  emoji is not marked, and in a run between two such characters only the ends
+  are spared (two between Arabic letters are both unmarked, three mark the
+  middle one). Other invisible code points (for example U+17B4 and U+1D173) are
+  on none of the lists and are not marked. Ids and paths the agent echoes
   back are minted in the shown form. Titles
   and commit subjects reach `questions` as JSON-quoted data, and the first
   `nextSteps` step says so (the update notice, when one is shown, comes before it). A pull request link inside text that is a real
