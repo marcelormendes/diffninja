@@ -963,6 +963,8 @@ describe("review_diff connected pull request mode", () => {
       expect(unfinished.url).toBeUndefined();
       expect(unfinished.reportUrl).toBeUndefined();
       expect(unfinished.nextSteps?.join(" ")).toMatch(/finish_review/);
+      // The agent holds the link once it exists and can post through it, so it is told to leave the page alone.
+      expect(unfinished.nextSteps?.join(" ")).toMatch(/Do not open or fetch the page/);
       expect(textOf(result)).not.toMatch(/127\.0\.0\.1/);
       const payload = await opened(client, result);
       expect(payload.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{64}\/$/);
