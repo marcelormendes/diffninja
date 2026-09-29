@@ -81,7 +81,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `reviewId` and `nextSteps`, and no page link; the report carries `questions` (`questions.ts`,
     deterministic templates, closed options incl. `cannot-tell`, at most 36; import-only hunks are not asked about)
     and `functions` (`explanation.ts`: each project definition around the hunks
-    and in the call flows once, id `<file>#<name>`, at most 40, product code
+    and in the call flows once, id `<file>#<name>` with any hidden character shown
+    as a marker, which is the id the agent sends back, at most 40, product code
     before tests, library calls never listed).
     A git-range report also carries `project` (`history.ts`): line origins per
     hunk (`items[].history`, blame at the base), related reverts, applicable
@@ -188,8 +189,10 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     the command from `grammarsInstallCommand`, `npx -y diffninja@<this version> grammars install`
     (plus `--build` for Kotlin or Perl), since a cache another lock installed is
     not read and `@latest` may carry another lock. Call-flow indexing skips
-    source files over 1 MiB and files past the first 15,000 per revision, and
-    says so.
+    source files over 1 MiB and files beyond 15,000 per revision (the diff's own
+    files and their directories are read first, then code-point order; each
+    skipped file counts once), and says so. A review that left files out reports
+    `callFlowAvailability: "partial"`.
   - No output files, no CLI flags, no key arguments. The environment is read
     for: `DIFFNINJA_GRAMMAR_CACHE` (cache location), `DIFFNINJA_NPM_ENV` (variable
     names npm also gets), `DIFFNINJA_TRUST_PROJECT_COMPILER=1`
@@ -220,7 +223,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   `nextSteps` tells it never to. Loopback-only
   Host/Origin/`Sec-Fetch-Site`/CSRF checks defend against browsers, and the
   page's CSP nonce is fresh per response and never the CSRF token. At most 10
-  connected pages stay open per connection (the oldest closes); a live
+  connected pages stay open per connection (the one used least recently closes,
+  and `finish_review` for its review is refused with a clear error); a live
   session's latest report is pinned outside the 20-page report limit. `GET /flow?snapshot=&file=`
   (or `&view=business`, the business view alone, once explained)
   serves the analyzed snapshot's call-flow page (the Tree view only, without the business view) (`renderCallFlowPage`, hashed
@@ -233,11 +237,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   accessible through native folding, including without JavaScript.
 - Change facts are lexical and bounded to the changed lines each side shows:
   `no` never claims absence elsewhere; a file type the analysis cannot read
-  answers `unknown` everywhere and reads `uncertain`, never `no` or `passed`.
+  answers `unknown` everywhere and reads `uncertain`, never `no` or `passed`. So
+  does a hunk with a changed line over 4,000 characters, which is left unread
+  rather than answered from part of the line.
   Every `yes` carries the changed line it rests on. The same input always yields
   the same report. Preserve explicit uncertainty and snapshot provenance.
-  Reading a line is linear: operands are read up to 200 characters, a line
-  yields at most 1,000 comparisons, and `limitHit` compares at most 150 per side.
+  Reading is linear in the hunk. No operand, comparison count, or window hides a
+  changed bound, so a line too long to read is left unread instead.
 - Status: code or configuration outside a test file is `attention` (code that
   only changes imports is `low`, trivial priority, never asked about); prose is
   `attention` only for an instruction, link, or limit change, else `low`; a test
@@ -260,16 +266,26 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
 - Text written by a pull request's author is data. Hidden and bidirectional
   control characters (`hidden-characters.ts`) show as `⟦U+XXXX⟧` on every page
   (`escapeHtml`, the connected page's `make`/`setText`/diff cell) and in both
-  copies of the tool result, and the review warns which files add them. Titles
+  copies of the tool result, and the review warns which files add them. Two
+  tiers: bidirectional controls, the tag block and the supplementary variation
+  selectors are always shown; joiners, zero-width spaces, fillers and other
+  invisible characters are shown unless a visible script character sits beside
+  them, so emoji, Persian and Indic text is left as written, and a byte order mark
+  that opens a line is left alone. A lone invisible character between two letters
+  of a non-Latin script is therefore not marked. Ids and paths the agent echoes
+  back are minted in the shown form. Titles
   and commit subjects reach `questions` as JSON-quoted data, and `nextSteps`
   opens with a step saying so. A pull request link inside text that is a real
   unified diff is source and is never followed. Untrusted input is bounded:
   descriptions over 12,000 characters are not lexed (plain text), link detection
   reads 300 characters per side of 500 markers per string, intent claims stop at
-  100, and the agent's copy of a result stays under 4 MiB (`result-budget.ts`)
-  by trimming, in order, `snapshot.lines`, call flows, extra claims, per-hunk
-  context, then the diff text of the lowest-ranked hunks, with a warning; the
-  server and the pages keep the whole report.
+  100, and the agent's copy of a result stays under 4 MiB, measured on the marked
+  text as sent (`result-budget.ts`), by trimming, in order, `snapshot.lines`,
+  extra claims, the review agenda past 20 entries, call flows and per-hunk
+  context, then the diff text of the lowest-ranked hunks of any size, then their
+  facts, reasons, and history, with a warning that names each stage that ran. A
+  result that still does not fit is refused with an error to review the change in
+  parts; the server and the pages keep the whole report.
 - Tests live in `test/` and run with `vitest`. `review-pipeline.test.ts` covers
   the deterministic checks, status, ranking, and order; `review-change-facts.test.ts`
   the lexical facts; `review-report-pages.test.ts` the report pages;

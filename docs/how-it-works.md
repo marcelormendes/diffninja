@@ -50,7 +50,8 @@ The tool writes no report files. Arguments and examples:
    instruction, a link, or a limit, **low** otherwise; a test-file change reads
    **attention** only when it changes a limit, discards a failure, or weakens a
    gate, **low** otherwise; a formatting-only change **passed**;
-   an unread file type **uncertain**, for a person to read. Priority orders hunks:
+   an unread file type, or a hunk with a changed line over 4,000 characters,
+   **uncertain**, for a person to read. Priority orders hunks:
    a fixed base, plus 10 for a real change, plus the heaviest fact of the
    boundary group (what the change says or bounds) and of the failure group
    (failures, CI gates, permissions) — each group counts once, never summed. The report lists
@@ -100,7 +101,8 @@ The tool writes no report files. Arguments and examples:
    little about what a change does to the product. Every report lists
    `functions`: each function a reader meets around the hunks and in the call
    flows (the project's own definitions, not library calls), once, as
-   `<file>#<name>`. The reviewing agent, which read the code, sends
+   `<file>#<name>`, with a hidden character shown as a marker, which is the
+   form the agent sends back. The reviewing agent, which read the code, sends
    `explanation` with its reading: one plain sentence per listed function on
    what it does for the business, one to four business processes as steps and
    decisions with the steps this change adds, changes, or removes marked (like

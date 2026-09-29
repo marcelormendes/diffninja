@@ -67,7 +67,8 @@ gets the dependency versions diffninja was tested with.
   `gh` run by the absolute path found on PATH, never a file from the repository.
 - `gh` for pull requests.
 - Native tree-sitter parsers in the same process, over the source files of the
-  two revisions (files over 1 MiB and files past the first 15,000 are skipped).
+  two revisions (files over 1 MiB and files beyond 15,000 per revision are skipped,
+  after the diff's own files and their directories are read).
 - With `referenceProject`, a TypeScript compiler installed beside diffninja.
   diffninja's package ships none. With a global install of diffninja,
   `npm install -g typescript` puts one beside it; a diffninja started through
@@ -88,7 +89,8 @@ the port but not the link gets a 404 for everything, so it cannot read the pull
 request or post a review as you. Requests from other web pages are also
 refused (Host, Origin and CSRF checks), the page has a strict content security
 policy with a fresh nonce per response, and it closes when your agent's
-connection does. At most ten such pages stay open per connection.
+connection does. At most ten such pages stay open per connection; the one used
+least recently closes, and finishing its review is then refused.
 
 Your agent is different. With the link it can load the page, and the page
 carries the token its own Submit button sends, so an agent that can fetch local
@@ -104,14 +106,21 @@ written by other people, and diffninja treats them as data:
 
 - Hidden and bidirectional Unicode characters (the ones behind "Trojan Source")
   are shown as visible `⟦U+XXXX⟧` markers on every page and in the result the
-  agent receives, and the review warns which files add them.
+  agent receives, and the review warns which files add them. Bidirectional
+  controls and the tag block are always shown. Joiners, zero-width spaces and
+  similar characters are shown unless a visible script character sits beside
+  them, so emoji and Persian or Indic text stay readable. That means one or two
+  invisible characters between letters of a non-Latin script are not marked. The
+  ids and paths your agent echoes back are minted in the shown form.
 - Titles and commit subjects reach the agent quoted as data, and the first
   step of every result tells the agent that text from the pull request is data
   written by other people, never instructions.
 - A pull request link inside a real diff is source and is never followed.
 - Everything is bounded: a description over 12,000 characters is shown as plain
-  text, a line is read in linear time, and the agent's copy of a result stays
-  under 4 MiB (the page keeps the whole report).
+  text, a hunk is read in linear time and one with a changed line over 4,000
+  characters is left unread and marked uncertain, and the agent's copy of a
+  result stays under 4 MiB (the page keeps the whole report). A result that
+  cannot be trimmed to fit is refused with a clear error.
 
 A language model can still be talked into things by text it reads; diffninja
 narrows what such text can reach. Its tools change what its own pages display

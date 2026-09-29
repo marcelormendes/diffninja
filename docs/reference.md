@@ -81,7 +81,8 @@ keep them private.
 
 Git-range inputs have repository call flows. Patch-only inputs show a short git-range note, not
 invented diagrams. `callFlowAvailability` distinguishes `available`,
-`needs-git-range`, `no-changes`, and `failed`.
+`needs-git-range`, `no-changes`, `partial` (call flows left out some source
+files, so paths through them are absent, with or without trees), and `failed`.
 
 Hunk reasons, local change facts (each `yes` with the changed line it rests
 on), warnings, and priorities are fields of the report. The analysis is local
@@ -166,7 +167,8 @@ CSP with a fresh nonce per response. Its only API routes are
 `GET api/state`, `GET api/analysis` and `POST api/load`, `api/preview`,
 `api/submit`, `api/reconcile` under that path; none is a generic GitHub or
 command proxy. At most ten of these pages stay open per agent connection; the
-oldest closes and reviewing its pull request again opens a fresh one.
+one used least recently closes, `finish_review` for its review is refused with a
+clear error, and reviewing its pull request again opens a fresh one.
 
 ## Setup
 
@@ -234,5 +236,7 @@ policy.
   grammars ship no prebuilt binary: `diffninja grammars install --build`
   compiles them on your machine and needs Python and a C/C++ toolchain. A
   review without a grammar still runs on the diff, and its warnings name the
-  grammars its call flows skipped. Source files over 1 MiB and files beyond the
-  first 15,000 of a revision are left out of call flows, and the review says so.
+  grammars its call flows skipped. Source files over 1 MiB and files beyond
+  15,000 per revision are left out of call flows, and the review says so and
+  reports `partial`. Past 15,000 the changed files and their directories are read
+  first, then the rest in code-point order, and each skipped file counts once.
