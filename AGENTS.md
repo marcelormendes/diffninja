@@ -214,7 +214,10 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   and access control in layers. Every route of a session (page, `/api/*`,
   `/flow`) lives under `/<256-bit secret>/` (`routeOf`, constant-time compare):
   a local process that was never handed the link gets a 404 for everything and
-  cannot read the PR or post a review as the engineer. Loopback-only
+  cannot read the PR or post a review as the engineer. The agent is handed the
+  link, and the page carries the CSRF token, so an agent that can fetch local
+  URLs can submit; docs must not claim otherwise (`docs/security.md`), and
+  `nextSteps` tells it never to. Loopback-only
   Host/Origin/`Sec-Fetch-Site`/CSRF checks defend against browsers, and the
   page's CSP nonce is fresh per response and never the CSRF token. At most 10
   connected pages stay open per connection (the oldest closes); a live

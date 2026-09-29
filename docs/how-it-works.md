@@ -94,7 +94,8 @@ The tool writes no report files. Arguments and examples:
    On a pull request, the suggested line comments are short, in the reviewer's
    own voice, with no "Finding 1:" scaffolding. The page shows each under its line; you add one
    or all of them to your draft with a click, edit or dismiss them, and submit
-   the review yourself. Nothing is posted without you.
+   the review yourself. No diffninja tool posts anything, and the agent is told
+   never to submit through the page.
 5. **The business explanation.** Function names and call graphs tell a reader
    little about what a change does to the product. Every report lists
    `functions`: each function a reader meets around the hunks and in the call

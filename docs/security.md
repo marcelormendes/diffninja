@@ -8,18 +8,21 @@ tests in the repository cover its main statements.
 
 diffninja is a small program your coding agent starts on your machine. It calls
 no AI model, needs no API key, and while it reviews it makes no request of its
-own. For a pull request it runs your GitHub CLI (`gh`) to read the PR, and it
-posts a review only when you press **Submit** on the page. It never downloads or
-builds code during a review. What it returns to your agent (the diff, and
-function bodies from files near the change) is handed to whichever model your
-agent uses, exactly like the output of any other tool your agent calls.
+own. For a pull request it runs your GitHub CLI (`gh`) to read the PR. None of
+its tools posts anything. A review is posted only when **Submit** is pressed on
+the review page, normally by you. Anyone holding the page's link can do that,
+and your agent holds it, because it receives the link to give it to you.
+diffninja never downloads or builds code during a review. What it returns to
+your agent (the diff, and function bodies from files near the change) is handed
+to whichever model your agent uses, exactly like the output of any other tool
+your agent calls.
 
 ## What it does on the network
 
 | Who | When | What |
 | --- | --- | --- |
 | `gh` (your GitHub CLI) | Reviewing a pull request link | Reads the PR (metadata, diff, files) with the login you already have. Usage telemetry of `gh` is turned off for these calls. |
-| `gh` | You press **Submit** on the page | Posts your review to GitHub. Nothing else can post: not the agent, not another program on your machine. |
+| `gh` | **Submit** is pressed on the review page | Posts the review to GitHub. Only someone holding the page's link can submit. Your agent holds it, so an agent that can run commands or fetch web pages could submit too; diffninja tells it never to. A program that was never given the link cannot. |
 | `npm` | You run `diffninja setup` or `diffninja grammars install` | Installs diffninja, or the pinned language grammars. |
 | diffninja | Only if you set `DIFFNINJA_UPDATE_CHECK=1` | One GET of the newest published version (no data about you or your code). Off by default, and off in CI. |
 
@@ -78,13 +81,21 @@ dependencies, and never checks its branch out.
 ## The review page on your machine
 
 The page is a small web server on `127.0.0.1` that lives as long as your agent's
-connection. Every URL of it contains a random 256-bit secret, and only the link
-your agent gives you has it: a program or another user on the same machine that
-finds the port gets a 404 for everything, so it cannot read the pull request or
-post a review as you. Requests from other web pages are also refused (Host,
-Origin and CSRF checks), the page has a strict content security policy with a
-fresh nonce per response, and it closes when your agent's connection does. At
-most ten such pages stay open per connection.
+connection. Every URL of it contains a random 256-bit secret that only the
+page's link carries. `finish_review` returns that link to your agent, and your
+agent gives it to you. A program or another user on the same machine that finds
+the port but not the link gets a 404 for everything, so it cannot read the pull
+request or post a review as you. Requests from other web pages are also
+refused (Host, Origin and CSRF checks), the page has a strict content security
+policy with a fresh nonce per response, and it closes when your agent's
+connection does. At most ten such pages stay open per connection.
+
+Your agent is different. With the link it can load the page, and the page
+carries the token its own Submit button sends, so an agent that can fetch local
+URLs can do whatever the page does, including submitting a review as you.
+diffninja tells the agent to give you the link and never to submit, but it
+cannot enforce that. If your agent can run shell commands, treat it as able to
+post a review.
 
 ## Text written by the pull request's author
 
@@ -106,6 +117,8 @@ A language model can still be talked into things by text it reads; diffninja
 narrows what such text can reach. Its tools change what its own pages display
 and read pull requests through `gh` (any pull request your login can see, when
 the agent passes its link); none of them posts to GitHub or runs a command.
+An agent that can also run commands is another matter. Text in a pull request
+could talk it into opening the review page and submitting, as described above.
 
 ## Settings you control
 
@@ -119,6 +132,8 @@ the agent passes its link); none of them posts to GitHub or runs a command.
 ## What is not covered
 
 - Your agent and its model provider: they receive what diffninja returns.
+- What your agent does with the review page's link. It holds the link, and an
+  agent that can fetch local URLs can submit a review through the page.
 - The native parsers run in the agent's session; a memory-safety bug in a
   tree-sitter grammar would be a bug in that process.
 - `diffninja setup` and `grammars install` trust the npm registry and the
