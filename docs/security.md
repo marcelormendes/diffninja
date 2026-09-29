@@ -29,13 +29,14 @@ analytics), and diffninja has no telemetry of its own.
 
 ## What it downloads, and how
 
-Only `diffninja grammars install`, run by a person, downloads code: 18
-tree-sitter grammar packages at exact versions. The lock that ships with
+Only `diffninja grammars install`, run by a person, downloads code: 20
+tree-sitter grammar packages at exact versions (18 usable at once; Kotlin and
+Perl arrive as source and load only after `--build`). The lock that ships with
 diffninja holds the sha512 of every tarball, dependencies included, and
 `npm ci --ignore-scripts` refuses any tarball that differs, so no install script
 of any package runs and npm gets only the environment it needs (no tokens).
 `--build` additionally compiles the Kotlin and Perl grammars, which ship no
-prebuilt binary. A review never installs anything: a missing grammar is named in
+prebuilt binary; that is the one case where an install script (theirs) runs. A review never installs anything: a missing grammar is named in
 the review's warnings, and the files that need it are skipped by call flows. The
 package itself ships an `npm-shrinkwrap.json`, so an install from the registry
 gets the dependency versions diffninja was tested with.
