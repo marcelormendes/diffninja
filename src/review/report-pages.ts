@@ -70,6 +70,11 @@ interface ReportPage {
   readonly reviewId?: string;
   /** Set once finish_review accepted the agent's whole reading; only then is the page's address handed out. */
   finished?: boolean;
+  /**
+   * The latest report of a live connected session: the session's page still
+   * links to it, so the page limit does not evict it while the session lives.
+   */
+  pinned?: boolean;
 }
 
 /** A static review published on this connection. */
@@ -271,22 +276,39 @@ export class ReportPages {
     const { origin } = await (this.listening ??= this.listen());
     const token = randomBytes(32).toString("hex");
     this.pages.set(token, { html, policy: reportPolicy(html) });
-    for (const [oldest, page] of this.pages) {
-      if (this.pages.size <= MAX_REPORT_PAGES) break;
-      this.pages.delete(oldest);
-      if (page.reviewId !== undefined) this.tokens.delete(page.reviewId);
-    }
+    this.evict();
     return `${origin}/report/${token}`;
   }
 
+  /** Drop the oldest pages past the limit; a pinned page is not counted and not dropped. */
+  private evict(): void {
+    let evictable = [...this.pages.values()].filter((page) => page.pinned !== true).length;
+    for (const [oldest, page] of this.pages) {
+      if (evictable <= MAX_REPORT_PAGES) break;
+      if (page.pinned === true) continue;
+      this.pages.delete(oldest);
+      evictable -= 1;
+      if (page.reviewId !== undefined) this.tokens.delete(page.reviewId);
+    }
+  }
+
+  /** Keep (or stop keeping) a published page out of the page limit's reach, while a session's page still links to it. */
+  setPinned(reviewId: string, pinned: boolean): void {
+    const token = this.tokens.get(reviewId);
+    const page = token === undefined ? undefined : this.pages.get(token);
+    if (page === undefined) return;
+    page.pinned = pinned;
+    this.evict();
+  }
+
   /** Serve a static review's page, keeping the report so answers can be recorded. */
-  async publish(report: ReviewReport): Promise<PublishedReview> {
+  async publish(report: ReviewReport, options: { readonly pinned?: boolean } = {}): Promise<PublishedReview> {
     if (this.updateNotice !== undefined) report.updateNotice = this.updateNotice;
     const url = await this.add(this.render(report));
     const token = url.slice(url.lastIndexOf("/") + 1);
     const reviewId = randomBytes(16).toString("hex");
     const page = this.pages.get(token)!;
-    this.pages.set(token, { ...page, report, reviewId });
+    this.pages.set(token, { ...page, report, reviewId, pinned: options.pinned === true });
     this.tokens.set(reviewId, token);
     return { reviewId, url };
   }

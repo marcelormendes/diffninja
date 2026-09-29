@@ -1544,3 +1544,44 @@ describe("text written by the pull request's author", () => {
   });
 });
 
+describe("how many pages one connection keeps open", () => {
+  const prUrl = (number: number) => GH_URL.replace("/pull/7", `/pull/${number}`);
+
+  test("a run of pull requests keeps at most ten review pages listening, closing the oldest, and reviewing an evicted one opens a fresh page", async () => {
+    await withFakeGh(async () => {
+      blockNetwork();
+      const client = await connectReview();
+      const baseline = await listeningServers();
+      const pages: string[] = [];
+      for (let number = 1; number <= 13; number += 1) {
+        const payload = await opened(client, await review(client, { mode: "connected", pr: prUrl(number) }));
+        pages.push(payload.url!);
+      }
+      await new Promise<void>(resolve => setTimeout(resolve, 300));
+      // 13 pull requests, 10 pages: the first three are closed, the rest answer.
+      for (const closed of pages.slice(0, 3)) expect(await loopback(closed + "api/state"), closed).toBeNull();
+      for (const open of pages.slice(3)) expect((await loopback(open + "api/state"))?.status, open).toBe(200);
+      // Ten sessions plus this connection's one report page server.
+      expect(await listeningServers()).toBe(baseline + 10 + 1);
+      const again = await opened(client, await review(client, { mode: "connected", pr: prUrl(1) }));
+      expect(again.url).not.toBe(pages[0]);
+      expect((await loopback(again.url! + "api/state"))?.status).toBe(200);
+    });
+  }, 120_000);
+
+  test("the report a live session links to survives twenty other reports, and is an ordinary page again when the session is evicted", async () => {
+    await withFakeGh(async () => {
+      blockNetwork();
+      const client = await connectReview();
+      const first = await opened(client, await review(client, { mode: "connected", pr: prUrl(1) }));
+      expect((await loopback(first.reportUrl!))?.status).toBe(200);
+      for (let index = 0; index < 22; index += 1) await review(client, { diff: patch });
+      expect((await loopback(first.reportUrl!))?.status).toBe(200);
+      // Ten newer pull requests evict the first session; its report then ages out like any other.
+      for (let number = 2; number <= 11; number += 1) await opened(client, await review(client, { mode: "connected", pr: prUrl(number) }));
+      for (let index = 0; index < 22; index += 1) await review(client, { diff: patch });
+      expect((await loopback(first.reportUrl!))?.status).toBe(404);
+    });
+  }, 180_000);
+});
+

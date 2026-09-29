@@ -54,6 +54,9 @@ const STATIC_NEXT_STEPS = [
 const FINISH_FIRST = "The page link comes only from finish_review: call it with every answer, the full order, your comments ([] for none), and your explanation.";
 const LIVE_UPDATE = "The review is finished; its page shows this update.";
 
+/** Connected review pages (one listening server each) kept open per MCP connection. */
+const MAX_CONNECTED_SESSIONS = 10;
+
 const SHUTDOWN_ERROR = "This MCP connection is shutting down; open a new session to review a pull request.";
 
 interface ConnectedBinding {
@@ -121,11 +124,15 @@ interface SnapshotAnalyzer {
   (): Promise<SnapshotAnalysis>;
   /** Use this clone from now on; a change recomputes the analysis on the next read. */
   useRepo(repo: string): void;
+  /** The session is over: its latest report no longer needs to outlive the page limit. */
+  release(): void;
 }
 
 function snapshotAnalyzer(review: ConnectedReview, url: string, reports: ReportPages): SnapshotAnalyzer {
   let current: { snapshotId: string; result: Promise<SnapshotAnalysis> } | undefined;
   let repo: string | undefined;
+  /** The one report the session's page links to now; older ones are ordinary pages again. */
+  let pinnedReviewId: string | undefined;
   const analyze = async () => {
     const snapshot = review.getState().snapshot;
     if (snapshot === undefined) return { unavailable: "No pull request is loaded." };
@@ -153,7 +160,9 @@ function snapshotAnalyzer(review: ConnectedReview, url: string, reports: ReportP
               scope = { source: "patch", note: `Patch-only: the local clone could not be used (${error instanceof Error ? error.message : "unknown error"}).` };
             }
           }
-          const published = await reports.publish(report);
+          const published = await reports.publish(report, { pinned: true });
+          if (pinnedReviewId !== undefined) reports.setPinned(pinnedReviewId, false);
+          pinnedReviewId = published.reviewId;
           return { snapshotId, report, reviewId: published.reviewId, reportUrl: published.url, scope };
         } catch (error) {
           return { unavailable: `Local analysis failed: ${error instanceof Error ? error.message : "unknown error"}` };
@@ -168,6 +177,10 @@ function snapshotAnalyzer(review: ConnectedReview, url: string, reports: ReportP
       if (next === repo) return;
       repo = next;
       current = undefined;
+    },
+    release() {
+      if (pinnedReviewId !== undefined) reports.setPinned(pinnedReviewId, false);
+      pinnedReviewId = undefined;
     },
   });
 }
@@ -214,12 +227,27 @@ class ConnectedSessions {
     const key = url.toLowerCase();
     const existing = this.byUrl.get(key);
     if (existing !== undefined) return existing;
+    while (this.byUrl.size >= MAX_CONNECTED_SESSIONS) this.evictOldest();
     const started = this.start(url);
     this.started.add(started);
     this.byUrl.set(key, started);
     // A failed load leaves no binding behind, so the same pull request can be retried.
     started.catch(() => { if (this.byUrl.get(key) === started) this.byUrl.delete(key); });
     return started;
+  }
+
+  /**
+   * Each pull request holds a listening loopback server for the whole connection;
+   * past the limit the one opened longest ago is closed, so a hostile or careless
+   * run of pull requests cannot pile them up. Reviewing it again opens a fresh page.
+   */
+  private evictOldest(): void {
+    const oldest = this.byUrl.entries().next().value;
+    if (oldest === undefined) return;
+    const [key, binding] = oldest;
+    this.byUrl.delete(key);
+    this.started.delete(binding);
+    void binding.then((opened) => { opened.analysis.release(); return closeSession(opened.session); }).catch(() => undefined);
   }
 
   /** Close every served page. Repeated calls join the same teardown. */
