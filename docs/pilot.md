@@ -34,7 +34,10 @@ page:
 - **Reading order** lists every hunk: production code before tests, formatting
   last, with the facts found in each (a changed condition, limit, input check,
   error handling, public contract, schema or data change, CI gate, …) and the
-  exact line each rests on. "Go to the diff" jumps to it.
+  exact line each rests on. "Go to the diff" jumps to it. Tick a change once
+  you have read it. Scrolling ticks nothing. When every change of a file is
+  ticked, the file is marked **Viewed** on GitHub as you, and unticking one
+  clears it. A file GitHub already shows as viewed starts ticked.
 - **Questions** show the agent's answers as they arrive, with the client that
   gave them. They are a second opinion, not a verdict, and never reorder the list.
 - **Call flows** appear when your clone already has the pull request's commits.
@@ -44,7 +47,9 @@ page:
   them.)
 - The review you write is yours. Nothing is posted until Submit is pressed on
   the page, diffninja tells your agent never to press it, and you do not have
-  to submit through diffninja at all.
+  to submit through diffninja at all. The Viewed marks are the one other write
+  to GitHub, and they follow your ticks, so tick on pull requests where a
+  Viewed mark under your name is fine.
 
 ## What to write down, per pull request
 

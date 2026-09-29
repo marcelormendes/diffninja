@@ -10,7 +10,7 @@ submit the review to GitHub yourself.
 
 - **Read the important changes first.** Big PRs are hard to follow file by
   file. diffninja numbers each change, most important first, and lets you step
-  through them with `j` and `k`.
+  through them with `j` and `k` and tick them off.
 - **See what the change does to the product, not just the code.** Your agent
   explains the change in business terms: the processes it touches as
   flowcharts, with new and changed steps highlighted, the business rules it
@@ -34,7 +34,8 @@ submit the review to GitHub yourself.
   API key, has no telemetry of its own, and does not download or build code
   during a review. It makes no request of its own while it reviews, except an
   update notice that is off unless you turn it on. It uses your existing GitHub
-  CLI login to read the PR, and to post your review when Submit is pressed.
+  CLI login to read the PR, to post your review when Submit is pressed, and to
+  mark a file Viewed on GitHub when you tick its changes.
   Installing diffninja and adding language grammars use npm. Your agent sends
   what diffninja returns, source text included, to its own model, as it does
   with any tool result. It is not "local only" in every respect.
@@ -104,6 +105,12 @@ your machine at `127.0.0.1`). On the page:
    `j` and `k` move to the next and previous change, and the list on the left
    shows where you are. The agent sets the reading order; the connected page
    does not label changes “Attention”.
+   Tick a change in that list when you have read it. Scrolling ticks nothing.
+   GitHub's **Viewed** mark belongs to a file, so a file is marked Viewed on
+   GitHub once every change of it is ticked, and unticking one clears the mark.
+   A file already marked Viewed on GitHub starts ticked. If diffninja cannot
+   read or write the marks, the page says "not synced with GitHub" and keeps
+   your ticks in the tab.
 2. Hover a line and press **+** to write a comment, or add the agent's
    suggestions.
 3. Write a summary, choose **Comment**, **Approve**, or **Request changes**.
@@ -143,9 +150,11 @@ and gives you a link to read the same report in your browser.
 - The page and the agent's session contain source code. Treat them like the
   code itself.
 - No diffninja tool approves, blocks, merges or posts anything. A review is
-  submitted when Submit is pressed on the review page. Anyone holding that
-  page's link can press it through the page's API, and your agent holds the
-  link. diffninja tells the agent never to submit. It cannot enforce that.
+  submitted when Submit is pressed on the review page. The page's one other
+  write to GitHub is a file's Viewed mark, which follows your ticks. Anyone
+  holding that page's link can do both through the page's API, and your agent
+  holds the link. diffninja tells the agent never to submit. It cannot enforce
+  that.
 
 ## More
 
