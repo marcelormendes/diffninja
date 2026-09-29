@@ -63,4 +63,48 @@ describe("the result sent to the agent", () => {
     expect(trimmed.report.warnings.at(-1)).toContain("snapshot.lines");
     expect(trimmed.report.warnings.at(-1)).not.toContain("hunks have their diff text left out");
   });
+
+  /** A hunk with a diff of `chars` characters on one added line and one reason of `reason` characters. */
+  function small(index: number, chars: number, reason: number): ReviewItem {
+    const header = "@@ -0,0 +1,1 @@";
+    return {
+      id: `hunk-${index}`, file: `src/f${index}.ts`, header, added: 1, removed: 0, oldStart: 0, newStart: 1,
+      diff: `${header}\n+${"y".repeat(chars)}`, status: "attention", priority: 90, reasons: ["r".repeat(reason)],
+    };
+  }
+
+  test("a result nothing can shrink is refused with a reason, never sent over budget under a warning that it was trimmed", () => {
+    const original = { ...report([{ ...small(0, 10, 0), reasons: [] }]), callFlow: [], pr: { title: "t", body: "b".repeat(MAX_RESULT_BYTES) } };
+    expect(() => boundedForAgent(undefined, original)).toThrow(/too large to send.*1 hunk is still 4\.0 MiB.*Review the change in parts/);
+  });
+
+  test("so many hunks that even their bare headers are over the budget are refused, not sent", () => {
+    // Every hunk must stay listed for the agent's order; a small budget stands in for tens of thousands of hunks.
+    const budget = 256 * 1024;
+    const original = { ...report(Array.from({ length: 1500 }, (_, index) => small(index, 10, 50))), callFlow: [] };
+    expect(() => boundedForAgent(undefined, original, budget)).toThrow(/1500 hunks is still 0\.\d MiB, over the 0\.25 MiB/);
+  });
+
+  test("a hunk under 2,000 characters loses its diff text too when thousands of them are over the budget", () => {
+    const original = { ...report(Array.from({ length: 3000 }, (_, index) => small(index, 1500, 10))), callFlow: [] };
+    expect(bytes(original)).toBeGreaterThan(MAX_RESULT_BYTES);
+    const result = boundedForAgent(undefined, original);
+    expect(bytes(result.report)).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+    expect(result.report.items[0]?.diff).toBe(original.items[0]?.diff);
+    expect(result.report.items.at(-1)?.diff).toContain("were left out");
+    expect(result.report.warnings.at(-1)).toMatch(/\d+ of the lowest-ranked hunks have their diff text left out/);
+  });
+
+  test("many tiny hunks: the lowest-ranked lose their facts and reasons, and a diff shorter than its placeholder is kept", () => {
+    const original = { ...report(Array.from({ length: 9000 }, (_, index) => small(index, 10, 500))), callFlow: [] };
+    expect(bytes(original)).toBeGreaterThan(MAX_RESULT_BYTES);
+    const result = boundedForAgent(undefined, original);
+    expect(bytes(result.report)).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+    expect(result.report.items).toHaveLength(9000);
+    expect(result.report.items.every((kept, index) => kept.diff === original.items[index]?.diff)).toBe(true);
+    expect(result.report.items[0]?.reasons).toEqual(original.items[0]?.reasons);
+    expect(result.report.items.at(-1)?.reasons).toEqual([]);
+    expect(result.report.warnings.at(-1)).toMatch(/\d+ of the lowest-ranked hunks have their facts, reasons, and history left out/);
+    expect(result.report.warnings.at(-1)).not.toContain("diff text");
+  });
 });

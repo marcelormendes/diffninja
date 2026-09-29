@@ -9,6 +9,7 @@ import { CallToolResultSchema, type CallToolRequest, type CallToolResult } from 
 import { afterEach, describe, expect, test } from "vitest";
 import { packageVersion } from "../src/review/version.js";
 import { createReviewServer } from "../src/review/mcp.js";
+import { MAX_RESULT_BYTES } from "../src/review/result-budget.js";
 import type { ConnectedSnapshot } from "../src/review/github.js";
 import { placementOf } from "../src/review/pipeline.js";
 import type { ReviewReport } from "../src/review/types.js";
@@ -1508,6 +1509,49 @@ describe("review_diff on a very large change", () => {
     const page = await loopback(done.reportUrl);
     expect(page?.body).toContain("v11_5999");
   }, 120_000);
+
+  /** `files` new files, each adding `lines` lines, or one line of `zwsp` zero-width spaces. */
+  function manyFiles(files: number, lines: number, zwsp = 0): string {
+    return Array.from({ length: files }, (_, file) => {
+      const body = zwsp > 0 ? [`+// ${"\u200B".repeat(zwsp)}`] : Array.from({ length: lines }, (_, line) => `+const v${file}_${line} = compute(${line}, "${"x".repeat(30)}");`);
+      return `diff --git a/src/f${file}.ts b/src/f${file}.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/f${file}.ts\n@@ -0,0 +1,${body.length} @@\n${body.join("\n")}\n`;
+    }).join("");
+  }
+
+  // Each case once sent more than 4 MiB per copy (5.2, 5.8 and 16.9 MiB) and the
+  // second took a minute to trim; the vitest timeout leaves a wide margin over seconds.
+  test.each([
+    { name: "1,400 files of 30 lines", files: 1400, lines: 30, zwsp: 0 },
+    { name: "3,000 files of 50 lines", files: 3000, lines: 50, zwsp: 0 },
+    { name: "600 files of 1,800 zero-width spaces, which grow fourfold as markers", files: 600, lines: 1, zwsp: 1800 },
+  ])("$name: the result the agent receives stays under the budget in bytes as sent, with every hunk listed", async ({ files, lines, zwsp }) => {
+    const client = await connectReview();
+    const result = await review(client, { mode: "static", diff: manyFiles(files, lines, zwsp) });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    const text = textOf(result);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+    expect(JSON.stringify(result.structuredContent)).toBe(text);
+    const report = reportOf(result);
+    expect(report.items).toHaveLength(files);
+    expect(report.warnings.at(-1)).toMatch(/^This result was over 4 MiB, more than a client accepts in one message, so it was trimmed: \S/);
+    if (zwsp > 0) {
+      expect(text).not.toContain("\u200B");
+      expect(text).toContain("⟦U+200B⟧");
+    }
+  }, 60_000);
+
+  test("a change full of escaped quotes stays under the budget as the text copy is sent, escaped once more inside the message", async () => {
+    const client = await connectReview();
+    const lines = Array.from({ length: 20_500 }, (_, line) => `+  "{\\"k${line}\\":\\"${'\\"'.repeat(40)}\\"}",`);
+    const diff = ["diff --git a/test/fixture.js b/test/fixture.js", "--- a/test/fixture.js", "+++ b/test/fixture.js", `@@ -1,1 +1,${lines.length + 1} @@`, " module.exports = [", ...lines, ""].join("\n");
+    const result = await review(client, { mode: "static", diff });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    // The text copy travels as a JSON string, so each quote and backslash in it doubles.
+    expect(Buffer.byteLength(JSON.stringify(textOf(result)), "utf8")).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+    // Once measured on the unescaped copy, this message came to 11.2 MiB and a client dropped it.
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThan(10 * 1024 * 1024);
+    expect(reportOf(result).warnings.at(-1)).toMatch(/was trimmed: \S/);
+  }, 60_000);
 });
 
 describe("text written by the pull request's author", () => {
