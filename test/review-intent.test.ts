@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { crossCheckIntent } from "../src/review/intent.js";
+import { commentThen, crossCheckIntent } from "../src/review/intent.js";
 import { parseDiff } from "../src/review/input.js";
 
 const units = parseDiff("--- a/consumer.ts\n+++ b/consumer.ts\n@@ -1 +1 @@\n-export function consumeJob() {}\n+export function consumeJob() { return 'not implemented'; }\n");
@@ -47,5 +47,29 @@ describe("intent evidence boundaries", () => {
       ["All failure cases are handled.", "generated-summary"],
       ["Do not lose a failed job.", "author"],
     ]);
+  });
+
+  // Detects the comment tests `<!--.*keyword` rescanning a line from every `<!--` (65,000 characters
+  // of them, the most GitHub allows in a body, took 2 to 9 s per review), and any change that makes
+  // them match a different set of lines than those regexes did.
+  it("finds a generated-comment marker in linear time, on the same lines the regexes did", () => {
+    const pieces = ["<!--", "<!-", "auto-generated", "release notes", "end of auto-generated", "Release Notes", "\u017Fo", " ", "x", "\r", "\u2028", "\u2029", "-->"];
+    let seed = 987654;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31);
+    for (let round = 0; round < 30_000; round++) {
+      let line = "";
+      for (let count = next() % 9; count > 0; count--) line += pieces[next() % pieces.length];
+      expect(commentThen(line, /auto-generated|release notes/iu), JSON.stringify(line)).toBe(/<!--.*(?:auto-generated|release notes)/iu.test(line));
+      expect(commentThen(line, /end of auto-generated/iu), JSON.stringify(line)).toBe(/<!--.*end of auto-generated/iu.test(line));
+    }
+    const claims = (body: string) => {
+      const started = performance.now();
+      crossCheckIntent({ title: "Consumers", body }, units, [], []);
+      return performance.now() - started;
+    };
+    claims("x".repeat(65_000));
+    const ordinary = claims("x".repeat(65_000));
+    const hostile = claims("<!--".repeat(16_250));
+    expect(hostile, `${Math.round(hostile)} ms against ${Math.round(ordinary)} ms`).toBeLessThan(Math.max(4 * ordinary, 500));
   });
 });
