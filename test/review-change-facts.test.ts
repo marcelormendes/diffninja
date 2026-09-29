@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
-import { CHANGE_FACT_QUESTIONS, MAX_READ_LINE_CHARS, changeFactsOf, type ChangeFactQuestion } from "../src/review/change-facts.js";
+import { CHANGE_FACT_QUESTIONS, MAX_READ_LINE_CHARS, changeFactsOf, withoutSqlComment, type ChangeFactQuestion } from "../src/review/change-facts.js";
 import { reviewUnits } from "../src/review/pipeline.js";
 
 /** A hunk from marked lines: "-" removed, "+" added, anything else context. */
@@ -400,13 +400,35 @@ describe("change facts on hostile or generated lines", () => {
       return timed(() => line.replace(everyMatch, ""));
     };
     const slow: string[] = [];
+    // `.` and `$` refuse the line terminators `\s` accepts, so each line is also tried ending in one.
+    const endings = ["", "\r", "\u2028", "\u2029"];
     for (const pattern of regexes) {
-      for (const line of strainingLines(pattern.source, 100_000)) {
-        // Measured twice before it counts, so one pause for garbage collection is not a failure.
-        if (scan(pattern, line) > 250 && scan(pattern, line) > 250) slow.push(`/${pattern.source}/ on ${JSON.stringify(line.slice(0, 40))}`);
+      for (const straining of strainingLines(pattern.source, 100_000)) {
+        for (const ending of endings) {
+          const line = straining + ending;
+          // Measured twice before it counts, so one pause for garbage collection is not a failure.
+          if (scan(pattern, line) > 250 && scan(pattern, line) > 250) slow.push(`/${pattern.source}/ on ${JSON.stringify(line.slice(0, 40))}`);
+        }
       }
     }
     expect(slow).toEqual([]);
+  });
+
+  // Detects the SQL comment strip `--.*$`, which rescanned the line from every `--` once a
+  // line terminator followed (a 100 KB line took 13.5 s while the MCP server answered nothing
+  // else), and any change that makes it strip a different span.
+  test("the SQL comment strip is linear and strips what the regex did", () => {
+    const pieces = ["-", "--", "a", " ", "x", "\r", "\u2028", "\u2029", "\n", "'"];
+    let seed = 12345;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31);
+    for (let round = 0; round < 30_000; round++) {
+      let line = "";
+      for (let count = next() % 14; count > 0; count--) line += pieces[next() % pieces.length];
+      expect(withoutSqlComment(line), JSON.stringify(line)).toBe(line.replace(/--.*$/, ""));
+    }
+    const dashes = "--".repeat(50_000);
+    withinLinear("db/fix.sql", context(`${dashes}\u2028`), context("x".repeat(100_000)), "an unchanged SQL line of dashes ending in U+2028");
+    withinLinear("db/fix.sql", context(`${dashes}\r`), context("x".repeat(100_000)), "an unchanged SQL line of dashes ending in a carriage return");
   });
 
   // Detects facts read from part of a line: a changed line past the bound was read whole

@@ -307,11 +307,30 @@ interface Scanners {
   readonly literal: LineScanner;
 }
 
+/**
+ * The line without its `--` comment, as `line.replace(/--.*$/, "")` does it, in
+ * linear time. `.` refuses the four line terminators, so the comment must start
+ * after the last one; the regex rescanned the rest of the line from every `--`
+ * whenever a terminator followed, quadratic on a long line of them.
+ */
+export function withoutSqlComment(line: string): string {
+  let after = 0;
+  for (let index = line.length - 1; index >= 0; index -= 1) {
+    const char = line[index];
+    if (char === "\n" || char === "\r" || char === "\u2028" || char === "\u2029") {
+      after = index + 1;
+      break;
+    }
+  }
+  const comment = line.indexOf("--", after);
+  return comment === -1 ? line : line.slice(0, comment);
+}
+
 function scannerFor(language: ChangeFactLanguage, file: string): Scanners {
   if (language === "prose") return { code: (line) => line, literal: (line) => line };
   if (language === "sql") {
     // `--` comments go; string text stays, it is what a statement writes.
-    const scan: LineScanner = (line) => line.replace(/--.*$/, "");
+    const scan: LineScanner = withoutSqlComment;
     return { code: scan, literal: scan };
   }
   if (language === "config") {
