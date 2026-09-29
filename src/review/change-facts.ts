@@ -17,6 +17,8 @@
  *
  *   - only file types listed here are read; any other file answers no question
  *     at all, never `no`;
+ *   - a hunk with a changed line longer than {@link MAX_READ_LINE_CHARS} is not
+ *     read either, rather than answered from part of that line;
  *   - `no` means the changed lines the hunk shows contain no such pattern, never
  *     that the property is absent from the file or the program;
  *   - a line moved without change cancels out, because every question compares
@@ -75,7 +77,10 @@ export interface ChangeFactEvidence {
 }
 
 export interface ChangeFacts {
-  /** Null when this analysis cannot read the file type; then no question is answered. */
+  /**
+   * Null when this analysis does not read the hunk: a file type it cannot read,
+   * or a changed line longer than {@link MAX_READ_LINE_CHARS}. Then no question is answered.
+   */
   readonly language: ChangeFactLanguage | null;
   /**
    * True when the removed and added text are the same once comments and layout
@@ -105,6 +110,13 @@ const JSON_FILE = /\.json[c5]?$/i;
 
 /** Evidence text is the source line, bounded so one long line cannot dominate a report. */
 const EVIDENCE_TEXT_LIMIT = 160;
+
+/**
+ * The longest changed line the analysis reads. A longer one is minified or
+ * generated text, or padding that would push a change past any bound on how
+ * much of a line is read, so its hunk is left unread and uncertain instead.
+ */
+export const MAX_READ_LINE_CHARS = 4000;
 
 export function changeFactLanguageOf(file: string): ChangeFactLanguage | null {
   if (C_LIKE_FILE.test(file)) return "c-like";
@@ -308,7 +320,8 @@ function scannerFor(language: ChangeFactLanguage, file: string): Scanners {
   };
 }
 
-function sidesOf(diff: string, scanners: Scanners): Sides {
+/** Both sides of the hunk, or null when a changed line is too long to read. */
+function sidesOf(diff: string, scanners: Scanners): Sides | null {
   const before: SideLine[] = [];
   const after: SideLine[] = [];
   const beforeState: ScanState = { open: null };
@@ -324,6 +337,7 @@ function sidesOf(diff: string, scanners: Scanners): Sides {
     // File headers precede the first hunk; inside one, `---x` is a removed `--x`.
     if (!inHunk || line.startsWith("\\")) continue;
     const marker = line[0];
+    if ((marker === "-" || marker === "+") && line.length - 1 > MAX_READ_LINE_CHARS) return null;
     const raw = line.slice(1);
     const entry = (state: ScanState, literalState: ScanState, changed: boolean): SideLine => ({
       raw,
@@ -351,7 +365,57 @@ const CONDITION_KEYWORD = /\b(if|elif|while|unless|until|switch|when)\b/;
 const LOGICAL_OPERATOR = /(&&|\|\||\band\b|\bor\b)/;
 /** Where a logical operator is a condition: continuing one, or a returned boolean. */
 const CONDITION_LINE = /^(?:return\b|&&|\|\||!|\()|(?:&&|\|\||\()\s*$/;
-const TERNARY = /\s\?\s[^:]*\s:\s/;
+
+/**
+ * Whether a line has a ternary, as the regex `\s\?\s[^:]*\s:\s` matches it, in
+ * linear time. That regex rescans the rest of the line from every ` ? ` for the
+ * next colon; here that colon is found once and shared by every ` ? ` before it.
+ */
+function hasTernary(code: string): boolean {
+  let colon = code.indexOf(":");
+  for (let mark = code.indexOf("?"); mark >= 0; mark = code.indexOf("?", mark + 1)) {
+    if (!SPACE.test(code[mark - 1] ?? "") || !SPACE.test(code[mark + 1] ?? "")) continue;
+    if (colon !== -1 && colon < mark + 2) colon = code.indexOf(":", mark + 2);
+    if (colon === -1) return false;
+    // The space before the colon cannot be the one after `?`.
+    if (colon > mark + 2 && SPACE.test(code[colon - 1] ?? "") && SPACE.test(code[colon + 1] ?? "")) return true;
+  }
+  return false;
+}
+
+/** What a line is tested with: a regex, or a matcher written out where the regex would be quadratic. */
+type Pattern = Pick<RegExp, "test">;
+
+/**
+ * `head`, a span up to the first `close` after it, then `tail`: the regex
+ * `head[^close]*close tail`, in linear time. With `open`, the span is optional
+ * and starts with it: `head(?:open[^close]*close)?tail`. The regex rescans the
+ * rest of the line from every head for the next `close`, so a line of heads
+ * without one took seconds; here that `close` is found once and shared.
+ * `head` must be global and `tail` sticky.
+ */
+function spanPattern(head: RegExp, open: string | null, close: string, tail: RegExp): Pattern {
+  const tailAt = (text: string, at: number) => {
+    tail.lastIndex = at;
+    return tail.test(text);
+  };
+  return {
+    test: (text) => {
+      let closing = text.indexOf(close);
+      for (const match of text.matchAll(head)) {
+        let from = (match.index ?? 0) + match[0].length;
+        if (open !== null) {
+          if (tailAt(text, from)) return true;
+          if (text[from] !== open) continue;
+          from += 1;
+        }
+        if (closing !== -1 && closing < from) closing = text.indexOf(close, from);
+        if (closing !== -1 && tailAt(text, closing + 1)) return true;
+      }
+      return false;
+    },
+  };
+}
 
 const LIMIT_WORD =
   /\b\w*(?:timeout|limit|max|min|size|length|len|offset|index|idx|count|capacity|retries|attempts|ttl|threshold|page|batch|delay|interval|slice|substring|substr|take|skip|range|depth|width|height|bound)\w*/i;
@@ -374,20 +438,24 @@ const DEFERRAL = /\b(?:retry|retries|retrying|retried|backoff|requeue|reschedul\
 
 /** Values a handler returns instead of the error: a default, not a failure. */
 const DEFAULT_VALUE = String.raw`(?:null|undefined|nil|None|false|False|0|-1|S|\[\s*\]|\{\s*\}|\(\s*\))`;
-const INLINE_DISCARD: readonly RegExp[] = [
+/** `catch` and the space after it; {@link spanPattern} reads the binding. */
+const CATCH = /\bcatch\s*/g;
+const INLINE_DISCARD: readonly Pattern[] = [
   new RegExp(String.raw`\.catch\(\s*(?:\(\s*\w*\s*\)|\w+)\s*=>\s*(?:\{\s*\}|${DEFAULT_VALUE})\s*\)`),
   /\.catch\(\s*(?:noop|_\.noop|\(\)\s*=>\s*void\s+0)\s*\)/,
-  /\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/,
-  new RegExp(String.raw`\bcatch\s*(?:\([^)]*\))?\s*\{\s*(?:return(?:\s+${DEFAULT_VALUE})?|continue|break)\s*;?\s*\}`),
-  /\bexcept\b[^:]*:\s*(?:pass|continue)\s*$/,
+  spanPattern(CATCH, "(", ")", /\s*\{\s*\}/y),
+  spanPattern(CATCH, "(", ")", new RegExp(String.raw`\s*\{\s*(?:return(?:\s+${DEFAULT_VALUE})?|continue|break)\s*;?\s*\}`, "y")),
+  spanPattern(/\bexcept\b/g, null, ":", /\s*(?:pass|continue)\s*$/y),
   /\brescue\s+nil\b/,
   /^_\s*=\s*err\b/,
 ];
+const CATCH_BLOCK = spanPattern(CATCH, "(", ")", /\s*\{\s*$/y);
+const GO_ERROR_BLOCK = /\bif\s*\(?\s*err\s*!=\s*nil\s*\)?\s*\{\s*$/;
 const BLOCK_HANDLER = {
-  "c-like": /(?:\bcatch\s*(?:\([^)]*\))?|\bif\s*\(?\s*err\s*!=\s*nil\s*\)?)\s*\{\s*$/,
+  "c-like": { test: (code: string) => CATCH_BLOCK.test(code) || GO_ERROR_BLOCK.test(code) },
   python: /^except\b[^:]*:\s*$/,
   ruby: /^rescue\b/,
-} satisfies Record<CodeLanguage, RegExp>;
+} satisfies Record<CodeLanguage, Pattern>;
 const DISCARDING_BODY = new RegExp(
   String.raw`^(?:pass|continue|break;?|return(?:\s+${DEFAULT_VALUE}(?:\s*,\s*nil)?)?\s*;?|nil)$`,
 );
@@ -433,13 +501,10 @@ interface ComparisonAtom {
 }
 
 /**
- * Bounds on one line, so a hostile or generated line cannot make the analysis
- * superlinear: an operand is read up to this many characters, a line yields at
- * most MAX_ATOMS_PER_LINE comparisons, and `limitHit` compares at most
- * MAX_LIMIT_ATOMS per side. A line past a bound is read up to it, which is all
- * these lexical facts claim for a line that long.
+ * A line yields at most MAX_ATOMS_PER_LINE comparisons, and `limitHit` compares
+ * at most MAX_LIMIT_ATOMS per side. Operands are read whole: each lies between
+ * two operators, so the reads cover each character a bounded number of times.
  */
-const MAX_OPERAND_CHARS = 200;
 const MAX_ATOMS_PER_LINE = 1000;
 const MAX_LIMIT_ATOMS = 150;
 const OPERAND_CHAR = /[\w$.[\]]/;
@@ -448,20 +513,20 @@ const SPACE = /\s/;
 /** The operand ending just before `at`: whitespace skipped, then the run of operand characters. */
 function operandBefore(code: string, at: number): string {
   let end = at;
-  while (end > 0 && at - end < MAX_OPERAND_CHARS && SPACE.test(code[end - 1] ?? "")) end -= 1;
+  while (end > 0 && SPACE.test(code[end - 1] ?? "")) end -= 1;
   let start = end;
-  while (start > 0 && end - start < MAX_OPERAND_CHARS && OPERAND_CHAR.test(code[start - 1] ?? "")) start -= 1;
+  while (start > 0 && OPERAND_CHAR.test(code[start - 1] ?? "")) start -= 1;
   return code.slice(start, end);
 }
 
 /** The operand starting after `from`: whitespace skipped, an optional minus, then the run of operand characters. */
 function operandAfter(code: string, from: number): string {
   let start = from;
-  while (start < code.length && start - from < MAX_OPERAND_CHARS && SPACE.test(code[start] ?? "")) start += 1;
+  while (start < code.length && SPACE.test(code[start] ?? "")) start += 1;
   let end = start;
   if (code[end] === "-") end += 1;
   const bodyStart = end;
-  while (end < code.length && end - bodyStart < MAX_OPERAND_CHARS && OPERAND_CHAR.test(code[end] ?? "")) end += 1;
+  while (end < code.length && OPERAND_CHAR.test(code[end] ?? "")) end += 1;
   return end === bodyStart ? "" : code.slice(start, end);
 }
 
@@ -496,7 +561,7 @@ function conditionOf(code: string): string | null {
   }
   // A line of a multi-line condition, or a returned boolean; an assignment such
   // as `const x = a || b` combines values and is not a condition by itself.
-  if ((LOGICAL_OPERATOR.test(code) && CONDITION_LINE.test(code)) || TERNARY.test(code)) return compact(code);
+  if ((LOGICAL_OPERATOR.test(code) && CONDITION_LINE.test(code)) || hasTernary(code)) return compact(code);
   return null;
 }
 
@@ -568,12 +633,20 @@ function numericLimitHit(before: readonly SideLine[], after: readonly SideLine[]
     lines
       .filter((line) => line.changed && line.code !== "" && LIMIT_WORD.test(line.code) && HAS_NUMBER.test(line.code) && !ASSERTION.test(line.code))
       .map((line) => ({ key: compact(line.code), numberless: compact(line.code.replace(NUMBER, "N")), line }));
-  const removed = limitLines(before);
-  const added = limitLines(after);
-  for (const old of removed) {
-    for (const candidate of added) {
-      if (old.numberless === candidate.numberless && old.key !== candidate.key) return { key: candidate.key, line: candidate.line };
-    }
+  // The first added line of each numberless form, and the first after it with
+  // other numbers: whatever a removed line's numbers, one of them is the first
+  // added line of its form that differs from it. Pairing every removed line
+  // with every added one was quadratic in the hunk's length.
+  const forms = new Map<string, { first: Hit; other?: Hit }>();
+  for (const candidate of limitLines(after)) {
+    const form = forms.get(candidate.numberless);
+    if (form === undefined) forms.set(candidate.numberless, { first: candidate });
+    else if (form.other === undefined && candidate.key !== form.first.key) form.other = candidate;
+  }
+  for (const old of limitLines(before)) {
+    const form = forms.get(old.numberless);
+    const differing = form === undefined ? undefined : form.first.key !== old.key ? form.first : form.other;
+    if (differing !== undefined) return differing;
   }
   return null;
 }
@@ -587,7 +660,9 @@ function guardHits(lines: readonly SideLine[], changedConditions: ReadonlySet<Si
   const hits: Hit[] = [];
   lines.forEach((line, index) => {
     if (!changedConditions.has(line)) return;
-    const next = lines.slice(index + 1).find((candidate) => candidate.code !== "");
+    let after = index + 1;
+    while (after < lines.length && lines[after].code === "") after += 1;
+    const next: SideLine | undefined = lines[after];
     if (PROPAGATION.test(line.code) || (next !== undefined && PROPAGATION.test(next.code))) {
       hits.push({ key: `guard:${compact(line.code)}`, line });
     }
@@ -607,7 +682,8 @@ function discardHits(lines: readonly SideLine[], language: CodeLanguage): Hit[] 
     if (!BLOCK_HANDLER[language].test(line.code)) return;
     const body: SideLine[] = [];
     let closed = false;
-    for (const candidate of lines.slice(index + 1)) {
+    for (let after = index + 1; after < lines.length; after++) {
+      const candidate = lines[after];
       if (candidate.code === "") continue;
       if (language === "python" && candidate.indent <= line.indent) {
         closed = true;
@@ -670,12 +746,43 @@ const REFERENCE = /\]\(\s*<?([^)\s>]+)|(https?:\/\/[^\s)>"'\]]+)/g;
 /** Settings that turn a failing CI check into a passing or advisory one. */
 const GATE_WEAKENING =
   /continue-on-error:\s*true|allow_failure:\s*true|\|\|\s*true\b|\bset\s+\+e\b|--no-verify\b|\bif:\s*false\b|\bskip\b|\bwarn(?:ing)?\b|\bignore\b|fail_?[oO]n_?[eE]rror\W+false|--passWithNoTests|\bexit\s+0\b|--force\b/i;
-/** A step that runs a check; fewer of them after the change is a weaker gate. */
+/**
+ * A step that runs a check; fewer of them after the change is a weaker gate.
+ * `^(?=(.*?X))\1` takes the first `run` or `uses:` once, since a lookahead does
+ * not backtrack, and a check after any later one is also after the first. The
+ * plain `run.*test` rescanned the line from every `run`, quadratic on a long line.
+ */
 const CHECK_STEP =
-  /\b(?:run|script|command)\b.*\b(?:test|tests|lint|check|audit|verify|typecheck|tsc|vitest|jest|pytest|mypy|eslint|oxlint)\b|\buses:.*\b(?:codeql|lint|test|scan)/i;
+  /^(?=(.*?\b(?:run|script|command)\b))\1.*\b(?:test|tests|lint|check|audit|verify|typecheck|tsc|vitest|jest|pytest|mypy|eslint|oxlint)\b|^(?=(.*?\buses:))\2.*\b(?:codeql|lint|test|scan)/i;
 const PERMISSION =
   /\bpermissions\b|:\s*write(?:-all)?\b|\bwrite-all\b|\bpull_request_target\b|\bsecrets\.|\bid-token\b|\bGITHUB_TOKEN\b|\bprivileged:\s*true|\ballowPrivilegeEscalation\b|\brunAsUser:\s*0\b|^USER\s+root\b|\bsudo\b/i;
-const PIN = /\buses:\s*\S+@|\bimage:\s*\S+|^FROM\s|\bversion\b|"[@\w./-]+"\s*:\s*"\s*[\^~<>=*]?\s*(?:v?\d|latest|\*)/i;
+const PIN_SETTING = /\bimage:\s*\S+|^FROM\s|\bversion\b|"[@\w./-]+"\s*:\s*"\s*[\^~<>=*]?\s*(?:v?\d|latest|\*)/i;
+const USES = /\buses:\s*/gi;
+const WHITESPACE = /\s/g;
+
+/**
+ * `uses:` naming a ref, as `uses:\s*\S+@` matches it, in linear time. That regex
+ * rescanned the rest of the word from every `uses:` in it; here the next `@` and
+ * the next space are found once and shared.
+ */
+function usesRef(text: string): boolean {
+  let mark = text.indexOf("@");
+  let space = -1;
+  for (const match of text.matchAll(USES)) {
+    const word = (match.index ?? 0) + match[0].length;
+    if (word >= text.length) return false;
+    if (mark !== -1 && mark <= word) mark = text.indexOf("@", word + 1);
+    if (mark === -1) return false;
+    if (space < word) {
+      WHITESPACE.lastIndex = word;
+      space = WHITESPACE.exec(text)?.index ?? text.length;
+    }
+    if (mark < space) return true;
+  }
+  return false;
+}
+
+const PIN: Pattern = { test: (text) => PIN_SETTING.test(text) || usesRef(text) };
 
 /** Changed lines of one side whose text carries each link target they name. */
 function referenceHits(lines: readonly SideLine[]): Hit[] {
@@ -688,7 +795,7 @@ function referenceHits(lines: readonly SideLine[]): Hit[] {
 }
 
 /** Changed lines matching `pattern`, keyed by their text with case and spacing ignored. */
-function textHits(lines: readonly SideLine[], pattern: RegExp): Hit[] {
+function textHits(lines: readonly SideLine[], pattern: Pattern): Hit[] {
   return lines
     .filter((line) => line.changed && line.code !== "" && pattern.test(line.code))
     .map((line) => ({ key: line.code.toLowerCase(), line }));
@@ -714,7 +821,9 @@ const CONTRACT: readonly RegExp[] = [
   /^export\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:function|class|interface|type|enum|const|let|abstract)\b/,
   /^@(?:Get|Post|Put|Patch|Delete|All|Controller|Resolver|Query|Mutation|Column|PrimaryColumn|PrimaryGeneratedColumn|Entity|ManyToOne|OneToMany|OneToOne|ManyToMany|JoinColumn|Index|Unique|Is[A-Z]\w*|Min|Max|Length|ValidateNested|Type|Transform|Api(?:Property|ResponseProperty)\w*|Field|Prop|Schema)\b/,
   /^(?:public\s+|static\s+|async\s+|override\s+|readonly\s+)*(?!(?:if|for|while|switch|catch|return|function|await|new|else|do|try)\b)[A-Za-z_$][\w$]*\s*(?:<[^>]*>)?\s*\([^)]*\)\s*(?::\s*[^={;]+)?\s*\{$/,
-  /^(?:public|protected)\s+(?:static\s+|abstract\s+|final\s+|async\s+|override\s+)*[\w<>[\],.? ]+\s+\w+\s*\(/,
+  // Modifiers are part of the type run: listing them in a loop before it made
+  // every split between the two a new try, quadratic on a line of modifiers.
+  /^(?:public|protected)\s+[\w<>[\],.? ]+\s+\w+\s*\(/,
   /^def\s+[A-Za-z]\w*\s*\(/,
   /^class\s+[A-Z]\w*/,
   /^func\s+(?:\([^)]*\)\s*)?[A-Z]\w*\s*\(/,
@@ -760,8 +869,12 @@ function proseFacts(sides: Sides, record: Recorder): void {
   record("limitChanged", limit === null ? null : evidenceOf(limit, "added"));
 }
 
-/** Bookkeeping files whose numbers record state, not bounds. */
-const BOOKKEEPING_FILE = /(?:suppressions?|baseline|snapshot|lock)[\w.-]*\.(?:json|ya?ml|toml)$/i;
+/**
+ * Bookkeeping files whose numbers record state, not bounds. `^(?=([\s\S]*X))\1`
+ * takes the last keyword once: if a plain name runs from any keyword to the
+ * extension, one runs from the last. Trying every keyword was quadratic on a long path.
+ */
+const BOOKKEEPING_FILE = /^(?=([\s\S]*(?:suppressions?|baseline|snapshot|lock)))\1[\w.-]*\.(?:json|ya?ml|toml)$/i;
 
 function configFacts(sides: Sides, record: Recorder, file: string): void {
   const weakening = difference(textHits(sides.before, GATE_WEAKENING), textHits(sides.after, GATE_WEAKENING));
@@ -836,6 +949,7 @@ export function changeFactsOf(unit: Pick<ReviewUnit, "file" | "diff">): ChangeFa
   if (language === null) return { language, inert: null, answers: {}, evidence: {} };
 
   const sides = sidesOf(unit.diff, scannerFor(language, unit.file));
+  if (sides === null) return { language: null, inert: null, answers: {}, evidence: {} };
   const answers: Partial<Record<ChangeFactQuestion, ChangeFactAnswer>> = {};
   for (const question of factQuestionsFor(language)) answers[question] = "no";
   const evidence: Partial<Record<ChangeFactQuestion, ChangeFactEvidence>> = {};
@@ -862,7 +976,9 @@ export function changeFactsOf(unit: Pick<ReviewUnit, "file" | "diff">): ChangeFa
 }
 
 const IMPORT_START = /^(?:import\b|export\s+(?:\*|\{[^}]*\})\s+from\b|from\s+[\w.]+\s+import\b|using\s+[\w.]+\s*;|(?:const|let|var)\s+[\w{}\s,:]+=\s*require\()/;
-const IMPORT_LIST_OPEN = /^(?:import\b[^;]*\{[^}]*$|import\s*\($|from\s+[\w.]+\s+import\s*\($|export\s*\{[^}]*$)/;
+// `(?=([^;]*\{))\1` takes the last `{` before any `;` once: if a `}` follows it,
+// one follows every earlier `{`, and trying each of them was quadratic.
+const IMPORT_LIST_OPEN = /^(?:import\b(?=([^;]*\{))\1[^}]*$|import\s*\($|from\s+[\w.]+\s+import\s*\($|export\s*\{[^}]*$)/;
 const IMPORT_LIST_CLOSE = /[})]/;
 
 const IMPORT_LIST_ITEM = /^(?:type\s+)?[\w$]+(?:\s+as\s+[\w$]+)?,?$/;

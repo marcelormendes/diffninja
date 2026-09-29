@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { describe, expect, test } from "vitest";
-import { CHANGE_FACT_QUESTIONS, changeFactsOf, type ChangeFactQuestion } from "../src/review/change-facts.js";
+import { CHANGE_FACT_QUESTIONS, MAX_READ_LINE_CHARS, changeFactsOf, type ChangeFactQuestion } from "../src/review/change-facts.js";
+import { reviewUnits } from "../src/review/pipeline.js";
 
 /** A hunk from marked lines: "-" removed, "+" added, anything else context. */
 function hunk(...lines: string[]): string {
@@ -266,6 +269,107 @@ describe("change facts", () => {
   });
 });
 
+/**
+ * Every regex written in change-facts.ts: its regex literals, and each `new RegExp`
+ * over a String.raw template, with the String.raw constants it names filled in.
+ */
+function sourceRegexes(): RegExp[] {
+  const text = readFileSync(new URL("../src/review/change-facts.ts", import.meta.url), "utf8");
+  const file = ts.createSourceFile("change-facts.ts", text, ts.ScriptTarget.Latest, true);
+  const constants = new Map<string, string>();
+  const rawText = (node: ts.Node | undefined): string | undefined => {
+    if (node === undefined) return undefined;
+    if (ts.isStringLiteral(node)) return node.text;
+    if (ts.isTaggedTemplateExpression(node)) return rawText(node.template);
+    if (ts.isNoSubstitutionTemplateLiteral(node)) return node.rawText;
+    if (ts.isTemplateExpression(node)) {
+      return node.templateSpans.reduce(
+        (out, span) => out + (constants.get(span.expression.getText(file)) ?? "") + (span.literal.rawText ?? ""),
+        node.head.rawText ?? "",
+      );
+    }
+    return undefined;
+  };
+  const regexes: RegExp[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && node.initializer !== undefined && ts.isTaggedTemplateExpression(node.initializer)) {
+      constants.set(node.name.getText(file), rawText(node.initializer) ?? "");
+    } else if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+      const literal = node.getText(file);
+      const end = literal.lastIndexOf("/");
+      regexes.push(new RegExp(literal.slice(1, end), literal.slice(end + 1)));
+    } else if (ts.isNewExpression(node) && node.expression.getText(file) === "RegExp") {
+      const source = rawText(node.arguments?.[0]);
+      if (source !== undefined) regexes.push(new RegExp(source, rawText(node.arguments?.[1]) ?? ""));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return regexes;
+}
+
+/**
+ * Lines built to strain a regex from its own source: each run of literal text
+ * (`\s` read as a space, `\s*` as nothing, escaped punctuation as itself), alone,
+ * spaced, and joined to the next run, repeated to `length` characters, then
+ * also after a run that follows `^` and before a character a negated class stops at.
+ */
+function strainingLines(source: string, length: number): string[] {
+  const runs: string[] = [];
+  const starts: string[] = [];
+  const stops: string[] = [];
+  let run = "";
+  let anchored = false;
+  const flush = () => {
+    if (run === "") return;
+    runs.push(run);
+    if (anchored) starts.push(`${run} `);
+    anchored = false;
+    run = "";
+  };
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    const next = source[index + 1] ?? "";
+    if (char === "\\") {
+      index += 1;
+      if (next === "s") run += "*?".includes(source[index + 1] ?? "") ? "" : " ";
+      else if (/[A-Za-z0-9]/.test(next)) flush();
+      else run += next;
+    } else if (char === "[") {
+      flush();
+      const negated = next === "^";
+      for (index += negated ? 2 : 1; index < source.length && source[index] !== "]"; index++) {
+        if (source[index] === "\\") index += 1;
+        else if (negated) stops.push(source[index]);
+      }
+    } else if (char === "(") {
+      flush();
+      if (next === "?") index += source[index + 2] === "<" && /[=!]/.test(source[index + 3] ?? "") ? 3 : 2;
+    } else if (char === "{" && /^\{\d+(?:,\d*)?\}/.test(source.slice(index))) {
+      index = source.indexOf("}", index);
+    } else if (char === "^") {
+      flush();
+      anchored = true;
+    } else if ("|)$.".includes(char)) {
+      flush();
+    } else if (!"*+?".includes(char)) {
+      run += char;
+    }
+  }
+  flush();
+  const units = new Set<string>();
+  runs.forEach((unit, index) => {
+    const following = runs[index + 1] ?? "";
+    for (const candidate of [unit, `${unit} `, unit + following, `${unit} ${following}`]) if (candidate.trim() !== "") units.add(candidate);
+  });
+  const lines = new Set<string>();
+  for (const unit of units) {
+    const body = unit.repeat(Math.ceil(length / unit.length));
+    for (const start of ["", ...starts]) for (const stop of ["", ...stops]) lines.add(start + body + stop);
+  }
+  return [...lines];
+}
+
 describe("change facts on hostile or generated lines", () => {
   // A pull request chooses its lines. These took minutes (16,000 characters of `=` took
   // 155 s) while the whole MCP server, every other tool call included, waited.
@@ -275,18 +379,91 @@ describe("change facts on hostile or generated lines", () => {
     work();
     return performance.now() - started;
   };
+  /** Time to read `diff`, measured against a same-sized ordinary one, so a slower machine moves both. */
+  const withinLinear = (file: string, diff: string, ordinary: string, label: string) => {
+    changeFactsOf({ file, diff: hunk("-a();", "+b();") });
+    const baseline = timed(() => changeFactsOf({ file, diff: ordinary }));
+    const elapsed = timed(() => changeFactsOf({ file, diff }));
+    expect(elapsed, `${label}: ${Math.round(elapsed)} ms against ${Math.round(baseline)} ms`).toBeLessThan(Math.max(4 * baseline, 500));
+  };
+  const context = (line: string) => hunk(line, "-a();", "+b();", line);
+  const lines = (count: number, make: (index: number) => string) => ["@@ -1,1 +1,1 @@", ...Array.from({ length: count }, (_, index) => make(index))].join("\n");
 
-  test("one enormous line is read in linear time, whatever it is made of", () => {
-    for (const unit of ["=", "a==b || ", "<=", "x <= 1 && y >= 2 || ", "if (a > b) ", "\"a\" == '", "/*", "//"]) {
-      const line = unit.repeat(Math.ceil(400_000 / unit.length));
-      const elapsed = timed(() => {
-        for (const file of ["src/a.ts", "src/a.py", "src/a.go", "src/A.java", "src/a.rb"]) {
-          changeFactsOf({ file, diff: hunk("-old();", `+${line}`) });
-          changeFactsOf({ file, diff: hunk(`-${line}`, `+${line}=`) });
-        }
-      });
-      expect(elapsed, JSON.stringify(unit)).toBeLessThan(generous * 5);
+  // Detects a regex that rescans the rest of a line from every place it could start:
+  // on the old patterns `catch(`, `except `, ` ? `, `run `, `uses:`, `public static `,
+  // `import {…}` and a path of `lock`s took from 0.2 to 12 seconds at this length.
+  test("every pattern stays linear on a long line of its own literal text", () => {
+    const regexes = sourceRegexes();
+    expect(regexes.length).toBeGreaterThan(50);
+    const scan = (pattern: RegExp, line: string) => {
+      const everyMatch = new RegExp(pattern.source, `${pattern.flags.replace(/[gy]/g, "")}g`);
+      return timed(() => line.replace(everyMatch, ""));
+    };
+    const slow: string[] = [];
+    for (const pattern of regexes) {
+      for (const line of strainingLines(pattern.source, 100_000)) {
+        // Measured twice before it counts, so one pause for garbage collection is not a failure.
+        if (scan(pattern, line) > 250 && scan(pattern, line) > 250) slow.push(`/${pattern.source}/ on ${JSON.stringify(line.slice(0, 40))}`);
+      }
     }
+    expect(slow).toEqual([]);
+  });
+
+  // Detects facts read from part of a line: a changed line past the bound was read whole
+  // (seconds for 200 KB) and answered, where padding decides what the answer rests on.
+  test("a changed line longer than the analysis reads leaves the hunk unread and uncertain", () => {
+    for (const [file, unit] of [["src/a.ts", "catch("], ["src/a.ts", " ? "], ["src/a.py", "except "], ["src/A.java", "public static "], [".github/workflows/ci.yml", "run "], [".github/workflows/ci.yml", "uses:"]]) {
+      const line = unit.repeat(Math.ceil(200_000 / unit.length));
+      for (const diff of [hunk("-old();", `+${line}`), hunk(`-${line}`, "+new();")]) {
+        expect(changeFactsOf({ file, diff }), `${file} ${JSON.stringify(unit)}`).toEqual({ language: null, inert: null, answers: {}, evidence: {} });
+      }
+    }
+    const relaxed = hunk("-if (n <= 10) stop();", `+if (n < 10) stop(); // ${"x".repeat(MAX_READ_LINE_CHARS)}`);
+    expect(changeFactsOf({ file: "src/a.ts", diff: relaxed }).answers).toEqual({});
+    const unit = { id: "a", file: "test/a.test.ts", header: "@@ -1,1 +1,1 @@", newStart: 1, oldStart: 1, added: 1, removed: 1, diff: relaxed };
+    expect(reviewUnits([unit]).items[0].status).toBe("uncertain");
+    expect(changeFactsOf({ file: "src/a.ts", diff: hunk(`+${"x".repeat(MAX_READ_LINE_CHARS)}`) }).language).toBe("c-like");
+    expect(changeFactsOf({ file: "src/a.ts", diff: hunk(`+${"x".repeat(MAX_READ_LINE_CHARS + 1)}`) }).language).toBeNull();
+  });
+
+  // Detects an operand read only up to a window: a change past its 200th character was invisible.
+  test("a change deep inside a long operand is still a changed bound", () => {
+    const bound = (last: string) => `if (x <= 1${"0".repeat(248)}${last}) stop();`;
+    expect(yesOf("src/a.ts", hunk(`-${bound("0")}`, `+${bound("1")}`))).toContain("limitChanged");
+  });
+
+  // Detects the handler patterns rescanning a context line (also read, but never bounded)
+  // from every `catch` or `except`: 200 KB took 8 to 16 seconds, and `import {…}` 12.
+  test("a long context line is read in linear time", () => {
+    const ordinary = context("x".repeat(200_000));
+    for (const unit of ["catch (", "catch(", ".catch( ", "except ", "if err != nil { "]) {
+      for (const file of ["src/a.ts", "src/a.py", "src/a.rb"]) {
+        withinLinear(file, context(unit.repeat(Math.ceil(200_000 / unit.length))), ordinary, `${file} ${JSON.stringify(unit)}`);
+      }
+    }
+    withinLinear("src/a.ts", context(`import ${"{".repeat(200_000)}}`), ordinary, "import {…}");
+  });
+
+  // Detects a pattern quadratic within one line at the bound: two megabytes of such lines
+  // took 0.8 to 2.6 seconds against 0.12 for ordinary ones.
+  test("a hunk of lines at the read bound is read in linear time", () => {
+    const atBound = (text: string) => lines(500, () => `+${text.repeat(Math.ceil(MAX_READ_LINE_CHARS / text.length)).slice(0, MAX_READ_LINE_CHARS)}`);
+    const ordinary = atBound("x = 1; ");
+    for (const [file, unit] of [["src/a.ts", " ? "], ["src/a.ts", "catch ("], ["src/a.py", "except "], ["src/A.java", "public static "], [".github/workflows/ci.yml", "run "], [".github/workflows/ci.yml", "uses:"]]) {
+      const text = unit === "public static " ? `public ${"static ".repeat(MAX_READ_LINE_CHARS / 7)}` : unit;
+      withinLinear(file, atBound(text), ordinary, `${file} ${JSON.stringify(unit)}`);
+    }
+  });
+
+  // Detects a per-line copy of the rest of the hunk (handlers, guards) and every removed
+  // limit line compared with every added one: 1 to 7.6 seconds on the old code.
+  test("an 80,000-line hunk is read in linear time", () => {
+    const ordinary = lines(80_000, (index) => `+const v${index} = ${index};`);
+    withinLinear("src/a.ts", lines(80_000, (index) => `+} catch (e${index}) {`), ordinary, "handlers");
+    withinLinear("src/a.py", lines(80_000, (index) => `+except E${index}:`), ordinary, "python handlers");
+    withinLinear("src/a.ts", lines(80_000, (index) => `+if (a${index} > ${index}) run${index}();`), ordinary, "conditions");
+    const limits = lines(80_000, (index) => (index < 40_000 ? `-const limitA${index} = 1;` : `+const limitB${index} = 2;`));
+    for (const file of ["src/a.ts", "docs/a.md", "deploy.yml"]) withinLinear(file, limits, ordinary, `limit lines in ${file}`);
   });
 
   test("a line with hundreds of comparisons is compared once, not once per comparison", () => {
@@ -296,7 +473,7 @@ describe("change facts on hostile or generated lines", () => {
   });
 
   test("an ordinary relaxed bound is still found next to a long line", () => {
-    const filler = "a==b || ".repeat(5000);
+    const filler = "a==b || ".repeat(450);
     const facts = changeFactsOf({ file: "src/a.ts", diff: hunk("-if (n <= 10) stop();", "+if (n < 10) stop();", `+const x = ${filler}1;`) });
     expect(facts.answers.limitChanged).toBe("yes");
     expect(facts.evidence.limitChanged?.text).toBe("if (n < 10) stop();");
