@@ -7,6 +7,13 @@ function terms(text: string): Set<string> {
   return new Set(text.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().match(/[a-z][a-z0-9]+/g)?.filter(word => !Object.hasOwn(STOP_WORDS, word)).map(word => word.replace(/(?:ing|ies|s)$/u, "")).filter(word => word.length > 2) ?? []);
 }
 
+/**
+ * Statements read from a pull request's text. The text is written by whoever
+ * opened the pull request: a 65,000-character body of short lines produced
+ * 10,874 claims, a 2.25 MB result and one comparison against every hunk each.
+ */
+const MAX_CLAIMS = 100;
+
 /** Keep author claims separate from generated release notes; never execute PR text. */
 function statements(pr: PullRequestIntent): { text: string; origin: IntentClaim["origin"] }[] {
   const claims: { text: string; origin: IntentClaim["origin"] }[] = [];
@@ -44,7 +51,7 @@ export function crossCheckIntent(pr: PullRequestIntent | undefined, units: reado
     obligations: ["Provide the expected behavior, including failure and boundary cases. No intended outcome was inferred from the diff."],
   };
   const indexed = units.map(unit => ({ unit, terms: terms(unit.file + "\n" + unit.diff.split("\n").filter(line => line.startsWith("+")).join("\n")) }));
-  const claims = statements(pr).map<IntentClaim>(claim => {
+  const claims = statements(pr).slice(0, MAX_CLAIMS).map<IntentClaim>(claim => {
     const wanted = [...terms(claim.text)];
     const matches = indexed.map(({ unit, terms: actual }) => ({ unit, count: wanted.reduce((count, term) => count + (actual.has(term) ? 1 : 0), 0) }))
       .filter(({ count }) => count >= Math.min(2, wanted.length) && wanted.length > 0)

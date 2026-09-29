@@ -6,6 +6,7 @@ import { serveConnected, type ConnectedSession } from "./connected.js";
 import { callFlowFilesOf, connectedAnalysisOf, type ConnectedAnalysisView } from "./connected-analysis.js";
 import { ConnectedReview } from "./github.js";
 import { detectPullRequest, looksLikeUnifiedDiff } from "./pr-input.js";
+import { boundedForAgent } from "./result-budget.js";
 import { renderBusinessPage, renderCallFlowPage, renderReview } from "./html.js";
 import { MAX_SUGGESTED_COMMENTS, ReportPages } from "./report-pages.js";
 import { reviewDiff } from "./service.js";
@@ -397,18 +398,24 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
           // The same local analysis as a static review, of exactly the loaded snapshot:
           // the agent gets the report and its questions, the page shows it beside the diff.
           const analysis = await binding.analysis();
-          const base = { mode: "connected", pr: target, snapshot: binding.review.getState().snapshot };
-          if (!("unavailable" in analysis)) connectedUrls.set(analysis.reviewId, binding.url);
+          const loaded = binding.review.getState().snapshot;
           // Nothing to finish without an analysis: the page itself says why.
-          const payload = "unavailable" in analysis
-            ? { ...base, url: binding.url, analysisUnavailable: analysis.unavailable }
-            : {
-                ...base,
-                reviewId: analysis.reviewId,
-                analysisScope: analysis.scope,
-                report: analysis.report,
-                ...(reports.isFinished(analysis.reviewId) ? { url: binding.url, reportUrl: analysis.reportUrl } : { nextSteps: steps(CONNECTED_NEXT_STEPS) }),
-              };
+          if ("unavailable" in analysis) {
+            const unavailable = { mode: "connected", pr: target, snapshot: loaded, url: binding.url, analysisUnavailable: analysis.unavailable };
+            return { content: [{ type: "text", text: JSON.stringify(unavailable) }], structuredContent: { ...unavailable } };
+          }
+          connectedUrls.set(analysis.reviewId, binding.url);
+          // The agent's copy stays under what a client accepts in one message; the page has it all.
+          const agent = boundedForAgent(loaded, analysis.report);
+          const payload = {
+            mode: "connected",
+            pr: target,
+            snapshot: agent.snapshot,
+            report: agent.report,
+            reviewId: analysis.reviewId,
+            analysisScope: analysis.scope,
+            ...(reports.isFinished(analysis.reviewId) ? { url: binding.url, reportUrl: analysis.reportUrl } : { nextSteps: steps(CONNECTED_NEXT_STEPS) }),
+          };
           return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: { ...payload } };
         }
         // No link anywhere: connected intent fails before any access instead of
@@ -427,7 +434,7 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
           pr: expectedOutcome === undefined ? undefined : { title: expectedOutcome.title, body: expectedOutcome.description } });
       // The agent reads the report as data; the human reads the same report as a page.
       const published = await reports.publish(report);
-      const payload = { ...report, reviewId: published.reviewId, nextSteps: steps(STATIC_NEXT_STEPS) };
+      const payload = { ...boundedForAgent(undefined, report).report, reviewId: published.reviewId, nextSteps: steps(STATIC_NEXT_STEPS) };
       return { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: { ...payload } };
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };

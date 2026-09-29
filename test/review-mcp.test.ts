@@ -1485,3 +1485,28 @@ describe("review_diff connected pull request mode", () => {
     });
   }, 30_000);
 });
+
+describe("review_diff on a very large change", () => {
+  test("a result that would exceed what a client accepts in one message is trimmed, says so, and can still be finished", async () => {
+    const client = await connectReview();
+    const files = Array.from({ length: 12 }, (_, file) => {
+      const path = `src/big${file}.ts`;
+      const body = Array.from({ length: 6000 }, (_, line) => `+export const v${file}_${line} = compute(${line}, "${"x".repeat(60)}");`).join("\n");
+      return `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,6000 @@\n${body}\n`;
+    });
+    const result = await review(client, { diff: files.join("") });
+    expect(result.isError).toBeFalsy();
+    // Text content and structured content both carry it: together they must fit a 10 MiB message.
+    expect(JSON.stringify(result).length).toBeLessThan(10 * 1024 * 1024);
+    const report = reportOf(result);
+    expect(report.items).toHaveLength(12);
+    expect(report.warnings.at(-1)).toContain("trimmed");
+    expect(report.items.some((item) => item.diff.includes("left out to keep this result under"))).toBe(true);
+    // The server still has the whole report: finishing with every id and answer works.
+    const done = await published(client, result);
+    expect(done.reportUrl).toMatch(/\/report\/[a-f0-9]{64}$/);
+    const page = await loopback(done.reportUrl);
+    expect(page?.body).toContain("v11_5999");
+  }, 120_000);
+});
+
