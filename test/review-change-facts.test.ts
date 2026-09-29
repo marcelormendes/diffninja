@@ -486,3 +486,98 @@ describe("change facts on hostile or generated lines", () => {
     expect(yesOf("src/a.ts", hunk("-if (a == b) run();", "+if (a == b) run();"))).toEqual([]);
   });
 });
+
+describe("a moved bound among many comparisons", () => {
+  /** One comparison as the analysis reads it: operands and operator. */
+  interface Atom {
+    readonly left: string;
+    readonly operator: string;
+    readonly right: string;
+  }
+  const strictness = new Map([["<", "<="], ["<=", "<"], [">", ">="], [">=", ">"]]);
+  const isNumber = (token: string) => /^-?\d[\d_]*(?:\.\d+)?(?:e-?\d+)?$/i.test(token);
+  const line = (atom: Atom) => `if (${atom.left} ${atom.operator} ${atom.right}) run();`;
+
+  /** The rule before the keyed join, without its cap: every removed comparison against every added one, in order. */
+  function referenceLimit(removed: readonly Atom[], added: readonly Atom[]): number {
+    for (const before of removed) {
+      for (const [index, after] of added.entries()) {
+        const sameOperands = before.left === after.left && before.right === after.right;
+        if (sameOperands && strictness.get(before.operator) === after.operator) return index;
+        const sameDirection = before.operator === after.operator || strictness.get(before.operator) === after.operator;
+        if (!sameDirection) continue;
+        if (before.left === after.left && isNumber(before.right) && isNumber(after.right) && before.right !== after.right) return index;
+        if (before.right === after.right && isNumber(before.left) && isNumber(after.left) && before.left !== after.left) return index;
+      }
+    }
+    return -1;
+  }
+
+  /** One side's comparisons left once the other side's identical ones cancel them, earliest first, as a moved line cancels. */
+  function surviving(side: readonly Atom[], other: readonly Atom[]): Atom[] {
+    const remaining = new Map<string, number>();
+    for (const atom of other) remaining.set(line(atom), (remaining.get(line(atom)) ?? 0) + 1);
+    return side.filter((atom) => {
+      const count = remaining.get(line(atom)) ?? 0;
+      remaining.set(line(atom), count - 1);
+      return count <= 0;
+    });
+  }
+
+  // Detects a join that answers differently from comparing every pair: another
+  // match, another order, or a miss past a cap (the old code stopped at 150 per side).
+  test("finds the bound comparing every pair finds, on random hunks", () => {
+    let seed = 20260928;
+    const random = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+    const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
+    const names = ["a", "b", "n", "x.y", "q[0]", "$v", "_k"];
+    const numbers = ["0", "1", "2", "10", "2.5", "1e3", "1_000"];
+    const operators = ["<", "<=", ">", ">=", "==", "!=", "===", "!=="];
+    const operand = () => (random() < 0.5 ? pick(names) : pick(numbers));
+    const atom = (): Atom => ({ left: operand(), operator: pick(operators), right: random() < 0.2 ? `-${pick(numbers)}` : operand() });
+    const nudge = (from: Atom): Atom => {
+      const roll = random();
+      if (roll < 0.4) return { ...from, operator: strictness.get(from.operator) ?? pick(operators) };
+      if (roll < 0.7) return { ...from, right: pick(numbers) };
+      return { ...from, left: pick(numbers) };
+    };
+    // Comparisons that match nothing, to push the one that matters past any cap.
+    const padding = (count: number, name: string) => Array.from({ length: count }, (_, index): Atom => ({ left: `p${index}`, operator: "==", right: `${name}${index}` }));
+    let found = 0;
+    for (let round = 0; round < 3000; round++) {
+      const pad = round % 3 === 0 ? Math.floor(random() * 400) : 0;
+      const removed = [...padding(pad, "r"), ...Array.from({ length: Math.floor(random() * 10) }, atom)];
+      const added = [...padding(pad, "s"), ...Array.from({ length: Math.floor(random() * 10) }, () => (removed.length > pad && random() < 0.4 ? nudge(pick(removed.slice(pad))) : atom()))];
+      const survivors = surviving(added, removed);
+      const expected = referenceLimit(surviving(removed, added), survivors);
+      const diff = hunk(...removed.map((each) => `-${line(each)}`), ...added.map((each) => `+${line(each)}`));
+      const evidence = changeFactsOf({ file: "src/a.ts", diff }).evidence.limitChanged?.text ?? null;
+      expect(evidence, diff).toBe(expected === -1 ? null : line(survivors[expected]));
+      if (expected !== -1) found += 1;
+    }
+    expect(found).toBeGreaterThan(500);
+  });
+
+  // Detects the cap: with 150 rewritten comparisons before it, a relaxed bound in a test
+  // file was not a limit change, and the hunk dropped from attention to low.
+  test("rewritten comparisons before a relaxed bound do not hide it", () => {
+    for (const pad of [150, 151, 400, 2000]) {
+      const removed = [...Array.from({ length: pad }, (_, index) => `-if (a${index} == b${index}) log();`), "-if (elapsed <= 10) fail();"];
+      const added = [...Array.from({ length: pad }, (_, index) => `+if (a${index} == c${index}) log();`), "+if (elapsed <= 1000) fail();"];
+      const diff = hunk(...removed, ...added);
+      for (const file of ["test/pay.test.ts", "src/pay.ts"]) {
+        const facts = changeFactsOf({ file, diff });
+        expect(facts.evidence.limitChanged, `${file} after ${pad}`).toEqual({ side: "added", text: "if (elapsed <= 1000) fail();" });
+      }
+      const unit = { id: "a", file: "test/pay.test.ts", header: "@@ -1,1 +1,1 @@", newStart: 1, oldStart: 1, added: added.length, removed: removed.length, diff };
+      expect(reviewUnits([unit]).items[0].status, `after ${pad}`).toBe("attention");
+    }
+  });
+
+  // Detects the per-line cap: a line's comparisons past the 1,000th were not read.
+  test("comparisons earlier on the same line do not hide a relaxed bound", () => {
+    const padded = (bound: string) => `if (${"x==".repeat(1000)}x && ${bound}) stop();`;
+    const facts = changeFactsOf({ file: "test/a.test.ts", diff: hunk(`-${padded("n <= 10")}`, `+${padded("n < 10")}`) });
+    expect(facts.answers.limitChanged).toBe("yes");
+  });
+});

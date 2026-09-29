@@ -501,12 +501,9 @@ interface ComparisonAtom {
 }
 
 /**
- * A line yields at most MAX_ATOMS_PER_LINE comparisons, and `limitHit` compares
- * at most MAX_LIMIT_ATOMS per side. Operands are read whole: each lies between
+ * Every comparison on a line is read, operands whole: each operand lies between
  * two operators, so the reads cover each character a bounded number of times.
  */
-const MAX_ATOMS_PER_LINE = 1000;
-const MAX_LIMIT_ATOMS = 150;
 const OPERAND_CHAR = /[\w$.[\]]/;
 const SPACE = /\s/;
 
@@ -535,7 +532,6 @@ function comparisonAtoms(code: string, language: CodeLanguage): ComparisonAtom[]
   const patterns = language === "python" ? [COMPARISON_OPERATOR, PYTHON_COMPARISON_OPERATOR] : [COMPARISON_OPERATOR];
   for (const pattern of patterns) {
     for (const match of code.matchAll(pattern)) {
-      if (atoms.length >= MAX_ATOMS_PER_LINE) return atoms;
       const at = match.index ?? 0;
       atoms.push({ left: operandBefore(code, at), operator: match[0].trim(), right: operandAfter(code, at + match[0].length) });
     }
@@ -590,6 +586,32 @@ const STRICTNESS = new Map([["<", "<="], ["<=", "<"], [">", ">="], [">=", ">"]])
 const isNumber = (token: string) => /^-?\d[\d_]*(?:\.\d+)?(?:e-?\d+)?$/i.test(token);
 
 /**
+ * For each group of `items`, the index of its first item and of the first after
+ * it with another value. Whatever value a lookup brings, one of the two is the
+ * group's first item with a different value: a lookup instead of a scan of
+ * every item, which made pairing one side of a hunk with the other quadratic.
+ */
+function firstDiffering<T>(
+  items: readonly T[],
+  groupOf: (item: T) => string | null,
+  valueOf: (item: T) => string,
+): (group: string, value: string) => number | undefined {
+  const groups = new Map<string, { first: number; other?: number }>();
+  items.forEach((item, index) => {
+    const group = groupOf(item);
+    if (group === null) return;
+    const seen = groups.get(group);
+    if (seen === undefined) groups.set(group, { first: index });
+    else if (seen.other === undefined && valueOf(item) !== valueOf(items[seen.first])) seen.other = index;
+  });
+  return (group, value) => {
+    const seen = groups.get(group);
+    if (seen === undefined) return undefined;
+    return valueOf(items[seen.first]) !== value ? seen.first : seen.other;
+  };
+}
+
+/**
  * A bound whose admitted range changed: the same comparison with a strict and a
  * non-strict operator swapped, or a numeric side changed; or a line naming a limit
  * whose only difference is a number.
@@ -602,28 +624,32 @@ function limitHit(removed: readonly Hit[], added: readonly Hit[], language: Code
     for (const hit of hits) {
       if (seen.has(hit.line)) continue;
       seen.add(hit.line);
-      for (const atom of comparisonAtoms(hit.line.code, language)) {
-        if (atoms.length >= MAX_LIMIT_ATOMS) return atoms;
-        atoms.push({ atom, hit });
-      }
+      for (const atom of comparisonAtoms(hit.line.code, language)) atoms.push({ atom, hit });
     }
     return atoms;
   };
-  const removedAtoms = atomsOf(removed);
-  const addedAtoms = atomsOf(added);
-  for (const { atom: before } of removedAtoms) {
-    for (const { atom: after, hit } of addedAtoms) {
-      const sameOperands = before.left === after.left && before.right === after.right;
-      if (sameOperands && STRICTNESS.get(before.operator) === after.operator) return hit;
-      const sameDirection = before.operator === after.operator || STRICTNESS.get(before.operator) === after.operator;
-      if (!sameDirection) continue;
-      if (before.left === after.left && isNumber(before.right) && isNumber(after.right) && before.right !== after.right) {
-        return hit;
-      }
-      if (before.right === after.right && isNumber(before.left) && isNumber(after.left) && before.left !== after.left) {
-        return hit;
-      }
+  // For the first removed comparison that has one, the earliest added comparison
+  // that moves its bound, found by lookups in the added side. Comparing every
+  // pair was quadratic, and the cap that bounded it let padding hide the change.
+  const candidates = atomsOf(added);
+  const exact = new Map<string, number>();
+  candidates.forEach(({ atom }, index) => {
+    const key = `${atom.left}\n${atom.operator}\n${atom.right}`;
+    if (!exact.has(key)) exact.set(key, index);
+  });
+  const sameLeft = firstDiffering(candidates, ({ atom }) => (isNumber(atom.right) ? `${atom.left}\n${atom.operator}` : null), ({ atom }) => atom.right);
+  const sameRight = firstDiffering(candidates, ({ atom }) => (isNumber(atom.left) ? `${atom.right}\n${atom.operator}` : null), ({ atom }) => atom.left);
+  for (const { atom: before } of atomsOf(removed)) {
+    const twin = STRICTNESS.get(before.operator);
+    // The same operands with the strict and non-strict operator swapped.
+    const found = [twin === undefined ? undefined : exact.get(`${before.left}\n${twin}\n${before.right}`)];
+    // The same direction, one side the same and the other a different number.
+    for (const operator of twin === undefined ? [before.operator] : [before.operator, twin]) {
+      if (isNumber(before.right)) found.push(sameLeft(`${before.left}\n${operator}`, before.right));
+      if (isNumber(before.left)) found.push(sameRight(`${before.right}\n${operator}`, before.left));
     }
+    const earliest = Math.min(...found.filter((index): index is number => index !== undefined));
+    if (earliest !== Infinity) return candidates[earliest].hit;
   }
   return null;
 }
@@ -633,20 +659,13 @@ function numericLimitHit(before: readonly SideLine[], after: readonly SideLine[]
     lines
       .filter((line) => line.changed && line.code !== "" && LIMIT_WORD.test(line.code) && HAS_NUMBER.test(line.code) && !ASSERTION.test(line.code))
       .map((line) => ({ key: compact(line.code), numberless: compact(line.code.replace(NUMBER, "N")), line }));
-  // The first added line of each numberless form, and the first after it with
-  // other numbers: whatever a removed line's numbers, one of them is the first
-  // added line of its form that differs from it. Pairing every removed line
-  // with every added one was quadratic in the hunk's length.
-  const forms = new Map<string, { first: Hit; other?: Hit }>();
-  for (const candidate of limitLines(after)) {
-    const form = forms.get(candidate.numberless);
-    if (form === undefined) forms.set(candidate.numberless, { first: candidate });
-    else if (form.other === undefined && candidate.key !== form.first.key) form.other = candidate;
-  }
+  // For the first removed line that has one, the earliest added line of the
+  // same form, numbers aside, with other numbers.
+  const added = limitLines(after);
+  const differing = firstDiffering(added, (line) => line.numberless, (line) => line.key);
   for (const old of limitLines(before)) {
-    const form = forms.get(old.numberless);
-    const differing = form === undefined ? undefined : form.first.key !== old.key ? form.first : form.other;
-    if (differing !== undefined) return differing;
+    const index = differing(old.numberless, old.key);
+    if (index !== undefined) return added[index];
   }
   return null;
 }
