@@ -68,13 +68,13 @@ backup. Indentation, string escapes and integers above 2^53 in it can change.
 `~/.claude.json` is Claude Code's main state file, so copy it before the first
 run (`cp ~/.claude.json ~/.claude.json.bak`).
 
-[docs/security.md](docs/security.md) and this README describe diffninja 0.3.3
+[docs/security.md](docs/security.md) and this README describe diffninja 0.4.0
 and later. Version 0.3.2 and earlier behave as two security audits found. The
 review page's submit API had no secret in its path, so any local process could
 use it. Reviews installed grammars with npm at review time. Hidden characters
 were not marked, and the package had no pinned dependency tree.
 `npx -y diffninja@latest setup` installs the newest published version. Check
-that it is 0.3.3 or later with `npm ls -g diffninja`, or read the version in the
+that it is 0.4.0 or later with `npm ls -g diffninja`, or read the version in the
 entry setup wrote to your agent's config.
 
 To update later, run the same command again: setup brings an older global
