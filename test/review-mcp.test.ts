@@ -9,6 +9,7 @@ import { CallToolResultSchema, type CallToolRequest, type CallToolResult } from 
 import { afterEach, describe, expect, test } from "vitest";
 import { packageVersion } from "../src/review/version.js";
 import { createReviewServer } from "../src/review/mcp.js";
+import { MAX_RESULT_BYTES } from "../src/review/result-budget.js";
 import type { ConnectedSnapshot } from "../src/review/github.js";
 import { placementOf } from "../src/review/pipeline.js";
 import type { ReviewReport } from "../src/review/types.js";
@@ -1508,6 +1509,49 @@ describe("review_diff on a very large change", () => {
     const page = await loopback(done.reportUrl);
     expect(page?.body).toContain("v11_5999");
   }, 120_000);
+
+  /** `files` new files, each adding `lines` lines, or one line of `zwsp` zero-width spaces. */
+  function manyFiles(files: number, lines: number, zwsp = 0): string {
+    return Array.from({ length: files }, (_, file) => {
+      const body = zwsp > 0 ? [`+// ${"\u200B".repeat(zwsp)}`] : Array.from({ length: lines }, (_, line) => `+const v${file}_${line} = compute(${line}, "${"x".repeat(30)}");`);
+      return `diff --git a/src/f${file}.ts b/src/f${file}.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/f${file}.ts\n@@ -0,0 +1,${body.length} @@\n${body.join("\n")}\n`;
+    }).join("");
+  }
+
+  // Each case once sent more than 4 MiB per copy (5.2, 5.8 and 16.9 MiB) and the
+  // second took a minute to trim; the vitest timeout leaves a wide margin over seconds.
+  test.each([
+    { name: "1,400 files of 30 lines", files: 1400, lines: 30, zwsp: 0 },
+    { name: "3,000 files of 50 lines", files: 3000, lines: 50, zwsp: 0 },
+    { name: "600 files of 1,800 zero-width spaces, which grow fourfold as markers", files: 600, lines: 1, zwsp: 1800 },
+  ])("$name: the result the agent receives stays under the budget in bytes as sent, with every hunk listed", async ({ files, lines, zwsp }) => {
+    const client = await connectReview();
+    const result = await review(client, { mode: "static", diff: manyFiles(files, lines, zwsp) });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    const text = textOf(result);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+    expect(JSON.stringify(result.structuredContent)).toBe(text);
+    const report = reportOf(result);
+    expect(report.items).toHaveLength(files);
+    expect(report.warnings.at(-1)).toMatch(/^This result was over 4 MiB, more than a client accepts in one message, so it was trimmed: \S/);
+    if (zwsp > 0) {
+      expect(text).not.toContain("\u200B");
+      expect(text).toContain("⟦U+200B⟧");
+    }
+  }, 60_000);
+
+  test("a change full of escaped quotes stays under the budget as the text copy is sent, escaped once more inside the message", async () => {
+    const client = await connectReview();
+    const lines = Array.from({ length: 20_500 }, (_, line) => `+  "{\\"k${line}\\":\\"${'\\"'.repeat(40)}\\"}",`);
+    const diff = ["diff --git a/test/fixture.js b/test/fixture.js", "--- a/test/fixture.js", "+++ b/test/fixture.js", `@@ -1,1 +1,${lines.length + 1} @@`, " module.exports = [", ...lines, ""].join("\n");
+    const result = await review(client, { mode: "static", diff });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    // The text copy travels as a JSON string, so each quote and backslash in it doubles.
+    expect(Buffer.byteLength(JSON.stringify(textOf(result)), "utf8")).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+    // Once measured on the unescaped copy, this message came to 11.2 MiB and a client dropped it.
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThan(10 * 1024 * 1024);
+    expect(reportOf(result).warnings.at(-1)).toMatch(/was trimmed: \S/);
+  }, 60_000);
 });
 
 describe("text written by the pull request's author", () => {
@@ -1542,6 +1586,76 @@ describe("text written by the pull request's author", () => {
     }
     expect(reportOf(result).pr?.title).toContain("⟦U+202E⟧");
   });
+
+  test("a file whose name holds a zero-width space is shown with a marker, and finish_review takes the ids and paths exactly as shown", async () => {
+    blockNetwork();
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-mcp-zwsp-"));
+    try {
+      const run = (args: string[]) => execFileSync("git", args, { cwd: dir });
+      run(["init", "-b", "main"]);
+      writeFileSync(join(dir, "app.ts"), "export function run(n: number) {\n  return n;\n}\n");
+      run(["add", "."]);
+      run([...GIT_ENV, "commit", "-m", "base"]);
+      writeFileSync(join(dir, "utils\u200B.ts"), "export function helper(n: number) {\n  return n + 1;\n}\n");
+      writeFileSync(join(dir, "app.ts"), "import { helper } from './utils\u200B';\nexport function run(n: number) {\n  return helper(n);\n}\n");
+      run(["add", "-A"]);
+      run([...GIT_ENV, "commit", "-m", "head"]);
+      const client = await connectReview();
+
+      const range = reportOf(await review(client, { mode: "static", repo: dir, from: "HEAD~1", to: "HEAD" }));
+      expect(range.functions?.map((fn) => fn.id)).toContain("utils⟦U+200B⟧.ts#helper");
+      const explained = await finishReview(client, { ...staticFinish(range.reviewId, range), explanation: minimalExplanation(range) });
+      expect(explained.isError, textOf(explained)).toBeFalsy();
+      // SAFETY: finish_review answers with the finished shape; the link asserted here is its own.
+      const page = await loopback((JSON.parse(textOf(explained)) as Finished).reportUrl);
+      expect(page?.body).toContain("Handles one part of the shop");
+
+      const file = "lib\u200B.ts";
+      const diff = [`diff --git a/${file} b/${file}`, "index 1111111..2222222 100644", `--- a/${file}`, `+++ b/${file}`, "@@ -1,3 +1,3 @@", " export function f() {", "-  return 1;", "+  return 2;", " }", ""].join("\n");
+      const inline = reportOf(await review(client, { mode: "static", diff }));
+      expect(inline.items[0].file).toBe("lib⟦U+200B⟧.ts");
+      const comments = [{ path: inline.items[0].file, line: 2, side: "RIGHT", body: "Should this stay at one?", severity: "minor" }];
+      const commented = await finishReview(client, { ...staticFinish(inline.reviewId, inline), comments });
+      expect(commented.isError, textOf(commented)).toBeFalsy();
+      expect(fetchAttempts).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an id or a path that its markers make eight times longer still goes back to finish_review", async () => {
+    blockNetwork();
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-mcp-long-"));
+    try {
+      const run = (args: string[]) => execFileSync("git", args, { cwd: dir });
+      // A valid identifier of 301 characters, 150 of them zero-width joiners.
+      const name = `a${"\u200Da".repeat(150)}`;
+      run(["init", "-b", "main"]);
+      writeFileSync(join(dir, "auth.js"), "export function check(user) {\n  return user.ok;\n}\n");
+      run(["add", "."]);
+      run([...GIT_ENV, "commit", "-m", "base"]);
+      writeFileSync(join(dir, "auth.js"), `export function check(user) {\n  return ${name}(user);\n}\nfunction ${name}(user) {\n  return user.ok;\n}\n`);
+      run(["add", "-A"]);
+      run([...GIT_ENV, "commit", "-m", "head"]);
+      const client = await connectReview();
+
+      const range = reportOf(await review(client, { mode: "static", repo: dir, from: "HEAD~1", to: "HEAD" }));
+      const long = range.functions?.find((fn) => fn.id.startsWith("auth.js#a⟦U+200D⟧a"));
+      expect(long?.id.length).toBeGreaterThan(1200);
+      const explained = await finishReview(client, { ...staticFinish(range.reviewId, range), explanation: minimalExplanation(range) });
+      expect(explained.isError, textOf(explained)).toBeFalsy();
+
+      const file = `src/${"a\u200B".repeat(150)}.ts`;
+      const diff = [`diff --git a/${file} b/${file}`, "index 1111111..2222222 100644", `--- a/${file}`, `+++ b/${file}`, "@@ -1,3 +1,3 @@", " export function f() {", "-  return 1;", "+  return 2;", " }", ""].join("\n");
+      const inline = reportOf(await review(client, { mode: "static", diff }));
+      expect(inline.items[0].file.length).toBeGreaterThan(1024);
+      const comments = [{ path: inline.items[0].file, line: 2, side: "RIGHT", body: "Should this stay at one?", severity: "minor" }];
+      const commented = await finishReview(client, { ...staticFinish(inline.reviewId, inline), comments });
+      expect(commented.isError, textOf(commented)).toBeFalsy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("how many pages one connection keeps open", () => {
@@ -1566,6 +1680,28 @@ describe("how many pages one connection keeps open", () => {
       const again = await opened(client, await review(client, { mode: "connected", pr: prUrl(1) }));
       expect(again.url).not.toBe(pages[0]);
       expect((await loopback(again.url! + "api/state"))?.status).toBe(200);
+    });
+  }, 120_000);
+
+  test("the eleventh pull request closes the page used least recently, and finishing that review says so instead of handing out a dead link", async () => {
+    await withFakeGh(async () => {
+      blockNetwork();
+      const client = await connectReview();
+      const reviews: ConnectedPayload[] = [];
+      for (let number = 1; number <= 10; number += 1) reviews.push(connectedOf(await review(client, { mode: "connected", pr: prUrl(number) })));
+      // The agent is still working on the first pull request: reviewing it again marks its page in use.
+      const inUse = connectedOf(await review(client, { mode: "connected", pr: prUrl(1) }));
+      expect(inUse.reviewId).toBe(reviews[0]?.reviewId);
+      await review(client, { mode: "connected", pr: prUrl(11) });
+
+      const closed = reviews[1]!;
+      const refused = await finishReview(client, minimalFinish(closed.reviewId!, closed.report!));
+      expect(refused.isError).toBe(true);
+      expect(textOf(refused)).toMatch(/page was closed .*call review_diff with its link again/);
+      expect(textOf(refused)).not.toMatch(/127\.0\.0\.1/);
+
+      const kept = await finished(client, inUse.reviewId!, inUse.report!);
+      expect((await loopback(kept.url! + "api/state"))?.status).toBe(200);
     });
   }, 120_000);
 
