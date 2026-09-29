@@ -59,6 +59,7 @@ const LIVE_UPDATE = "The review is finished; its page shows this update.";
 const MAX_CONNECTED_SESSIONS = 10;
 
 const SHUTDOWN_ERROR = "This MCP connection is shutting down; open a new session to review a pull request.";
+const CLOSED_PAGE_ERROR = `That pull request's page was closed to keep at most ${MAX_CONNECTED_SESSIONS} open on this connection, after newer pull requests were reviewed. Nothing was kept; call review_diff with its link again for a fresh page, then finish that review.`;
 
 interface ConnectedBinding {
   /** Loopback page for the loaded pull request, bound to one canonical URL. */
@@ -216,8 +217,11 @@ async function closeSession(session: ConnectedSession): Promise<void> {
  * finishes during shutdown is closed on the spot instead of leaking a listener.
  */
 class ConnectedSessions {
+  /** In order of use: the first entry is the session used least recently. */
   private readonly byUrl = new Map<string, Promise<ConnectedBinding>>();
   private readonly started = new Set<Promise<ConnectedBinding>>();
+  /** Pages closed to make room, so finishing their review is refused instead of handed a dead link. */
+  private readonly closedPages = new Set<string>();
   private closed = false;
   private teardown: Promise<void> | undefined;
 
@@ -227,8 +231,12 @@ class ConnectedSessions {
     if (this.closed) throw new Error(SHUTDOWN_ERROR);
     const key = url.toLowerCase();
     const existing = this.byUrl.get(key);
-    if (existing !== undefined) return existing;
-    while (this.byUrl.size >= MAX_CONNECTED_SESSIONS) this.evictOldest();
+    if (existing !== undefined) {
+      this.byUrl.delete(key);
+      this.byUrl.set(key, existing);
+      return existing;
+    }
+    while (this.byUrl.size >= MAX_CONNECTED_SESSIONS) this.evictLeastRecent();
     const started = this.start(url);
     this.started.add(started);
     this.byUrl.set(key, started);
@@ -239,16 +247,26 @@ class ConnectedSessions {
 
   /**
    * Each pull request holds a listening loopback server for the whole connection;
-   * past the limit the one opened longest ago is closed, so a hostile or careless
-   * run of pull requests cannot pile them up. Reviewing it again opens a fresh page.
+   * past the limit the one used least recently is closed, so a hostile or careless
+   * run of pull requests cannot pile them up while the one the agent is working on
+   * stays open. Reviewing a closed one again opens a fresh page.
    */
-  private evictOldest(): void {
+  private evictLeastRecent(): void {
     const oldest = this.byUrl.entries().next().value;
     if (oldest === undefined) return;
     const [key, binding] = oldest;
     this.byUrl.delete(key);
     this.started.delete(binding);
-    void binding.then((opened) => { opened.analysis.release(); return closeSession(opened.session); }).catch(() => undefined);
+    void binding.then((opened) => {
+      this.closedPages.add(opened.url);
+      opened.analysis.release();
+      return closeSession(opened.session);
+    }).catch(() => undefined);
+  }
+
+  /** Whether this page was closed to make room for newer pull requests. */
+  isClosed(url: string): boolean {
+    return this.closedPages.has(url);
   }
 
   /** Close every served page. Repeated calls join the same teardown. */
@@ -499,6 +517,7 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
   }, async ({ reviewId, summary, answers, order, comments, explanation }) => {
     try {
       const url = connectedUrls.get(reviewId);
+      if (url !== undefined && sessions.isClosed(url)) throw new Error(CLOSED_PAGE_ERROR);
       // A pull request review owes the human the paragraph on what it is for:
       // without it the page would show a diff with no stated purpose. Checked
       // here, before ReportPages sees the call, so a missing summary refuses

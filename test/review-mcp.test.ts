@@ -1683,6 +1683,28 @@ describe("how many pages one connection keeps open", () => {
     });
   }, 120_000);
 
+  test("the eleventh pull request closes the page used least recently, and finishing that review says so instead of handing out a dead link", async () => {
+    await withFakeGh(async () => {
+      blockNetwork();
+      const client = await connectReview();
+      const reviews: ConnectedPayload[] = [];
+      for (let number = 1; number <= 10; number += 1) reviews.push(connectedOf(await review(client, { mode: "connected", pr: prUrl(number) })));
+      // The agent is still working on the first pull request: reviewing it again marks its page in use.
+      const inUse = connectedOf(await review(client, { mode: "connected", pr: prUrl(1) }));
+      expect(inUse.reviewId).toBe(reviews[0]?.reviewId);
+      await review(client, { mode: "connected", pr: prUrl(11) });
+
+      const closed = reviews[1]!;
+      const refused = await finishReview(client, minimalFinish(closed.reviewId!, closed.report!));
+      expect(refused.isError).toBe(true);
+      expect(textOf(refused)).toMatch(/page was closed .*call review_diff with its link again/);
+      expect(textOf(refused)).not.toMatch(/127\.0\.0\.1/);
+
+      const kept = await finished(client, inUse.reviewId!, inUse.report!);
+      expect((await loopback(kept.url! + "api/state"))?.status).toBe(200);
+    });
+  }, 120_000);
+
   test("the report a live session links to survives twenty other reports, and is an ordinary page again when the session is evicted", async () => {
     await withFakeGh(async () => {
       blockNetwork();
