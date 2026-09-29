@@ -426,7 +426,7 @@ describe("review HTML", () => {
 
   test("an unread file type says so instead of listing answers", () => {
     const html = visible(renderReview(report([item({
-      file: "db/query.sql",
+      file: "schema/query.graphql",
       status: "uncertain",
       facts: { language: null, inert: null, answers: {}, evidence: {} },
     })])));
@@ -434,6 +434,17 @@ describe("review HTML", () => {
     expect(obs).toContain("diffninja does not read this file type");
     expect(obs).not.toContain("<dt>");
     expect(obs).not.toMatch(/bug|defect found|problem with the code/i);
+  });
+
+  test("a hunk left unread for a long line says why, not that its file type is unreadable", () => {
+    const html = visible(renderReview(report([item({
+      file: "src/checkout.ts",
+      status: "uncertain",
+      facts: { language: null, inert: null, answers: {}, evidence: {} },
+    })])));
+    const obs = /<details class="obs">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
+    expect(obs).toContain("changed line over 4,000 characters");
+    expect(obs).not.toContain("this file type");
   });
 
   test("a formatting-only change says so", () => {
@@ -497,11 +508,15 @@ describe("review HTML", () => {
     const patch = visible(renderReview(report([item()])));
     expect(patch).toMatch(/git.range/i);
     expect(patch).not.toMatch(/<svg class="cf-svg"/);
-    for (const availability of ["no-changes", "failed"] as const) {
+    for (const availability of ["no-changes", "partial", "failed"] as const) {
       const html = visible(renderReview(report([item()], { callFlowAvailability: availability })));
       expect(html).not.toMatch(/<svg class="cf-svg"/);
       expect(html).not.toMatch(/needs a git.range|requires a git.range/i);
     }
+    // Files the analysis left out may hold the path, so a partial analysis never says none reaches the change.
+    const partial = visible(renderReview(report([item()], { callFlowAvailability: "partial" })));
+    expect(partial).toContain("call flows left out some source files");
+    expect(partial).not.toContain("No call path reaches a changed file");
   });
 
   test("call-flow files use their worst hunk and link directly to that diff", () => {

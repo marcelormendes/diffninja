@@ -50,7 +50,8 @@ The tool writes no report files. Arguments and examples:
    instruction, a link, or a limit, **low** otherwise; a test-file change reads
    **attention** only when it changes a limit, discards a failure, or weakens a
    gate, **low** otherwise; a formatting-only change **passed**;
-   an unread file type **uncertain**, for a person to read. Priority orders hunks:
+   an unread file type, or a hunk with a changed line over 4,000 characters,
+   **uncertain**, for a person to read. Priority orders hunks:
    a fixed base, plus 10 for a real change, plus the heaviest fact of the
    boundary group (what the change says or bounds) and of the failure group
    (failures, CI gates, permissions) — each group counts once, never summed. The report lists
@@ -87,19 +88,23 @@ The tool writes no report files. Arguments and examples:
    The pages list every hunk in the agent's
    order, attributed to it; diffninja's own order stays available one click
    away, and statuses stay diffninja's. `record_answers`, `record_order`, and
-   `suggest_comments` update a review afterwards. On 159 held-out open-source
-   pull requests, weighted by the severity of maintainers' actual review
-   comments, a host model that read diffninja's report put the serious
-   comments earlier than diffninja's deterministic order did.
+   `suggest_comments` update a review afterwards. The author's own evaluation on
+   159 held-out open-source pull requests, weighted by the severity of
+   maintainers' actual review comments, found that a host model that read
+   diffninja's report put the serious comments earlier than diffninja's
+   deterministic order did. The evaluation data is not in this repository, and
+   this page has not verified that result.
    On a pull request, the suggested line comments are short, in the reviewer's
    own voice, with no "Finding 1:" scaffolding. The page shows each under its line; you add one
    or all of them to your draft with a click, edit or dismiss them, and submit
-   the review yourself. Nothing is posted without you.
+   the review yourself. No diffninja tool posts anything, and the agent is told
+   never to submit through the page.
 5. **The business explanation.** Function names and call graphs tell a reader
    little about what a change does to the product. Every report lists
    `functions`: each function a reader meets around the hunks and in the call
    flows (the project's own definitions, not library calls), once, as
-   `<file>#<name>`. The reviewing agent, which read the code, sends
+   `<file>#<name>`, with a hidden character shown as a marker, which is the
+   form the agent sends back. The reviewing agent, which read the code, sends
    `explanation` with its reading: one plain sentence per listed function on
    what it does for the business, one to four business processes as steps and
    decisions with the steps this change adds, changes, or removes marked (like
@@ -119,8 +124,9 @@ The tool writes no report files. Arguments and examples:
    with the steps and rules that name it. It is all the agent's reading,
    attributed to it, never a verdict, and it never changes status or order.
 6. **Project context (git ranges only).** What a diff does not show is often
-   the project around it. From the local clone alone — nothing is fetched —
-   the report names the commits that last changed each hunk's removed lines
+   the project around it. From the local clone alone (diffninja runs no fetch;
+   in a partial clone git may itself fetch missing objects from that clone's
+   remote, as `git log -p` would) the report names the commits that last changed each hunk's removed lines
    (`git blame` at the base), earlier revert commits that touched a changed
    file or share a rare word with the goal or the changed file names,
    contributor guidelines that apply (`CONTRIBUTING`, `AGENTS.md`, `.github/`,

@@ -6,6 +6,7 @@ import {
   ConnectedReview,
   GhCommandError,
   ghCliRunner,
+  ghEnvironment,
   MIN_GH_VERSION,
   type ConnectedState,
   type GhInvocation,
@@ -15,6 +16,13 @@ import {
   type ReviewInput,
   type ReviewPayload,
 } from "../src/review/github.js";
+
+describe("the environment gh runs with", () => {
+  it("turns off gh's usage telemetry, its prompts and its update notice, and pins the host", () => {
+    const env = ghEnvironment();
+    expect(env).toMatchObject({ GH_TELEMETRY: "false", DO_NOT_TRACK: "1", GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" });
+  });
+});
 
 describe("gh process input failures", () => {
   it("preserves an early rejection without crashing on a broken stdin pipe", async () => {

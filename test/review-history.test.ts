@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -131,5 +131,35 @@ describe("history helpers", () => {
   test("guidelines next to the change come first, then the root, then .github and docs; another package's guide is left out", () => {
     const tree = ["CONTRIBUTING.md", "docs/preview.md", ".github/CONTRIBUTING.md", "crates/core/CONTRIBUTING.md", "crates/other/CONTRIBUTING.md", "src/a.ts", "tests/CONTRIBUTING.md"];
     expect(guidelinePaths(tree, ["crates/core/src/lib.rs"])).toEqual(["crates/core/CONTRIBUTING.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/preview.md"]);
+  });
+});
+
+describe("a repository cannot make line history run its helpers", () => {
+  test("a textconv driver selected by the repository's attributes is not run by the blame that finds line origins", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "diffninja-textconv-"));
+    try {
+      const marker = join(repo, "..", `textconv-ran-${process.pid}-${Date.now()}`);
+      const run = (...args: string[]) => execFileSync("git", ["-c", "user.name=dev", "-c", "user.email=dev@example.invalid", ...args], { cwd: repo });
+      run("init", "-q", "-b", "main");
+      // A root commit's lines are boundary lines with no origin; start from another commit.
+      writeFileSync(join(repo, "README.md"), "seed\n");
+      run("add", ".");
+      run("commit", "-q", "-m", "seed");
+      writeFileSync(join(repo, ".gitattributes"), "*.ts diff=evil\n");
+      writeFileSync(join(repo, "a.ts"), "export const a = 1;\nexport const b = 2;\n");
+      run("add", ".");
+      run("commit", "-q", "-m", "base");
+      writeFileSync(join(repo, "a.ts"), "export const a = 1;\nexport const b = 3;\n");
+      run("commit", "-qam", "change");
+      // The helper any hostile config or a global driver could name.
+      run("config", "diff.evil.textconv", `sh -c 'echo ran >> "${marker}"; cat "$0"'`);
+      const report = await reviewDiff({ repo, from: "HEAD~1", to: "HEAD" }, {});
+      expect(report.items.some((item) => item.file === "a.ts")).toBe(true);
+      expect(existsSync(marker)).toBe(false);
+      // The line origins are still found: the protection removes the helper, not the history.
+      expect(report.items.find((item) => item.file === "a.ts")?.history?.origins.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

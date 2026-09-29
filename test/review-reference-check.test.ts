@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { outdent } from "outdent";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { gitDiff, parseDiff } from "../src/review/input.js";
 import { checkReferences } from "../src/review/reference-check.js";
 import { workspace } from "./workspace.js";
@@ -378,11 +378,27 @@ describe("reference check availability and configuration safety", () => {
     });
     const head = host.commit("head", { "/src/main.ts": broken });
 
-    const { findings, check } = await checkRange(host, base, head);
+    // A machine with no TypeScript beside diffninja, and a project that installs none.
+    const range = gitDiff(host.root, base, head);
+    const { findings, check } = await checkReferences(host.root, range.from, range.to, parseDiff(range.diff), "tsconfig.json", { ownCompiler: false });
 
     expect(findings).toEqual([]);
     expect(check.status).toBe("not-checked");
-    expect(check.detail).toContain("No installed TypeScript compiler was found");
+    expect(check.detail).toContain("No TypeScript compiler is installed beside diffninja (its package ships none)");
+    // A global typescript is found only from a global diffninja, never from npx's cache.
+    expect(check.detail).toContain("With diffninja installed globally, which diffninja setup tries first, npm install -g typescript puts one beside it; a diffninja started through npx cannot use one.");
+    expect(check.detail).toContain("DIFFNINJA_TRUST_PROJECT_COMPILER=1");
+  });
+
+  test("without the trust switch a project without a compiler is checked with the one beside diffninja", async () => {
+    const host = workspace();
+    const base = host.commit("base", { "/tsconfig.json": project, "/src/main.ts": "export const value = 1;\n" });
+    const head = host.commit("head", { "/src/main.ts": broken });
+
+    const { findings, check } = await checkRange(host, base, head);
+
+    expect(check.status).toBe("checked");
+    expect(findings.length).toBeGreaterThan(0);
   });
 
   test("rejects a reference project that is not a repository-relative tsconfig", async () => {
@@ -750,3 +766,49 @@ describe("snapshot materialization safety", () => {
     expect(existsSync(join(host.root, "node_modules", "typescript", "package.json"))).toBe(true);
   });
 });
+
+describe("whose compiler runs", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  /** A repository whose node_modules/typescript is code that leaves a mark when it is loaded. */
+  function hostileCompilerRepo() {
+    const host = workspace();
+    const marker = join(host.root, "..", `compiler-ran-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const base = host.commit("base", {
+      "/.gitignore": ignoreNodeModules,
+      "/tsconfig.json": project,
+      "/src/main.ts": "export const value = 1;\n",
+    });
+    mkdirSync(join(host.root, "node_modules", "typescript"), { recursive: true });
+    writeFileSync(join(host.root, "node_modules", "typescript", "package.json"), JSON.stringify({ name: "typescript", version: "5.0.0", main: "index.js" }));
+    writeFileSync(join(host.root, "node_modules", "typescript", "index.js"), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran"); module.exports = { version: "5.0.0", sys: {} };`);
+    const head = host.commit("head", { "/src/main.ts": "export const value = notHere;\n" });
+    return { host, marker, base, head };
+  }
+
+  test("the compiler inside the repository under review is not run unless the person who configured the server trusts it", async () => {
+    const { host, marker, base, head } = hostileCompilerRepo();
+    const result = await checkRange(host, base, head);
+    expect(existsSync(marker)).toBe(false);
+    // The check still ran, with the compiler installed beside diffninja.
+    expect(result.check.status).toBe("checked");
+    expect(result.findings.map((finding) => finding.title).join("\n")).toContain("notHere");
+  });
+
+  test("with DIFFNINJA_TRUST_PROJECT_COMPILER=1 the project's own compiler is the one loaded", async () => {
+    vi.stubEnv("DIFFNINJA_TRUST_PROJECT_COMPILER", "1");
+    const { host, marker, base, head } = hostileCompilerRepo();
+    await checkRange(host, base, head);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("any other value of the switch does not trust it", async () => {
+    for (const value of ["0", "true", "yes", ""]) {
+      vi.stubEnv("DIFFNINJA_TRUST_PROJECT_COMPILER", value);
+      const { host, marker, base, head } = hostileCompilerRepo();
+      await checkRange(host, base, head);
+      expect(existsSync(marker), JSON.stringify(value)).toBe(false);
+    }
+  });
+});
+

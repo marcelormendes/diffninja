@@ -68,7 +68,9 @@ hunk. The coverage count states how many changed files have trees.
 
 The page belongs to the agent's MCP connection: it is served from memory, never
 written to disk, and stops when the agent exits. Each report has its own
-256-bit URL token; a connection keeps its 20 most recent reports. The server
+256-bit URL token; a connection keeps its 20 most recent reports, plus the
+latest report of each live connected review, which is pinned outside that limit.
+The server
 answers only `GET /report/<token>`, rejects any other Host, forbids caching and
 framing, and allows the inline script and stylesheet only by their SHA-256
 hashes. The URL carries source code access: do not share it.
@@ -80,8 +82,12 @@ reference. Reports therefore contain unchanged code as well as changed hunks;
 keep them private.
 
 Git-range inputs have repository call flows. Patch-only inputs show a short git-range note, not
-invented diagrams. `callFlowAvailability` distinguishes `available`,
-`needs-git-range`, `no-changes`, and `failed`.
+invented diagrams. diffninja reads the repository with read-only git commands.
+It never runs fetch or checkout there. In a partial clone, git itself may fetch
+missing objects from that clone's own remote and store them in `.git` when
+diffninja reads them. `callFlowAvailability` distinguishes `available`,
+`needs-git-range`, `no-changes`, `partial` (call flows left out some source
+files, so paths through them are absent, with or without trees), and `failed`.
 
 Hunk reasons, local change facts (each `yes` with the changed line it rests
 on), warnings, and priorities are fields of the report. The analysis is local
@@ -96,17 +102,28 @@ with bounded candidate and excerpt counts. A finding is a source observation,
 not a runtime defect verdict. Unknown bindings, dynamic calls, and unsupported
 syntax remain unproven. The report lists check coverage and limitations.
 
-The optional reference checker runs the repository's **trusted installed**
-TypeScript compiler against immutable before/after trees. It does not run PR
-scripts, install dependencies, emit code, or change the checkout. It compares
+The optional reference checker runs a TypeScript compiler against immutable
+before/after trees. It is the `typescript` that Node resolves from diffninja's
+own files, which means the `node_modules` directory of diffninja's install and of
+every directory above it, and `NODE_PATH`. The repository's own compiler is used
+only when whoever configured the server set `DIFFNINJA_TRUST_PROJECT_COMPILER=1`,
+and then it runs in diffninja's process with your full environment.
+diffninja's package ships no compiler. With a global install of diffninja,
+`npm install -g typescript` puts one beside it. A diffninja started through npx
+finds one only if a `typescript` sits in a directory above the npx cache, and
+otherwise the check reports not checked. It does not run PR scripts, install
+dependencies, emit code, or change the checkout. It does write a temporary
+directory with a full copy of each revision and symlinks to the repository's
+installed `node_modules`, and removes it afterwards. It compares
 only diagnostics 2304, 2305, 2307, 2339, 2503, 2551, 2552, and 7016, subtracting
 pre-existing errors even when lines moved; unchanged consumers can be findings.
 Both revisions use the current installed dependencies, not historical installs.
 
 Missing dependencies, unsupported project references or escaping configurations,
 and exceeded bounds produce **not checked**, not a pass. Bounds include 50,000
-files, 8 MiB per file, 512 MiB total snapshot content, and at most 500 selected
-diagnostics per revision. This is not a project build, test run, or safety proof.
+files, 8 MiB per file, 512 MiB of snapshot content per revision (up to 1 GiB
+across the two), and at most 500 selected diagnostics per revision. Each `git`
+command the check runs stops after 120 seconds. This is not a project build, test run, or safety proof.
 
 ## Connected GitHub reviews
 
@@ -144,7 +161,8 @@ commit.
 Only one submission can run at a time. A timeout or ambiguous write outcome
 locks submission pending reconciliation against GitHub; absence of a matching
 review is not proof that retry is safe. Recoverable failures preserve browser
-drafts in per-tab `sessionStorage`. Closing the tab or stopping the server is
+drafts in per-tab `sessionStorage`. The page also keeps its diff layout choice
+(`guided` or `file`) in `localStorage`. Closing the tab or stopping the server is
 not a durable draft recovery system. Drafts contain source/review content;
 treat the browser session as private.
 
@@ -152,11 +170,18 @@ Authentication is delegated entirely to `gh`: no diffninja token store, PAT
 UI, or credential extraction. `GH_TOKEN` (and GitHub CLI's other environment
 overrides) can override stored credentials.
 
-The loopback server validates Host and Origin, requires a per-session CSRF
-token on mutations, disables caching/framing, and serves a restrictive CSP.
-Its only API routes are `GET /api/state` and `POST /api/load`,
-`/api/preview`, `/api/submit`, `/api/reconcile`; none is a generic GitHub or
-command proxy.
+Every route of the loopback server lives under an unguessable path,
+`http://127.0.0.1:PORT/<64 hex characters>/`, which only the link the agent
+hands you contains: another program or user on the same machine that finds the
+port gets a 404 for everything and cannot read the pull request or post a
+review as you. On top of that the server validates Host and Origin, requires a
+per-session CSRF token on mutations, disables caching/framing, and serves a
+CSP with a fresh nonce per response. Its only API routes are
+`GET api/state`, `GET api/analysis` and `POST api/load`, `api/preview`,
+`api/submit`, `api/reconcile` under that path; none is a generic GitHub or
+command proxy. At most ten of these pages stay open per agent connection; the
+one used least recently closes, `finish_review` for its review is refused with a
+clear error, and reviewing its pull request again opens a fresh one.
 
 ## Setup
 
@@ -176,46 +201,73 @@ permanent `node` plus `mcp-cli.js`, and updates a global install older than
 itself to its own version (never downgrading a newer one); without a working
 global install it falls back to `npx` entries pinned to its version (on Windows, npm's JS entry point run by `node`, since a client that
 spawns without a shell cannot launch `npx.cmd`). `--dry-run` previews and
-changes nothing, not even the global install; `--no-install` skips installing or
-updating the global package; `--uninstall` removes the entries. No API key is required or stored
-in the configuration.
+changes nothing, not even the global install (it still runs `npm root -g`);
+`--no-install` skips installing or updating the global package; `--uninstall`
+removes the entries. No API key is required or stored in the configuration.
+
+Setup runs npm, so it downloads diffninja and its dependencies from the npm
+registry and runs the install scripts of `diffninja`, `tree-sitter`,
+`tree-sitter-javascript` and `tree-sitter-typescript`. It rewrites each JSON
+config it changes in full, in standard formatting (two-space indentation,
+characters instead of `\u` escapes, integers above 2^53 rounded), through a
+temporary file and a rename, and keeps no backup. Codex's TOML file is edited
+in place. Copy `~/.claude.json` before the first run. See
+[security.md](security.md) for everything setup and the package's postinstall
+script run, download and write.
 
 ## Install-time notes
 
-Node `>=22.18` is required. From the npm registry (once `0.1.0` is
-published): `npm install -g diffninja`. Both bins ship in the package:
+Node `>=22.18` is required. From the npm registry: `npm install -g diffninja`. Both bins ship in the package:
 `diffninja` (setup only) and `diffninja-mcp` (MCP server). On Windows, npm generates
 `.cmd`, `.ps1` and shell shims per bin; if PowerShell blocks the `.ps1` shim,
 call the `.cmd` form (`diffninja.cmd setup`) without changing the execution
 policy.
 
+- **Private registries.** When `setup` or `grammars install` runs npm, npm
+  gets a short allow-list of variables (`PATH`, `HOME`, locale, temp and XDG
+  directories, proxy and certificate settings) plus every variable whose name
+  starts with `npm_config_`. GitHub, npm and cloud tokens outside that list are
+  dropped. The `npm_config_` variables and proxy settings can themselves hold
+  credentials, and they do reach npm. If your `.npmrc` reads a registry token
+  from an environment variable (`_authToken=${NPM_TOKEN}`), name it in
+  `DIFFNINJA_NPM_ENV`, for example `DIFFNINJA_NPM_ENV=NPM_TOKEN,NODE_AUTH_TOKEN`.
+  It takes variable names only, and the install scripts npm runs see them too.
+  `gh` and `git` get your full environment. The postinstall script gets the
+  environment of the npm that runs it.
 - **Linux ARM64 needs a build toolchain at install time.**
   `tree-sitter-typescript@0.23.2` ships an x86-64 binary mislabeled as
   `linux-arm64`. Because it is an `optionalDependency`, that failure no longer
   aborts the install; a `postinstall` heal deletes the wrong-architecture
   prebuild and recompiles from source (`npm rebuild tree-sitter-typescript`
-  with `CXXFLAGS='-std=c++20'`, which the Node 22+ headers require). Python
+  with `CXXFLAGS='-std=c++20'`, which the Node 22+ headers require). That
+  rebuild runs install scripts and may download the Node headers. Python
   and a C/C++ toolchain (build-essential) must be present while installing.
-  Without them the heal only warns and TypeScript/TSX extraction falls back to
-  the grammar cache.
+  Without them the heal only warns, and TypeScript and TSX files are left out of
+  call flows with a warning per file.
 - **Linux needs a recent libstdc++.** The `tree-sitter@0.25.1` Linux prebuild
   imports `GLIBCXX_3.4.31` (GCC 13.1+, i.e. libstdc++ from Ubuntu 24.04 or
   newer). `npm rebuild --prefix <installed diffninja> tree-sitter
   --build-from-source` rebuilds it against the host toolchain.
-- **Grammar cache.** Git-range reviews install a missing grammar with npm
-  into `CALLDIFF_GRAMMAR_CACHE` (default `~/.cache/calldiff/grammars`,
-  `C:\Users\<you>\.cache\calldiff\grammars` on Windows). It writes there and
-  needs the network; inline diff text never does. Preinstalling the same
-  grammars keeps a review offline:
-
-  ```bash
-  export CALLDIFF_GRAMMAR_CACHE="$HOME/.cache/calldiff/grammars"
-  npm install --prefix "$CALLDIFF_GRAMMAR_CACHE" --no-save --no-fund --no-audit \
-    --legacy-peer-deps tree-sitter-python
-  ```
-
-  A grammar that cannot be installed is reported per file
-  (`warn: failed to parse <file>`) and the review still runs on the diff and
-  whatever call flows resolved. Some grammar packages have no prebuild for
-  the running platform and compile with node-gyp on first use, which needs a
-  C/C++ toolchain and Python.
+- **Grammars.** Call flows read JavaScript and TypeScript with grammars that
+  ship in the package. Every other language needs its tree-sitter grammar,
+  and a review never downloads one: run `diffninja grammars install` once, with
+  the diffninja version your agent runs (a review's warning prints the exact
+  `npx -y diffninja@<version> grammars install`; a cache another version's lock
+  installed is not read, so `@latest` can install grammars an older server
+  ignores). It installs 20 exact versions
+  (18 usable at once, see `--build` below) with `npm ci --ignore-scripts` from a lock that ships with diffninja (the
+  sha512 of every tarball, dependencies included, is checked, and no package
+  runs an install script unless you pass `--build`) into `~/.cache/diffninja/grammars`
+  (`C:\Users\<you>\.cache\diffninja\grammars` on Windows; `DIFFNINJA_GRAMMAR_CACHE`
+  moves it), a private directory diffninja trusts only if it wrote it for this
+  lock and it belongs to you with no other user able to write to it (not checked
+  on Windows). `diffninja grammars status` shows what is installed. Kotlin and Perl
+  grammars ship no prebuilt binary: `diffninja grammars install --build`
+  compiles them on your machine, runs their install scripts (node-gyp fetches
+  the Node headers from nodejs.org unless they are cached), and needs Python and
+  a C/C++ toolchain. A
+  review without a grammar still runs on the diff, and its warnings name the
+  grammars its call flows skipped. Source files over 1 MiB and files beyond
+  15,000 per revision are left out of call flows, and the review says so and
+  reports `partial`. Past 15,000 the changed files and their directories are read
+  first, then the rest in code-point order, and each skipped file counts once.

@@ -1,6 +1,7 @@
 import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
 import { PALETTE_STYLES } from "./palette.js";
 import { escapeHtml } from "./escape-html.js";
+import { HIDDEN_CHARACTER_FALLBACK_SOURCE, HIDDEN_CHARACTER_SOURCE } from "./hidden-characters.js";
 
 /**
  * The one page the connected session serves.
@@ -9,17 +10,19 @@ import { escapeHtml } from "./escape-html.js";
  * draft to `/api/preview`, and posts the same payload to `/api/submit`. Every
  * string that comes from GitHub (paths, diff lines, the diff text itself, error
  * messages) reaches the DOM through `textContent`; nothing is interpolated into
- * markup or into the script. Style and script carry the session CSRF token as
- * their CSP nonce, so the server can serve a `default-src 'none'` policy with
- * no inline handlers and no inline styles.
+ * markup or into the script. Style and script carry a per-response nonce, so the
+ * server can serve a `default-src 'none'` policy with no inline handlers and no
+ * inline styles; the session's CSRF token is a different secret, and the whole
+ * page lives under the session's secret path prefix.
  *
  * Drafts live in `sessionStorage`, keyed per pull request and stamped with the
  * snapshot id. Restoring a draft revalidates every comment anchor against the
  * snapshot on screen: a comment whose line no longer exists in the new revision
  * is dropped, never silently carried over.
  */
-export function renderConnectedPage(csrf: string): string {
-  const nonce = escapeHtml(csrf);
+export function renderConnectedPage(options: { readonly csrf: string; readonly nonce: string; readonly base: string }): string {
+  const { csrf, base } = options;
+  const nonce = escapeHtml(options.nonce);
   return [
     "<!doctype html>",
     '<html lang="en">',
@@ -37,6 +40,7 @@ export function renderConnectedPage(csrf: string): string {
     `<p class="brand">${BRAND_MARK}<span>diffninja</span></p>`,
     '<h1 id="page-title">Pull request review</h1>',
     '<p id="page-meta" class="page-meta" hidden></p>',
+    '<p id="update-notice" class="update-notice" role="status" hidden></p>',
     '<section id="pr-goal" class="pr-goal" aria-labelledby="pr-goal-heading" hidden>',
     '<h2 id="pr-goal-heading" class="pr-goal-heading">Goal</h2>',
     '<p id="pr-goal-text" class="pr-goal-text"></p>',
@@ -178,14 +182,14 @@ export function renderConnectedPage(csrf: string): string {
     "</div>",
     '<iframe id="flow-frame" class="flow-frame" title="Call flow"></iframe>',
     "</aside>",
-    `<script nonce="${nonce}">${script(csrf)}</script>`,
+    `<script nonce="${nonce}">${script(csrf, base)}</script>`,
     "</body>",
     "</html>",
     "",
   ].join("\n");
 }
 
-function script(csrf: string): string {
+function script(csrf: string, base: string): string {
   // The nonce doubles as a JS string literal; `\u003c` keeps a hostile value
   // from closing the surrounding script element.
   return `
@@ -193,6 +197,8 @@ function script(csrf: string): string {
   'use strict';
 
   var CSRF = ${JSON.stringify(csrf).replaceAll("<", "\\u003c")};
+  // Every request goes under the session's secret prefix; without it the server answers 404.
+  var BASE = ${JSON.stringify(base).replaceAll("<", "\\u003c")};
   var DRAFT_PREFIX = 'diffninja.connected.draft.v1';
 
   var state = null;
@@ -235,15 +241,30 @@ function script(csrf: string): string {
 
   function byId(id) { return document.getElementById(id); }
 
+  // Bidirectional and other invisible control characters would let untrusted text reorder or hide
+  // what the reviewer reads; every string from the pull request is shown with visible markers instead.
+  var HIDDEN;
+  try {
+    HIDDEN = new RegExp(${JSON.stringify(HIDDEN_CHARACTER_SOURCE).replaceAll("<", "\\u003c")}, 'gu');
+  } catch (unsupported) {
+    // A browser that cannot compile the lookbehind marks every such character rather than lose the page.
+    HIDDEN = new RegExp(${JSON.stringify(HIDDEN_CHARACTER_FALLBACK_SOURCE)}, 'gu');
+  }
+  function visible(value) {
+    return String(value).replace(HIDDEN, function (character) {
+      return '\u27E6U+' + character.codePointAt(0).toString(16).toUpperCase().padStart(4, '0') + '\u27E7';
+    });
+  }
+
   function make(tag, className, textValue) {
     var node = document.createElement(tag);
     if (className) node.className = className;
-    if (textValue !== undefined && textValue !== null) node.textContent = String(textValue);
+    if (textValue !== undefined && textValue !== null) node.textContent = visible(textValue);
     return node;
   }
 
   function setText(node, value) {
-    node.textContent = value === undefined || value === null ? '' : String(value);
+    node.textContent = value === undefined || value === null ? '' : visible(value);
   }
 
   function show(node, visible) { node.hidden = !visible; }
@@ -492,7 +513,7 @@ function script(csrf: string): string {
       init.headers['X-Diffninja-CSRF'] = CSRF;
       init.body = JSON.stringify(payload === undefined ? {} : payload);
     }
-    return fetch(path, init).then(function (response) {
+    return fetch(BASE + (path.charAt(0) === '/' ? path.slice(1) : path), init).then(function (response) {
       return response.text().then(function (raw) {
         var data = null;
         if (raw) {
@@ -944,7 +965,7 @@ function script(csrf: string): string {
       if (!node || typeof node !== 'object') continue;
       var type = typeof node.t === 'string' ? node.t : '';
       if (type === 'text') {
-        if (typeof node.v === 'string') host.appendChild(document.createTextNode(node.v));
+        if (typeof node.v === 'string') host.appendChild(document.createTextNode(visible(node.v)));
         continue;
       }
       if (type === 'code') {
@@ -975,7 +996,7 @@ function script(csrf: string): string {
         continue;
       }
       // Anything this page does not know is shown as its own text.
-      if (typeof node.v === 'string') host.appendChild(document.createTextNode(node.v));
+      if (typeof node.v === 'string') host.appendChild(document.createTextNode(visible(node.v)));
     }
   }
 
@@ -1106,6 +1127,19 @@ function script(csrf: string): string {
    * nothing rather than a stale goal — and when none was recorded the block
    * says so instead of describing the pull request itself.
    */
+  /** A newer diffninja exists: one line with the command, from the analysis the page already polls. */
+  function renderUpdate() {
+    var current = currentAnalysis();
+    var u = current && current.update && typeof current.update === 'object' ? current.update : null;
+    var valid = u && typeof u.latest === 'string' && typeof u.current === 'string' && typeof u.command === 'string';
+    el.updateNotice.textContent = '';
+    show(el.updateNotice, Boolean(valid));
+    if (!valid) return;
+    el.updateNotice.appendChild(document.createTextNode('diffninja ' + u.latest + ' is available (you have ' + u.current + '). Update by running '));
+    el.updateNotice.appendChild(make('code', '', u.command));
+    el.updateNotice.appendChild(document.createTextNode(' in a terminal, then restart your agent.'));
+  }
+
   function renderGoal() {
     var snap = snapshot();
     // A revision that cannot be reviewed gets no goal block: there is nothing to aim the reading at.
@@ -1148,7 +1182,7 @@ function script(csrf: string): string {
     var by = typeof explanation.explainedBy === 'string' && explanation.explainedBy.trim() !== '' ? explanation.explainedBy.trim() : 'your review agent';
     var processes = Array.isArray(explanation.processes) ? explanation.processes.length : 0;
     setText(el.prHowBy, 'Explained by ' + by + ' from the code: ' + processes + (processes === 1 ? ' process' : ' processes') + ' and ' + (explanation.rules || 0) + ((explanation.rules || 0) === 1 ? ' business rule' : ' business rules') + '. Its reading, not a verdict; the diff below is the ground truth.');
-    var src = '/flow?snapshot=' + encodeURIComponent(current.snapshotId) + '&view=business';
+    var src = BASE + 'flow?snapshot=' + encodeURIComponent(current.snapshotId) + '&view=business';
     if (el.prHowFrame.getAttribute('src') !== src) el.prHowFrame.setAttribute('src', src);
   }
 
@@ -1384,6 +1418,7 @@ function script(csrf: string): string {
     var snap = snapshot();
     // The goal rides on the analysis, so it re-renders wherever the analysis does — every poll included.
     renderGoal();
+    renderUpdate();
     renderHow();
     show(el.analysisSection, Boolean(snap) && !(typeof snap.unavailableReason === 'string' && snap.unavailableReason !== ''));
     el.analysisBody.textContent = '';
@@ -1740,6 +1775,9 @@ function script(csrf: string): string {
 
   function codeNode(text, language, state) {
     var code = make('code', 'diff-code');
+    var shown = visible(text);
+    if (shown !== text) code.classList.add('diff-code-hidden');
+    text = shown;
     if (!language || text.length > 2000) { code.textContent = text; return code; }
     var tokens = tokenize(text, language, state);
     for (var t = 0; t < tokens.length; t += 1) {
@@ -1771,7 +1809,7 @@ function script(csrf: string): string {
   function openFlow(path, opener) {
     var current = currentAnalysis();
     if (!current) return;
-    var src = '/flow?snapshot=' + encodeURIComponent(current.snapshotId) + (path === '' ? '' : '&file=' + encodeURIComponent(path));
+    var src = BASE + 'flow?snapshot=' + encodeURIComponent(current.snapshotId) + (path === '' ? '' : '&file=' + encodeURIComponent(path));
     if (el.flowFrame.getAttribute('src') !== src) el.flowFrame.setAttribute('src', src);
     flowSnapshot = current.snapshotId;
     var explained = Boolean(current.explanation);
@@ -2618,6 +2656,7 @@ function script(csrf: string): string {
     el.refreshButton = byId('refresh-button');
     el.pageTitle = byId('page-title');
     el.pageMeta = byId('page-meta');
+    el.updateNotice = byId('update-notice');
     el.prGoal = byId('pr-goal');
     el.prGoalText = byId('pr-goal-text');
     el.prGoalBy = byId('pr-goal-by');
@@ -2745,6 +2784,7 @@ ${BRAND_MARK_STYLES}
 .page-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; color: var(--ink-soft); }
 .page-meta a { font-weight: 600; }
 /* The agent's stated goal, first thing under the masthead: one sentence, with its attribution. */
+.update-notice { padding: 8px 12px; border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 4px; font-size: 14px; }
 .pr-goal { margin-top: 6px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--panel); }
 .pr-goal.is-empty { border-left-color: var(--line-strong); background: var(--sunken); }
 .pr-goal-heading { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
@@ -3050,6 +3090,7 @@ kbd {
 .diff-action.has-comment { opacity: 1; transform: scale(1); background: var(--warn); }
 .diff-action.is-armed { opacity: 1; transform: scale(1); width: auto; padding: 0 6px; font-size: 11px; color: #fff; }
 .diff-mark { flex: 0 0 auto; width: 20px; text-align: center; color: var(--ink-faint); user-select: none; }
+.diff-code-hidden { outline: 1px solid var(--warn); outline-offset: -1px; background: var(--warn-soft); }
 .diff-code { display: block; flex: 1 1 auto; min-width: 0; padding: 0 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .kind-add { background: var(--add-bg); }
 .kind-delete { background: var(--del-bg); }

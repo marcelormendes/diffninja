@@ -1,3 +1,4 @@
+import type { UpdateNotice } from "./update-check.js";
 import type { PullRequestIntent, ReviewEvidence } from "./evidence-types.js";
 import type { ChangeFacts } from "./change-facts.js";
 import type { ReviewQuestion } from "./questions.js";
@@ -63,10 +64,12 @@ export interface CallFlowFile {
  * Why structured call flows are present or absent. `available` means at least
  * one changed file has trees; `no-changes` means there was nothing structural to
  * attach (no changed file with text hunks, or no tree reaching one) and is not a
- * safety claim; `needs-git-range` means the input was a patch; `failed` means
- * the analysis threw.
+ * safety claim; `partial` means the analysis left source files out (over the
+ * size bound or past the file limit, named in the warnings), with or without
+ * trees, so paths through them are absent; `needs-git-range` means the input was
+ * a patch; `failed` means the analysis threw.
  */
-export type CallFlowAvailability = "available" | "needs-git-range" | "no-changes" | "failed";
+export type CallFlowAvailability = "available" | "needs-git-range" | "no-changes" | "partial" | "failed";
 /**
  * One keyed piece of structured review context for a hunk: a changed, caller, or
  * callee definition with its snapshot-bound source and the call/binding evidence
@@ -191,6 +194,8 @@ export interface ReviewReport {
    * agent's reading rather than a verified claim.
    */
   agentSummary?: AgentSummary;
+  /** A newer diffninja exists on npm; set only by the executable's opt-in version lookup. */
+  updateNotice?: UpdateNotice;
   /**
    * Every function a reader meets in this report (around the hunks and in the
    * call flows), each with a stable `<file>#<name>` id, for the reviewing agent

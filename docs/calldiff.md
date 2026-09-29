@@ -130,11 +130,11 @@ TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Java, Ruby, C, C++, C#, PHP,
 ## How it works
 
 1. Reads source from both git trees (`git show` / working tree)
-2. Detects language by file extension, loads a [tree-sitter](https://tree-sitter.github.io/tree-sitter/) grammar (bundled or on-demand into `~/.cache/calldiff/grammars`), and parses
+2. Detects language by file extension, loads a [tree-sitter](https://tree-sitter.github.io/tree-sitter/) grammar (bundled, or installed beforehand into `~/.cache/diffninja/grammars` by `diffninja grammars install`), and parses
 3. Builds per-function callee lists and expands them into call trees
 4. Diffs the trees, prints a tree, or searches paths — plus structured output for agents
 
-Grammars install on first use (override cache with `CALLDIFF_GRAMMAR_CACHE`). This is syntactic (AST-based), not a full typechecker — dynamic calls won’t resolve.
+Grammars beyond JavaScript and TypeScript are never fetched by a run: install them once with `diffninja grammars install` (override the cache location with `DIFFNINJA_GRAMMAR_CACHE`). This is syntactic (AST-based), not a full typechecker — dynamic calls won’t resolve.
 
 ## Dev
 

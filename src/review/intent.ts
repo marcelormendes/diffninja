@@ -7,6 +7,30 @@ function terms(text: string): Set<string> {
   return new Set(text.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().match(/[a-z][a-z0-9]+/g)?.filter(word => !Object.hasOwn(STOP_WORDS, word)).map(word => word.replace(/(?:ing|ies|s)$/u, "")).filter(word => word.length > 2) ?? []);
 }
 
+/**
+ * Statements read from a pull request's text. The text is written by whoever
+ * opened the pull request: a 65,000-character body of short lines produced
+ * 10,874 claims, a 2.25 MB result and one comparison against every hunk each.
+ */
+const MAX_CLAIMS = 100;
+
+/**
+ * Whether a line opens an HTML comment and then, on the same line, matches `after`: the regex
+ * `<!--.*after` in linear time. That regex rescanned the rest of the line from every `<!--`, so
+ * a pull request body of 65,000 characters of them took seconds. `.` stops at a line terminator, so
+ * each terminator-free stretch is read from its first `<!--`, which leaves the most text to match.
+ */
+export function commentThen(line: string, after: RegExp): boolean {
+  for (const stretch of line.split(/[\r\u2028\u2029]/u)) {
+    const open = stretch.indexOf("<!--");
+    if (open !== -1 && after.test(stretch.slice(open + 4))) return true;
+  }
+  return false;
+}
+
+const GENERATED_COMMENT = /auto-generated|release notes/iu;
+const END_OF_GENERATED = /end of auto-generated/iu;
+
 /** Keep author claims separate from generated release notes; never execute PR text. */
 function statements(pr: PullRequestIntent): { text: string; origin: IntentClaim["origin"] }[] {
   const claims: { text: string; origin: IntentClaim["origin"] }[] = [];
@@ -16,8 +40,8 @@ function statements(pr: PullRequestIntent): { text: string; origin: IntentClaim[
   let comment = false;
   let relevant = true;
   for (const raw of pr.body.split(/\r?\n/u)) {
-    if (/<!--.*(?:auto-generated|release notes)/iu.test(raw)) generatedComment = true;
-    if (/<!--.*end of auto-generated/iu.test(raw)) { generatedComment = false; generatedHeadingDepth = undefined; continue; }
+    if (commentThen(raw, GENERATED_COMMENT)) generatedComment = true;
+    if (commentThen(raw, END_OF_GENERATED)) { generatedComment = false; generatedHeadingDepth = undefined; continue; }
     const heading = /^(#{1,6})\s/u.exec(raw);
     if (heading) {
       const depth = heading[1].length;
@@ -44,7 +68,7 @@ export function crossCheckIntent(pr: PullRequestIntent | undefined, units: reado
     obligations: ["Provide the expected behavior, including failure and boundary cases. No intended outcome was inferred from the diff."],
   };
   const indexed = units.map(unit => ({ unit, terms: terms(unit.file + "\n" + unit.diff.split("\n").filter(line => line.startsWith("+")).join("\n")) }));
-  const claims = statements(pr).map<IntentClaim>(claim => {
+  const claims = statements(pr).slice(0, MAX_CLAIMS).map<IntentClaim>(claim => {
     const wanted = [...terms(claim.text)];
     const matches = indexed.map(({ unit, terms: actual }) => ({ unit, count: wanted.reduce((count, term) => count + (actual.has(term) ? 1 : 0), 0) }))
       .filter(({ count }) => count >= Math.min(2, wanted.length) && wanted.length > 0)

@@ -1,6 +1,8 @@
+import { hiddenControlsIn } from "./hidden-characters.js";
+import type { UpdateNotice } from "./update-check.js";
 import type { ReviewItem, ReviewReport, ReviewStatus } from "./types.js";
 import { verdictOf, type ReviewQuestion } from "./questions.js";
-import { factQuestionsFor, type ChangeFactQuestion } from "./change-facts.js";
+import { factQuestionsFor, unreadCause, type ChangeFactQuestion } from "./change-facts.js";
 import { renderCallFlows, CALL_FLOW_STYLES, CALL_FLOW_SCRIPT } from "./call-flow-html.js";
 import { renderBrief, BRIEF_STYLES } from "./evidence-html.js";
 import { renderBusinessView, BUSINESS_STYLES } from "./process-html.js";
@@ -265,11 +267,17 @@ function renderHeader(report: ReviewReport): string {
     `<p class="meta">Files changed · <span class="mono">${escapeHtml(report.source)}</span></p>`,
     scope === "" ? "" : `<p class="meta">${escapeHtml(scope)}</p>`,
     `<p class="mode-note">${mode}</p>`,
+    report.updateNotice === undefined ? "" : renderUpdateNotice(report.updateNotice),
     renderLegend(),
     "</header>",
   ]
     .filter((part) => part !== "")
     .join("\n");
+}
+
+/** One line, above the legend: a newer diffninja exists and the command that installs it. */
+function renderUpdateNotice(notice: UpdateNotice): string {
+  return `<p class="update-notice" role="status">diffninja ${escapeHtml(notice.latest)} is available (you have ${escapeHtml(notice.current)}). Update by running <code>${escapeHtml(notice.command)}</code> in a terminal, then restart your agent.</p>`;
 }
 
 /** One color line, no jargon. Counting is left to the filter chips. */
@@ -493,7 +501,7 @@ function renderFacts(item: ReviewItem): string {
   const notes: string[] = [];
   let list = "";
   if (facts.language === null) {
-    notes.push("diffninja does not read this file type, so no facts were established. Read this hunk yourself.");
+    notes.push(`diffninja does not read ${unreadCause(item.file)}, so no facts were established. Read this hunk yourself.`);
   } else {
     list = factQuestionsFor(facts.language).map((question) => {
       const evidence = facts.evidence[question];
@@ -600,7 +608,7 @@ function renderDiff(diff: string): string {
         `<span class="ln ln-${row.kind}">` +
         `<span class="old-no" aria-hidden="true">${row.oldNo === null ? "" : String(row.oldNo)}</span>` +
         `<span class="new-no" aria-hidden="true">${row.newNo === null ? "" : String(row.newNo)}</span>` +
-        `<span class="code">${escapeHtml(row.text)}</span>` +
+        `<span class="code${hiddenControlsIn(row.text).length > 0 ? " code-hidden" : ""}">${escapeHtml(row.text)}</span>` +
         "</span>",
     )
     .join("");
@@ -1010,6 +1018,7 @@ a { color: var(--teal); }
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
+.update-notice { padding: 8px 12px; border-left: 3px solid var(--warn); background: var(--warn-bg); border-radius: 4px; font-size: 14px; }
 .masthead {
   display: flex;
   flex-direction: column;
@@ -1200,6 +1209,7 @@ pre.diff {
   user-select: none;
 }
 .code { padding: 0 14px; }
+.code-hidden { outline: 1px solid var(--warn); outline-offset: -1px; background: var(--warn-bg); }
 .ln-add > .code { color: var(--add); }
 .ln-del > .code { color: var(--del); }
 .ln-add > .code, .ln-add > .old-no, .ln-add > .new-no { background: var(--add-bg); }

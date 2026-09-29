@@ -1,3 +1,4 @@
+import { resolveExecutable } from "./executables.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -9,16 +10,20 @@ import type {
   SnapshotWithPaths,
 } from "./types.js";
 
+/** A git command that has not answered in this long (a dead network share) is stopped, not waited for forever. */
+const GIT_TIMEOUT_MS = 120_000;
+
 function gitBuffer(
   cwd: string,
   args: string[],
   input?: Buffer,
   maxBuffer = 64 * 1024 * 1024,
 ): Buffer {
-  return execFileSync("git", ["--no-replace-objects", ...args], {
+  return execFileSync(resolveExecutable("git"), ["--no-replace-objects", ...args], {
     cwd,
     input,
     maxBuffer,
+    timeout: GIT_TIMEOUT_MS,
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
@@ -239,19 +244,77 @@ function pathAllowed(file: string, pathFilters: string[]): boolean {
   });
 }
 
+/**
+ * Bounds on what call-flow analysis parses from one revision: a source file over
+ * this size is generated or minified code, not something a person reads. Past
+ * the file limit, the files the diff changes are read first, then the rest of
+ * their directories, then everything else in code-point order, so the same range
+ * leaves out the same files on every machine. The review names what was skipped.
+ */
+export const MAX_INDEXED_FILE_BYTES = 1024 * 1024;
+export const MAX_INDEXED_FILES = 15_000;
+
+export interface SkippedSources {
+  /** Source files over the size bound. */
+  oversized: number;
+  /** Files past the count bound. */
+  beyondLimit: number;
+}
+
+/** Paths, so a file left out of both revisions of a diff counts once. */
+const skipped = { oversized: new Set<string>(), beyondLimit: new Set<string>() };
+
+/** What was left out of call-flow analysis since the last call; clears the count. */
+export function takeSkippedSources(): SkippedSources {
+  const counts = { oversized: skipped.oversized.size, beyondLimit: skipped.beyondLimit.size };
+  skipped.oversized.clear();
+  skipped.beyondLimit.clear();
+  return counts;
+}
+
+/**
+ * Paths that differ between two snapshots, both sides of a rename included,
+ * relative to `cwd` as the snapshot listings are.
+ */
+export function changedPaths(cwd: string, from: Snapshot, to: Snapshot): Set<string> {
+  const refs = [from, to].filter((snapshot) => snapshot.kind === "commit").map((snapshot) => snapshot.ref);
+  return new Set(git(cwd, ["diff", "--relative", "--name-only", "-z", "--no-renames", ...refs, "--"]).split("\0").filter(Boolean));
+}
+
+function directoryOf(path: string): string {
+  return path.slice(0, path.lastIndexOf("/") + 1);
+}
+
 export function listSnapshotFiles(
   cwd: string,
   snapshot: Snapshot,
   pathFilters: string[] = [],
+  changed: ReadonlySet<string> = new Set(),
+  limits: { readonly maxFiles: number; readonly maxFileBytes: number } = { maxFiles: MAX_INDEXED_FILES, maxFileBytes: MAX_INDEXED_FILE_BYTES },
 ): SnapshotFile[] {
   const files =
     snapshot.kind === "worktree"
       ? listWorktreeFiles(cwd)
       : listCommitFiles(cwd, snapshot.ref);
 
-  return files
+  const wanted = files
     .filter((file) => pathAllowed(file.path, pathFilters))
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const small: SnapshotFile[] = [];
+  for (const file of wanted) {
+    if (file.size !== undefined && file.size > limits.maxFileBytes) skipped.oversized.add(file.path);
+    else small.push(file);
+  }
+  if (small.length <= limits.maxFiles) return small;
+
+  const directories = new Set([...changed].map(directoryOf));
+  const first: SnapshotFile[] = [], neighbours: SnapshotFile[] = [], rest: SnapshotFile[] = [];
+  for (const file of small) {
+    (changed.has(file.path) ? first : directories.has(directoryOf(file.path)) ? neighbours : rest).push(file);
+  }
+  const kept = new Set([...first, ...neighbours, ...rest].slice(0, limits.maxFiles));
+  for (const file of small) if (!kept.has(file)) skipped.beyondLimit.add(file.path);
+  return small.filter((file) => kept.has(file));
 }
 
 const BATCH_BYTES = 32 * 1024 * 1024;

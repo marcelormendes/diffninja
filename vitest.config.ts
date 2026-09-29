@@ -6,6 +6,7 @@ export default defineConfig({
     testTimeout: 120_000,
     // Separate processes so each worker can load its own grammar cache copy.
     pool: "forks",
+    globalSetup: ["./test/global-setup.ts"],
     setupFiles: ["./test/setup-worker.ts"],
   },
 });

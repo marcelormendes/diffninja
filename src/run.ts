@@ -1,3 +1,4 @@
+import { GrammarNotInstalledError } from "./languages/grammars.js";
 import {
   buildCallTreeFromInfo,
   exportsInFile,
@@ -8,6 +9,7 @@ import {
 import { buildIndex, extractCached } from "./extract.js";
 import {
   assertGitRepo,
+  changedPaths,
   describeSnapshot,
   listSnapshotFiles,
   resolveDiffSnapshotsAndPaths,
@@ -86,13 +88,16 @@ function loadIndex(
   snapshot: Snapshot,
   pathFilters: string[],
   cache: ExtractionCache = new Map(),
+  changed: ReadonlySet<string> = new Set(),
 ): FunctionIndex {
-  const files = listSnapshotFiles(cwd, snapshot, pathFilters);
+  const files = listSnapshotFiles(cwd, snapshot, pathFilters, changed);
   const extracted = new Map<string, FunctionInfo[]>();
   const extract = (file: SnapshotFile, source: string): void => {
     try {
       extracted.set(file.path, extractCached(file.path, source, cache));
     } catch (error) {
+      // A grammar that is not installed is reported once, by the review, not per file.
+      if (error instanceof GrammarNotInstalledError) return;
       const message = error instanceof Error ? error.message : String(error);
       console.error(
         `warn: failed to parse ${file.path} @ ${snapshot.ref}: ${message}`,
@@ -229,8 +234,10 @@ export function runDiff(options: DiffRunOptions = {}): DiffResult {
   if (to.kind === "commit") verifyCommit(cwd, to.ref);
 
   const extractionCache: ExtractionCache = new Map();
-  const before = loadIndex(cwd, from, resolvedPaths, extractionCache);
-  const after = loadIndex(cwd, to, resolvedPaths, extractionCache);
+  // A repository past the file limit still indexes the files this diff changes.
+  const changed = changedPaths(cwd, from, to);
+  const before = loadIndex(cwd, from, resolvedPaths, extractionCache, changed);
+  const after = loadIndex(cwd, to, resolvedPaths, extractionCache, changed);
   extractionCache.clear();
   options.onIndexes?.(before, after);
 

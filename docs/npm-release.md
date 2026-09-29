@@ -1,16 +1,11 @@
 # Publishing diffninja to npm
 
-**Status: publishing through GitHub Actions.** `diffninja@0.3.0` is published
-on npm. Version `0.3.1` fixes updating: `diffninja setup` now brings a global
-install older than itself up to its own version (earlier setups left an
-existing install alone, so re-running `npx -y diffninja@latest setup` never
-updated it), installs and pins its own version rather than whatever npm
-resolves, and the MCP server reports the package version instead of `0.1.0`.
-Users on 0.3.0 or earlier update once with `npm install -g diffninja@latest`;
-from 0.3.1 on, re-running setup is enough.
+**Status: publishing through GitHub Actions.** A `vX.Y.Z` tag on `main` runs the
+release workflow, which publishes through npm trusted publishing (OIDC). This
+page does not track which version is current. `npm view diffninja version` does.
 
-Publishing requires an explicit maintainer action: the manual bootstrap below,
-then the trusted-publisher configuration, then tags. Two consequences follow:
+Publishing requires an explicit maintainer action: the trusted-publisher
+configuration below, then a tag. Two consequences follow:
 
 - **A version bump is not publication.** A merged release becomes available
   only after its matching `vX.Y.Z` tag passes the release workflow and npm
@@ -18,50 +13,95 @@ then the trusted-publisher configuration, then tags. Two consequences follow:
 - **Platforms are verified by CI.** `.github/workflows/consumer-matrix.yml`
   packs once and runs `scripts/verify-package.mjs` against a real global
   install on Ubuntu x64 and ARM64, macOS x64 and ARM64, and Windows x64, on
-  Node 22 and 24. It runs on every pull request and on demand.
+  Node 22 and 24. It runs on every pull request, on pushes to `main`, and on
+  demand.
 
 ## What is prepared
 
 | Piece | State |
 |---|---|
-| `package.json` | `diffninja@0.3.1`, `publishConfig.access: public`, `engines.node: >=22.18.0`, bins `diffninja` and `diffninja-mcp` |
-| Packed tarball contents | `dist` JavaScript + declarations, `package.json`, `README.md`, `LICENSE`; no `src`, `test`, `scripts`, `tsconfig.json`, `vitest.config.ts` or lockfile, and no `node_modules` |
+| `package.json` | `version` is the release number. `publishConfig.access: public`, `engines.node: >=22.18.0`, bins `diffninja` and `diffninja-mcp` |
+| Packed tarball contents | `dist` JavaScript and declarations, `package.json`, `README.md`, `LICENSE`, `npm-shrinkwrap.json`, and `scripts/ensure-native-grammar.mjs` (the postinstall script). The `dist` files include `dist/cli.js` and `dist/index.js`, the legacy calldiff command and library entry, which no bin runs. No `src`, `test`, other scripts, `tsconfig.json` or `vitest.config.ts`, and no `node_modules`. `npm pack --dry-run` lists the files. |
 | `.github/workflows/release.yml` | one workflow: metadata gate, tag gate on tag pushes, build/lint/test/pack, four-runner install matrix, minimum-toolchain job, OIDC publish job |
-| `.github/workflows/consumer-matrix.yml` | pack once, then a 5-OS x 2-Node consumer matrix (Ubuntu x64/ARM64, macOS x64/ARM64, Windows x64; Node 22/24) that globally installs the tarball and runs `scripts/verify-package.mjs`; runs on PRs and on demand |
+| `.github/workflows/consumer-matrix.yml` | pack once, then a 5-OS x 2-Node consumer matrix (Ubuntu x64/ARM64, macOS x64/ARM64, Windows x64; Node 22/24) that globally installs the tarball and runs `scripts/verify-package.mjs`; runs on PRs, on pushes to `main`, and on demand |
 | `scripts/verify-package.mjs` | installs the packed tarball into a throwaway prefix and exercises the installed surface |
 
 ## What a consumer actually installs
 
-The published tarball carries compiled JavaScript, type declarations and package
-metadata/documentation. Grammar support comes from npm dependencies:
+The published tarball carries compiled JavaScript, type declarations, package
+metadata and documentation, the postinstall script and an `npm-shrinkwrap.json`.
+Parser support comes from npm dependencies.
 
-- `tree-sitter@^0.25.1` is a direct `dependency`; `tree-sitter-typescript@^0.23.2`
-  is an `optionalDependency`; `tree-sitter-javascript@0.23.1` is
-  tree-sitter-typescript's own dependency. npm installs all three from the
-  registry next to diffninja.
+- `tree-sitter@^0.25.1` and `tree-sitter-javascript@^0.25.0` are direct
+  `dependencies`. `tree-sitter-typescript@^0.23.2` is an `optionalDependency`.
+  npm installs all three from the registry next to diffninja. Both grammars load
+  from the package's own `node_modules` (`BUNDLED_GRAMMARS` in `grammars.ts` names
+  them, and nothing else is ever loaded from outside the grammar cache).
 - Declaring tree-sitter-typescript optional is what keeps a broken prebuild from
-  aborting the install: npm ignores the failure of an optional dependency's
-  install script instead of exiting non-zero. The `postinstall` heal
-  (`scripts/ensure-native-grammar.mjs`, shipped in the tarball) then loads the
-  binding for real and, on failure, deletes the package's shipped prebuild
-  directory and recompiles the grammar from source — see finding 3.
-- npm's `bundleDependencies`/`bundleDependencies: true` — which would inline a
-  `node_modules` tree into the published package — is not used, and the packed
-  tarball contains no `node_modules` entries. "Bundled grammar" in older drafts
-  meant the first bullet; it was never npm bundling.
-- Every other language's grammar is fetched on demand into
-  `CALLDIFF_GRAMMAR_CACHE` (default `~/.cache/calldiff/grammars`, or
-  `C:\Users\<you>\.cache\calldiff\grammars` on Windows) by running
-  `npm install --prefix <cache> --no-save --no-fund --no-audit
-  --legacy-peer-deps <spec>`. A grammar already present in the cache is loaded
-  from disk without npm running at all.
+  aborting the install. npm ignores the failure of an optional dependency's
+  install script instead of exiting non-zero. The `postinstall` script
+  (`scripts/ensure-native-grammar.mjs`, shipped in the tarball) then loads
+  `tree-sitter` and the TypeScript grammar for real. Where that works it does
+  nothing. Where it does not, it installs `tree-sitter-typescript` without its
+  scripts if npm dropped it, deletes the package's `prebuilds/` and `build/`
+  directories, and runs `npm rebuild tree-sitter-typescript`, which runs install
+  scripts, needs a toolchain and may download the Node headers. It passes on the
+  environment of the npm that runs it, gives each npm command 900 seconds, and
+  always exits 0. See finding 3.
+- npm's `bundleDependencies` (which would inline a `node_modules` tree into the
+  published package) is not used, and the packed tarball contains no
+  `node_modules` entries.
+- Every other language's grammar is installed only by a person running
+  `diffninja grammars install [--build]`. A review never downloads or builds
+  anything. The command writes `package.json` and `package-lock.json` from
+  `src/languages/grammar-lock.ts` into `~/.cache/diffninja/grammars` (or
+  `C:\Users\<you>\.cache\diffninja\grammars` on Windows, or
+  `DIFFNINJA_GRAMMAR_CACHE`) and runs `npm ci --ignore-scripts --legacy-peer-deps`
+  there. npm refuses any tarball that does not match the sha512 in the lock,
+  dependencies included, and no install script runs. npm gets a short allow-list
+  of environment variables (`child-env.ts`), every `npm_config_*` variable, and
+  the names in `DIFFNINJA_NPM_ENV`. The grammars load from the prebuilt binaries
+  they ship. Kotlin and Perl ship none. `--build` then runs `npm rebuild` for
+  those two packages only. That runs their install scripts (`node-gyp-build`
+  compiles them, and downloads the Node headers from nodejs.org unless they are
+  cached) and needs Python and a C/C++ toolchain. A `.diffninja-grammars.json`
+  marker holding the lock's digest is written last, and a cache without it (or
+  with another lock's) is not read. The marker holds only public data, so it is a
+  consistency check, not authentication. A cache directory that belongs to
+  another user, or that another user can write, is not read either, and install
+  refuses it (it tightens a directory of your own to 0700). Windows skips that
+  owner and mode check. The shared calldiff cache from earlier versions is never
+  read.
 
-JavaScript is a transitive dependency, not a direct dependency of diffninja.
-If npm nests it under `tree-sitter-typescript`, the loader cannot resolve it
-directly and instead installs `tree-sitter-javascript` into the grammar cache.
-The local `npm ci` layout exercised this fallback. Thus JavaScript/JSX can
-require on-demand installation too; on Windows preinstall it with `npm.cmd`
-using the same cache recipe as other on-demand grammars.
+### Updating the pinned grammars
+
+The set is `PINS` in `scripts/pin-grammars.mjs`; `src/languages/grammar-lock.ts`
+is generated from it. To move a pin, change the version there, run
+`node scripts/pin-grammars.mjs`, review the generated diff (new transitive
+packages appear in it), run `npm view <package>@<version> scripts maintainers` for
+anything new, and check `node scripts/pin-grammars.mjs --check` passes. The pins
+were resolved from registry.npmjs.org on 2026-09-28.
+
+Their maintainers are not one group. On 2026-09-29 the registry listed several
+accounts for most of them (bash, c, cpp, go, java, python, ruby, rust, php,
+c-sharp, haskell and scala). It listed individuals for these:
+`tree-sitter-kotlin` (fwcd), `tree-sitter-perl` (veesh), `tree-sitter-solidity`
+(joranhonig), `tree-sitter-swift` (alexpinkus), `tree-sitter-elixir`
+(jonatanklosko and the-mikedavis) and `tree-sitter-ocaml` (maxbrunsfeld). The lua
+and zig packages under `@tree-sitter-grammars` listed amaanq, muniftanjim and
+chronobserver. This is registry data as of that day, so recheck it when moving a
+pin. `tree-sitter-swift` depends on `tree-sitter-cli` (0.23.2 at the pin), whose
+install script downloads a binary. With `--ignore-scripts` it is installed and
+never run.
+
+### The shrinkwrap
+
+`npm-shrinkwrap.json` is the repository's lockfile (there is no
+`package-lock.json`) and ships in the tarball, so that npm installs the
+dependency versions diffninja was tested with when it installs from the
+registry. npm applies it to registry installs only; an install from a local
+tarball, as CI does, ignores it. `test/package-shrinkwrap.test.ts` keeps it in
+step with `package.json`.
 
 ## npm-side configuration (required before the workflow can publish)
 
@@ -128,40 +168,32 @@ npm trust list diffninja   # verify
 ## First publish: the bootstrap limitation
 
 **npm cannot configure trusted publishing for a package that does not exist
-yet.** `npm trust` states it as a prerequisite — "Package must exist: The
-package you're configuring must already exist on the npm registry" — and the
+yet.** `npm trust` states it as a prerequisite ("Package must exist: The
+package you're configuring must already exist on the npm registry"), and the
 package settings page that hosts the trusted-publisher form only exists once the
-package does. OIDC therefore cannot create the first version of `diffninja`.
+package does. OIDC therefore cannot create the first version of a package. The
+first version of `diffninja` was published by hand, and the trusted publisher was
+configured after that. That step is done. What still applies to every release is
+this.
 
-So the first release is one deliberate manual publish, after which the workflow
-takes over. The order matters: npm refuses to publish a version that already
-exists, so the tag that would publish `0.1.0` must not be the one that starts CI.
-
-1. **Verify the package, from the approved commit, before logging in.** The same
+1. **Verify the package, from the approved commit, before tagging.** The same
    gates the workflow runs must pass locally first: `npm ci`, `npm run build`,
    `npm run lint`, `npm test`, then `mkdir -p dist-pack`,
    `npm pack --pack-destination dist-pack` and
    `node scripts/verify-package.mjs dist-pack`. A `workflow_dispatch` run of
-   `.github/workflows/release.yml` is the way to verify the macOS and Windows
-   consumers before the first publish, because it runs the whole pipeline with
-   `publish` skipped (only a pushed tag sets `release=true`).
-2. **Marcelo publishes interactively:**
-   1. `npm login` and complete the browser sign-in.
-   2. Enable npm account 2FA for authorization and writes, if not already on.
-   3. `npm publish --access public` from that checkout, completing the 2FA
-      prompt. `prepack` cleans and rebuilds `dist/` first, so the tarball has the
-      same contents the workflow would pack from the same commit.
-   4. Do **not** push a `v0.1.0` tag around this: the tag would start a run whose
-      publish step fails because `0.1.0` already exists.
-3. **Configure the trusted publisher** as described above — now that the package
-   exists, both the settings page and `npm trust` work.
-4. **Release later versions through the workflow:** bump `version` in
-   `package.json` and the lockfile, merge through a PR with all required checks,
-   then tag that merged commit and push:
+   `.github/workflows/release.yml` verifies the macOS and Windows consumers,
+   because it runs the whole pipeline with `publish` skipped (only a pushed tag
+   sets `release=true`).
+2. **Bump `version`** in `package.json` and `npm-shrinkwrap.json`, and merge
+   through a PR with all required checks.
+3. **Tag the merged commit and push:**
 
    ```bash
-   git tag v0.3.1 && git push origin v0.3.1
+   git tag vX.Y.Z && git push origin vX.Y.Z
    ```
+
+   npm refuses to publish a version that already exists, so a tag never reuses
+   one.
 
 The workflow's guarantee is stronger than a local build: it publishes the exact
 tarball it packed, after re-checking that file's SHA-256 in the publish job. Do
@@ -216,29 +248,24 @@ Troubleshooting, in the order these bite:
 
 ## Platform and dependency findings
 
-The issues below were investigated from source, from the installed dependencies
-on this workstation and from registry tarballs. None of them is a runtime change
-in this branch; the ones with a consumer-visible workaround are documented in
-README.md.
+The issues below were investigated from source, from installed dependencies and
+from registry tarballs. The ones with a consumer-visible workaround are
+documented in [reference.md](reference.md#install-time-notes).
 
-### 1. Windows: the on-demand grammar install (fixed)
+### 1. Windows: launching npm
 
-`src/languages/grammars.ts` used to install a missing grammar with
-`execFileSync("npm", ["install", "--prefix", cacheDir, …])`. Node's own
-documentation is explicit that on Windows `.bat` and `.cmd` files "are not
-executable on their own without a terminal, and therefore cannot be launched
-using `child_process.execFile()`" — the supported forms are `spawn` with
-`shell: true`, `exec`, or spawning `cmd.exe`. npm's Windows entry points are
-`.cmd`/`.ps1` shims, so this call could not reach npm on Windows. Linux and
-macOS are unaffected because `npm` is an executable script there.
-
-Fixed: `npmSpawnSpec()` now resolves npm's `npm-cli.js` on Windows (via `PATH`
-plus the Node install directory, never the repository being reviewed) and runs
-it with the current Node executable, so cache paths with spaces and percent
-signs stay literal argv values instead of being interpreted by `cmd.exe`.
-`scripts/verify-package.mjs` exercises the on-demand Python extraction on
-Windows, and the consumer matrix runs it on real Windows Server. The `npm.cmd`
-preinstall recipe in README.md remains as the offline option.
+Node's own documentation is explicit that on Windows `.bat` and `.cmd` files "are
+not executable on their own without a terminal, and therefore cannot be launched
+using `child_process.execFile()`". npm's Windows entry points are `.cmd` and
+`.ps1` shims, so a direct `execFileSync("npm", ...)` cannot reach npm there.
+`npmSpawnSpec()` in `src/languages/grammars.ts`, and the postinstall script's own
+copy of it, resolve npm's `npm-cli.js` on Windows via `PATH` plus the Node install
+directory, never the repository under review, and run it with the current Node
+executable. Cache paths with spaces and percent signs then stay literal argv
+values instead of being interpreted by `cmd.exe`. `diffninja setup` starts npm
+the same way. `scripts/verify-package.mjs` runs `diffninja grammars install` into
+a cache path with spaces on every platform, and the consumer matrix runs it on
+real Windows Server.
 
 ### 2. Windows: `--open` (removed)
 
@@ -255,26 +282,24 @@ header reports `Advanced Micro Devices X86-64`). The defect is in the two
 upstream grammar packages; `tree-sitter@0.25.1` itself ships a correct
 `AArch64` Linux prebuild.
 
-Fixed twice over, on purpose:
+The repair happens at install time. `tree-sitter-typescript` is an
+`optionalDependency`, so the upstream install-script failure (`node-gyp-build`
+falls back to `node-gyp rebuild`, which under Node 22 dies on a malformed
+generated Makefile) no longer aborts `npm install -g diffninja`. The
+`postinstall` in `scripts/ensure-native-grammar.mjs` probes the binding end to
+end (require parser, `setLanguage`, `parse`). When that fails it deletes
+`prebuilds/` and `build/` inside the installed package and runs
+`npm rebuild tree-sitter-typescript` with `CXXFLAGS='-std=c++20'` (the Node 22+
+headers require C++20 and `binding.gyp` does not request it). Because
+node-gyp-build prefers `build/Release` over any prebuild, the corrected binary
+is the one loaded afterwards. The script is a heal, not a gate: it always exits
+0, warns when no toolchain is available, and never touches a platform whose
+prebuild loads.
 
-- **Install time (this release).** `tree-sitter-typescript` is an
-  `optionalDependency`, so the upstream install-script failure — `node-gyp-build`
-  falls back to `node-gyp rebuild`, which under Node 22 dies on a malformed
-  generated Makefile — no longer aborts `npm install -g diffninja`. The
-  `postinstall` in `scripts/ensure-native-grammar.mjs` probes the binding end to
-  end (require parser, `setLanguage`, `parse`), and when that fails deletes
-  `prebuilds/` and `build/` inside the installed package and runs
-  `npm rebuild tree-sitter-typescript` with `CXXFLAGS='-std=c++20'` (the Node 22+
-  headers require C++20 and `binding.gyp` does not request it). Because
-  node-gyp-build prefers `build/Release` over any prebuild, the corrected binary
-  is the one loaded afterwards. The script is a heal, not a gate: it always exits
-  0, warns when no toolchain is available, and never touches a platform whose
-  prebuild loads.
-- **First use (existing).** `src/languages/grammars.ts` reads a prebuild's binary
-  header (ELF/Mach-O/PE machine type) before trusting it. When the platform's
-  prebuild exists but targets another CPU, the loader removes the bad artifact
-  from diffninja's own grammar cache and lets node-gyp-build fall back to
-  compiling from source. The installed copy is never modified by this path.
+For grammars in the grammar cache, `src/languages/grammars.ts` also reads a
+prebuild's binary header (ELF/Mach-O/PE machine type) when a load fails. If the
+platform's prebuild targets another CPU, the loader refuses to load it and says
+so. It does not edit the cache.
 
 Linux ARM64 therefore needs Python and a C/C++ toolchain (build-essential) at
 install time; the consumer matrix installs it and gates Linux ARM64 as a passing
@@ -292,10 +317,11 @@ libstdc++ from Ubuntu 24.04 or newer; this workstation has 3.4.33 and loads the
 addon for real (native extraction passes). The limitation follows from that
 symbol requirement rather than from a test on an older distribution, which was
 not run: on an older libstdc++ the failure lands on first use, not at install
-time. The loader now detects the `GLIBCXX`/`GLIBC_` symbol error and says so
-plainly, naming the GCC 13.1+/Ubuntu 24.04+ requirement and the
-`npm rebuild <pkg> --build-from-source` workaround. The matrix targets Ubuntu
-24.04, not every glibc-based distribution.
+time. When a grammar loaded from the grammar cache fails with that symbol error,
+the loader names the GCC 13.1+/Ubuntu 24.04+ requirement and the
+`npm rebuild <pkg> --build-from-source` workaround. The parser and the bundled
+grammars show the raw error. The matrix targets Ubuntu 24.04, not every
+glibc-based distribution.
 
 ### 5. Peer ranges: an optional peer that cannot be satisfied
 
@@ -324,76 +350,56 @@ belongs upstream as a widened peer range in the grammar packages — not a parse
 downgrade here and not `--force`/`--legacy-peer-deps` instructions for
 consumers.
 
-### 6. On-demand grammars without a usable prebuild
+### 6. Grammars without a usable prebuild
 
-`node-gyp-build` falls back to a source build when no prebuild matches the
-platform, and several grammar packages have nothing to match. From registry
-tarballs (this session):
+`grammars install` runs `npm ci --ignore-scripts`, so a grammar loads only if its
+package ships a prebuilt binary for the platform. Every pinned package has the
+install script `node-gyp-build`, which is never run by `npm ci --ignore-scripts`.
+Checked in the installed packages:
 
-| Package | Prebuilds | Install script |
-|---|---|---|
-| `tree-sitter-python`, `-rust`, `-go`, `-ruby`, `-php`, `-bash`, `-c`, `-cpp`, `-java`, `-c-sharp`, `-elixir`, `-haskell`, `-ocaml`, `-scala`, `-solidity`, `-swift`, `@tree-sitter-grammars/tree-sitter-zig` (1.1.2) | all six platform/arch directories | `node-gyp-build` |
-| `@tree-sitter-grammars/tree-sitter-lua@0.2.0` | darwin-arm64, darwin-x64, linux-x64, win32-x64 only | `node-gyp-build` |
-| `tree-sitter-perl@2.0.0` | none | `node-gyp-build` |
-| `tree-sitter-kotlin@0.3.8` | none | `node-gyp-build` |
+- `tree-sitter-perl@2.0.0` and `tree-sitter-kotlin@0.3.8` ship no prebuilds.
+  They load only after `diffninja grammars install --build` compiles them, which
+  needs Python and a C/C++ toolchain and downloads the Node headers from
+  nodejs.org unless they are cached.
+- `@tree-sitter-grammars/tree-sitter-lua@0.2.0` ships prebuilds for darwin-arm64,
+  darwin-x64, linux-x64 and win32-x64 only, so it cannot load on Linux ARM64 or
+  Windows ARM64.
+- The other pinned packages (python, rust, go, ruby, php, bash, c, cpp, java,
+  c-sharp, elixir, haskell, ocaml, scala, solidity, swift and the scoped zig
+  package) ship prebuilds for all six platform directories.
+- `tree-sitter-swift@0.7.1` also depends on `tree-sitter-cli@^0.23`, whose install
+  script downloads an executable from GitHub Releases. With `--ignore-scripts` it
+  is installed and never run.
+- The obsolete unscoped `tree-sitter-zig@0.2.0` is a different package
+  (nan-era, no install script, no prebuilds). `src/languages/zig.ts` requests the
+  scoped `@tree-sitter-grammars/tree-sitter-zig`.
 
-So Perl and Kotlin always compile from source on first use, Lua cannot use a
-prebuild on Linux ARM64 or Windows ARM64, and all of those need a C/C++
-toolchain and Python. The obsolete unscoped `tree-sitter-zig@0.2.0` is a
-different package (nan-era, no install script, no prebuilds); `src/languages/zig.ts`
-deliberately requests the scoped `@tree-sitter-grammars/tree-sitter-zig`.
-
-Prebuilds do not imply a registry-only installation. `tree-sitter-swift@0.7.1`
-also depends on `tree-sitter-cli@^0.23`; that dependency's install script
-downloads an executable from GitHub Releases. In this workstation's network
-environment, the 0.23.2 downloader hung through the proxy and failed with
-`EPROTO` without it. The grammar install now retries up to three times with
-backoff and a five-minute per-attempt timeout, and a failed Swift install says
-plainly that the GitHub Releases download needs network access to github.com.
-The grammar can load from an already populated cache without that CLI
-executable, but a complete on-demand install needs the GitHub download to
-succeed.
-
-Two grammars are pinned by `installSpecFor` and a manual preinstall must use the
-same spec: `tree-sitter-c-sharp@0.23.1` and
-`@tree-sitter-grammars/tree-sitter-lua@0.2.0`; everything else installs at its
-latest version.
-
-Failure is per file and non-fatal: extraction logs
-`warn: failed to parse <file> @ <commit>` and the review completes with the
-diff and whatever call flows resolved (`callFlowAvailability` is `"failed"` only
-when the analysis itself throws). Install and load failures now carry the real
-prerequisite (toolchain, network, libstdc++) instead of npm's raw stderr.
-Verified locally with a deliberately broken `npm`: a mock git-range Ruby review
-exited 0, wrote both report files, and warned per revision.
+A grammar that is not installed, or cannot load, fails per file and is not fatal.
+Extraction logs `warn: failed to parse <file> @ <commit>` and the review
+completes with the diff and whatever call flows resolved (`callFlowAvailability`
+is `"failed"` only when the analysis itself throws).
 
 ### 7. npm 12: dependency install scripts are blocked by default
 
 npm 12 skips every dependency's `preinstall`/`install`/`postinstall` unless it
 is allowed by name, and only warns. Where tree-sitter has a prebuild for the
-platform nothing visible breaks, but the Linux ARM64 repair (finding 3) and any
-grammar that compiles from source or downloads at install (finding 6, Swift)
-would silently not run. Two install paths name what they need:
-
-- `diffninja setup` runs `npm install -g --allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript diffninja@<its version>`.
-  The names match a registry install's identity; a local tarball install
-  matches by file path instead, so the consumer matrix cannot prove this part.
-- The on-demand grammar install is a project-scoped install into the cache,
-  where npm 12 rejects `--allow-scripts` (flag, environment and all) with
-  `EALLOWSCRIPTS`. The cache's `package.json` gains an `allowScripts` entry
-  for each grammar before it is installed instead.
-
-npm 10.9 and 11.5.1 accept the flag and ignore the field; both were checked
-with the same commands.
+platform nothing visible breaks, but the Linux ARM64 repair (finding 3) would
+silently not run. `diffninja setup` names what it needs:
+`npm install -g --allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript diffninja@<its version>`.
+The names match a registry install's identity; a local tarball install matches
+by file path instead, so the consumer matrix cannot prove this part. npm 10.9
+and 11.5.1 accept the flag and ignore it. `grammars install` passes no such
+flag: `npm ci --ignore-scripts` needs none, and how npm 12 treats the
+`npm rebuild` that `--build` runs for Kotlin and Perl was not tested.
 
 ## Native prebuild inventory
 
 Enumerated from the installed packages and registry tarballs on Linux x64, then
 header-checked (ELF/Mach-O/PE machine type): file inventory plus each `.node`
 header. Nothing in this table executed on macOS, Windows or ARM64 Linux. The
-linux-arm64 mislabeling above is now repaired before first use (see finding 3):
-the install-time postinstall rebuilds the grammar from source, and the loader's
-wrong-CPU header check still repairs the on-demand grammar cache.
+linux-arm64 mislabeling above is repaired at install time by the postinstall
+script (see finding 3), and the loader's wrong-CPU header check refuses a cached
+grammar built for another CPU and says so.
 
 | Package | linux x64 | linux arm64 | macOS x64 | macOS arm64 | win x64 | win arm64 |
 |---|---|---|---|---|---|---|
@@ -414,10 +420,10 @@ MCP clients should launch the absolute Node executable with the absolute
 
 Use the resulting literal paths in the client's JSON `command` and `args`;
 do not put shell substitutions in JSON. Backslashes must be JSON-escaped.
-README's **Absolute paths for MCP client configuration** section includes
-PowerShell's `ConvertTo-Json` recipe. Recompute paths after changing npm prefixes
-or Node installations. The server accepts no CLI arguments and reserves stdout
-for MCP, so a successful start waits for protocol input rather than a banner.
+[mcp-setup.md](mcp-setup.md) shows the per-client entries. Recompute paths after
+changing npm prefixes or Node installations. The server accepts no CLI arguments
+and reserves stdout for MCP, so a successful start waits for protocol input
+rather than a banner.
 
 ## Remaining decisions
 
@@ -426,15 +432,12 @@ for MCP, so a successful start waits for protocol input rather than a banner.
   rebuilds the mislabeled TypeScript grammar during `postinstall`, but a correct
   prebuild would skip the source compile); a `binding.gyp` that requests C++20,
   which the Node 22+ headers require; widened `tree-sitter` peer ranges in those
-  packages;
-  prebuilds (or an explicit "source build" note) for `tree-sitter-perl`,
+  packages; prebuilds (or an explicit "source build" note) for `tree-sitter-perl`,
   `tree-sitter-kotlin` and the ARM64 gaps in
   `@tree-sitter-grammars/tree-sitter-lua@0.2.0`.
-- **Whether to pin every on-demand grammar** rather than only the two in
-  `installSpecFor`.
-- **The first manual publish itself:** still blocked on the maintainer's explicit
-  go-ahead and credential use. Nothing in this branch logs in, publishes, tags,
-  pushes or merges.
+- **Publishing itself:** always a maintainer's explicit action. Nothing in this
+  repository's code or its agents logs in to npm, publishes, tags, pushes or
+  merges without that.
 
 ## Reproducing the verification locally
 
@@ -453,20 +456,20 @@ own `postinstall` heal, so the ARM64 repair path is part of what it exercises.
 It checks the compiled file list against current sources (catching stale
 output), the installed package layout, both bin shims (plus `.cmd`, `.ps1` and
 shell shims on Windows) and the absence
-of a `calldiff` bin, the setup-only `diffninja` refusing a terminal review, native
-TypeScript extraction, on-demand grammar extraction into a cache path
-containing spaces (on every platform, proving the Windows npm invocation),
+of a `calldiff` bin, the `diffninja` command refusing a terminal review, native
+TypeScript extraction, that a Python file is refused with the exact
+`grammars install` command before the grammars are installed, then
+`diffninja grammars install` into a cache path containing spaces (on every
+platform, proving the Windows npm invocation) and Python extraction from it,
 and an MCP stdio review whose `structuredContent` matches its JSON text.
 On Windows it launches `diffninja.cmd` and `diffninja-mcp.cmd` explicitly from
 PowerShell, because a host may block `.ps1` shims. Any failure prevents
 publication.
 
-Results so far: Linux x64 passes on Node 24.20.0/npm 10.9.4 and on the declared
-floor, Node 22.18.0/npm 11.5.1. Global installs emit the peer warnings described
-in finding 5 and still exit 0. Every other platform result comes from the
-consumer matrix (`.github/workflows/consumer-matrix.yml`), which runs on each
-pull request: Ubuntu x64 and ARM64, macOS x64 and ARM64, Windows x64, each on
-Node 22 and 24.
+The consumer matrix (`.github/workflows/consumer-matrix.yml`) runs the same
+script on each pull request and push to `main`: Ubuntu x64 and ARM64, macOS x64 and ARM64, Windows
+x64, each on Node 22 and 24. Global installs emit the peer warnings described in
+finding 5 and still exit 0.
 
 When `/tmp` is a small tmpfs, set `TMPDIR` to a scratch directory with enough
 disk space before running the consumer script. It removes its own sandbox.
@@ -478,35 +481,21 @@ worktree. Native source builds in this sandbox also used
 That header path is machine-specific; do not apply it to a different Node
 version or assume it exists on another platform.
 
-### Local preparation verification
+### Before a release
 
-- `npm ci`, `npm run build` and `npm run lint` passed.
-- The unchanged full suite passed: **393 tests in 46 files**, using
-  `npm test -- --maxWorkers=2` with a private `TMPDIR`, matching local Node
-  headers, and all 21 on-demand grammars available to both workers. The native
-  grammars were real packages, including locally compiled Perl/Kotlin; no test
-  assertions or runtime code were changed. Earlier runs used a shared cache
-  and/or encountered Swift's download timeout described above; this passing run
-  proves cached native behavior, not reliable cold Swift installation through
-  this workstation's proxy.
-- `npm pack --dry-run` and the final real pack contain **105 files**:
-  `LICENSE`, `README.md`, `package.json`, 51 JavaScript files and 51 declarations.
-  The final tarball is 153,906 bytes; no stale `tmp-report.js`, source, tests,
-  development scripts or lockfile is included.
-- The final tarball passed clean-room global installation on Linux x64 with
-  Node 24.20.0/npm 10.9.4 and Node 22.18.0/npm 11.5.1: both installed command
-  shims, mock CLI reports, native TypeScript/Python and an MCP stdio review.
-  A minimum-toolchain install initially hit the consumer script's network
-  timeout; a fresh-prefix rerun passed.
-- npm's real shim generator produced correctly targeted `.cmd` and `.ps1`
-  files for both bins. These were inspected on Linux, not executed on Windows.
-- `actionlint` 1.7.12 accepted the workflow. Executed metadata-gate checks
-  allowed publication only for a tag push, denied PR/manual-dispatch events,
-  and rejected a tag/version mismatch. The hosted workflow itself was not run.
+- `npm ci`, `npm run build`, `npm run lint` and `npm test` pass.
+- `npm pack --dry-run` lists what ships. It should hold only the files named in
+  the table at the top of this page. Nothing else should appear (no `src`, tests,
+  development scripts, lockfile other than `npm-shrinkwrap.json`, or stray
+  output). Run `npm pack --dry-run --ignore-scripts` after a build to skip the
+  `prepack` rebuild.
+- The packed tarball passes `scripts/verify-package.mjs` on a clean global
+  install, locally and in the consumer matrix.
+- After a change to a workflow file, `actionlint` accepts it, and the metadata
+  gate still allows publication only for a tag push.
 
-Temporary test caches and downloaded validation tooling were removed. The
-ignored `dist-pack/` directory retains the tarball, its SHA-256 sidecar and the
-complete `pack-files.txt` inventory for inspection; these are not npm contents.
+`dist-pack/` is git-ignored. It holds the tarball, its SHA-256 sidecar and the
+file inventory, none of which are npm contents.
 
 ## Primary references
 
@@ -525,3 +514,4 @@ complete `pack-files.txt` inventory for inspection; these are not npm contents.
   [tree-sitter-perl 2.0.0](https://registry.npmjs.org/tree-sitter-perl/-/tree-sitter-perl-2.0.0.tgz),
   [tree-sitter-kotlin 0.3.8](https://registry.npmjs.org/tree-sitter-kotlin/-/tree-sitter-kotlin-0.3.8.tgz),
   [@tree-sitter-grammars/tree-sitter-lua 0.2.0](https://registry.npmjs.org/@tree-sitter-grammars/tree-sitter-lua/-/tree-sitter-lua-0.2.0.tgz)
+

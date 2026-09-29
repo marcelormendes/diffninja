@@ -26,4 +26,4 @@ The reviewing agent explains the change in business terms inside `finish_review`
 
 - Hunk ids are positional per review: an explanation written for a static range may name different hunks in a connected review of the same pull request. Write it for the review you are finishing.
 - A patch-only review lists no functions (it resolves no definitions), so `functions` is `[]`; the processes and rules still draw.
-- The first git-range drive of a language installs its grammar through npm with the server's minimal environment; behind a TLS-intercepting proxy, pre-install it into `~/.cache/calldiff/grammars` with your shell's npm.
+- A review never installs a grammar: run `diffninja grammars install` once before driving a git range in a language other than JavaScript and TypeScript, or the review's warnings name the files its call flows skipped. Behind a TLS-intercepting proxy, set `NODE_EXTRA_CA_CERTS` first.

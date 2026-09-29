@@ -8,6 +8,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 describe("review diff input", () => {
+  it("names a file with non-ASCII letters as it is on disk, so it matches the repository's own paths", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "diffninja-quotepath-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git("init", "-b", "main");
+      const revisions: string[] = [];
+      for (const value of [1, 2]) {
+        writeFileSync(join(repo, "café.ts"), `export function cafe() { return ${value}; }\n`);
+        git("add", ".");
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", String(value));
+        revisions.push(git("rev-parse", "HEAD"));
+      }
+      const files = parseDiff(gitDiff(repo, revisions[0], revisions[1]).diff).map((unit) => unit.file);
+      expect(files).toEqual(["café.ts"]);
+      const report = await reviewDiff({ repo, from: revisions[0], to: revisions[1], mode: "static" });
+      expect(report.functions.map((entry) => entry.id)).toContain("café.ts#cafe");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("ignores local replacement objects and refuses evidence for a different patch", async () => {
     const repo = mkdtempSync(join(tmpdir(), "diffninja-replaced-"));
     const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();

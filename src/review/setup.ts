@@ -19,6 +19,7 @@ import { lstat, mkdir, open, readFile, readlink, realpath, rename, rm, stat } fr
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { z } from "zod";
+import { npmEnvironment, windowsShell } from "../languages/child-env.js";
 import { npmCliPath, npmSpawnSpec } from "../languages/grammars.js";
 import { removeTomlTable, upsertTomlTable, type TomlTable } from "./toml.js";
 import { compareVersions, packageVersion } from "./version.js";
@@ -35,6 +36,10 @@ globally installed package. Installs the package globally first
 working, and updates a global install older than this setup, so running
 \`npx -y diffninja@latest setup\` again is how you update. When that install
 fails it registers an npx-based entry pinned to this version and says so.
+
+Each JSON config it changes is rewritten in full, in standard formatting
+(indentation, string escapes and integers above 2^53 can change), and no
+backup is kept. Copy ~/.claude.json before the first run.
 
 Options:
   --cli NAMES    Only these CLIs, comma-separated: claude,codex,omp,pi.
@@ -130,7 +135,7 @@ export function windowsCliEntry(
 ): McpEntry {
   const npmCli = cliPath(`${name}-cli.js`);
   if (npmCli === undefined) {
-    return { command: process.env["ComSpec"] ?? "cmd.exe", args: ["/d", "/s", "/c", name, ...args] };
+    return { command: windowsShell(), args: ["/d", "/s", "/c", name, ...args] };
   }
   return { command: process.execPath, args: [npmCli, ...args] };
 }
@@ -172,7 +177,8 @@ export function globalIsOlder(installed: string | undefined, version: string): b
  */
 export function createNpm(overrides: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): Npm {
   const platform = overrides.platform ?? process.platform;
-  const env = overrides.env;
+  // Installing runs the install scripts of diffninja and its dependencies: they get what npm needs, not the shell's tokens.
+  const env = overrides.env ?? npmEnvironment();
   const run = (args: string[], inherit: boolean): ChildProcess => {
     const spec = npmSpawnSpec(args, platform);
     return spawn(spec.file, spec.args, inherit ? { stdio: "inherit", env } : { env });
@@ -209,8 +215,6 @@ async function exitCode(child: ChildProcess): Promise<number> {
     return -1;
   }
 }
-
-const realNpm = createNpm();
 
 /** `npm root -g`, or undefined when npm is unavailable or fails. */
 async function globalRoot(npm: Npm): Promise<string | undefined> {
@@ -669,7 +673,7 @@ export async function runSetup(options: SetupOptions = {}, deps: SetupDeps = {})
   let entry: McpEntry | undefined;
   let viaNpx = false;
   if (!uninstall) {
-    const resolved = await resolveEntry(options.noInstall === true, deps.npm ?? realNpm, quiet, dryRun, version);
+    const resolved = await resolveEntry(options.noInstall === true, deps.npm ?? createNpm(), quiet, dryRun, version);
     entry = resolved.entry;
     viaNpx = resolved.viaNpx;
   }

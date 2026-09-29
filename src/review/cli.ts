@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { runSetup, setupHelp } from "./setup.js";
+import { runGrammars } from "./grammars-command.js";
 
 /**
  * diffninja runs inside an agent CLI through its MCP server; this command only
@@ -12,7 +13,14 @@ import { runSetup, setupHelp } from "./setup.js";
 const help = `diffninja. Pull request review inside your coding agent.
 
   diffninja setup [--cli claude,codex,omp,pi] [--uninstall] [--dry-run] [--no-install]
-                  Register the diffninja MCP server on every detected agent CLI.
+                  Register the diffninja MCP server on every detected agent CLI. Runs
+                  npm to install diffninja globally, and rewrites each JSON config it
+                  changes (see diffninja setup --help).
+  diffninja grammars install [--build] [--dry-run] | status
+                  Add the tree-sitter grammars call flows use for languages other than
+                  JavaScript and TypeScript. Downloads code through npm, and only when
+                  you run it (exact versions, integrity-checked, no install scripts
+                  unless you pass --build).
   diffninja --help
 
 After setup, ask your agent to review a GitHub pull request link, a diff, or a git
@@ -32,6 +40,7 @@ async function main(): Promise<void> {
     console.log(help);
     return;
   }
+  if (command === "grammars") { runGrammars(args); return; }
   if (command !== "setup") throw new Error(NO_TERMINAL_REVIEW);
   const { values, positionals } = parseArgs({ args, options: {
     cli: { type: "string" }, uninstall: { type: "boolean" },

@@ -1,6 +1,8 @@
+import { grammarsInstallCommand, takeMissingGrammars } from "../languages/grammars.js";
+import { hiddenControlsByFile } from "./hidden-characters.js";
 import { resolve } from "node:path";
 import { runDiff } from "../run.js";
-import { readSnapshotFile } from "../git.js";
+import { MAX_INDEXED_FILES, MAX_INDEXED_FILE_BYTES, readSnapshotFile, takeSkippedSources } from "../git.js";
 import type { DiffNode, DiffTreeResult, Snapshot } from "../types.js";
 import { parseDiff, gitDiff } from "./input.js";
 import { reviewUnits } from "./pipeline.js";
@@ -106,6 +108,12 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   if (snapshots && options.pr?.headRef !== undefined && options.pr.headRef !== snapshots.to) {
     throw new Error("The PR head does not match the source snapshot; refusing mismatched intent evidence.");
   }
+  const hiddenControls = hiddenControlsByFile(units);
+  if (hiddenControls.size > 0) {
+    const files = [...hiddenControls.keys()];
+    const points = [...new Set([...hiddenControls.values()].flat())].sort();
+    warnings.push(`Lines this change adds or removes in ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` and ${files.length - 5} more files` : ""} contain hidden or bidirectional control characters (${points.join(", ")}). They can make code read differently from how it compiles (Trojan Source, CVE-2021-42574); the pages show each as a ⟦U+XXXX⟧ marker. Read those lines with the markers before trusting them.`);
+  }
   let evidence = buildReviewEvidence(units);
   const callFlow: string[] = [];
   let trees: DiffTreeResult[] = [];
@@ -137,6 +145,8 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   // need a git range. Every other value is decided by what analysis returned.
   let callFlowAvailability: CallFlowAvailability = snapshots ? "no-changes" : "needs-git-range";
   if (snapshots && units.length) {
+    takeMissingGrammars();
+    takeSkippedSources();
     try {
       const flow = runDiff({
         cwd: cwd!, from: snapshots.from, to: snapshots.to, maxDepth: CALL_FLOW_MAX_DEPTH, color: false, locs: true,
@@ -169,6 +179,19 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
       evidence = buildReviewEvidence(units);
       warnings.push("Call-flow analysis failed. Review is based on the diff only. Inspect repository context manually.");
     }
+    const left = takeSkippedSources();
+    if (left.oversized > 0 || left.beyondLimit > 0) {
+      const parts = [
+        left.oversized > 0 ? `${left.oversized} source ${left.oversized === 1 ? "file" : "files"} over ${MAX_INDEXED_FILE_BYTES / 1024 / 1024} MiB (generated or minified code)` : "",
+        left.beyondLimit > 0 ? `${left.beyondLimit} ${left.beyondLimit === 1 ? "file" : "files"} beyond the ${MAX_INDEXED_FILES.toLocaleString("en-US")} read per revision` : "",
+      ].filter((part) => part !== "");
+      warnings.push(`Call flows did not read ${parts.join(" and ")}. Flows through them are absent, which is not evidence of safety.`);
+      if (callFlowAvailability === "no-changes") callFlowAvailability = "partial";
+    }
+    const missing = takeMissingGrammars();
+    if (missing.length > 0) {
+      warnings.push(`Call flows skip the files these grammars would read: ${missing.join(", ")}. diffninja does not download code while it reviews; run \`${grammarsInstallCommand(missing)}\` once and review again to include them. Flows through those files are absent, which is not evidence of safety.`);
+    }
   }
   if (options.referenceProject !== undefined) {
     if (!snapshots) throw new Error("Reference checking requires a repository and immutable git range.");
@@ -193,7 +216,7 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   // Structured flows are grouped per changed file in report order, after
   // ranking, so the HTML can order files by the severity of their worst hunk.
   const callFlows = buildCallFlows(reportOrderedTextHunkFiles(result.items, units), trees, nodeDetail);
-  if (callFlows.length > 0) callFlowAvailability = "available";
+  if (callFlows.length > 0 && callFlowAvailability === "no-changes") callFlowAvailability = "available";
   const report: ReviewReport = { title: options.pr?.title || "Focused PR review", source, createdAt: new Date().toISOString(),
     pr: options.pr,
     evidence: { ...evidence, intent: crossCheckIntent(options.pr, units, evidence.agenda, evidence.findings) },

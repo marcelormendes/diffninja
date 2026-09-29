@@ -1,16 +1,13 @@
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
+import { packageVersion } from "../review/version.js";
+import { npmEnvironment } from "./child-env.js";
+import { GRAMMAR_BUILD_ONLY, GRAMMAR_PACKAGE_JSON, GRAMMAR_PACKAGE_LOCK, GRAMMAR_PINS } from "./grammar-lock.js";
 
 /**
  * Loaded tree-sitter grammar package surface.
@@ -37,47 +34,128 @@ function errnoCode(err: Error): string | undefined {
   return (err as NodeJS.ErrnoException).code;
 }
 
-/** On-disk cache of npm-installed tree-sitter grammar packages. */
-export function grammarCacheDir(): string {
-  const override = process.env.CALLDIFF_GRAMMAR_CACHE;
-  if (override) return override;
-  return join(homedir(), ".cache", "calldiff", "grammars");
-}
-
-function packageInstalled(cacheDir: string, npmPackage: string): boolean {
-  return existsSync(join(cacheDir, "node_modules", npmPackage));
-}
-
-const cacheManifestSchema = z
-  .object({ allowScripts: z.record(z.string(), z.unknown()).optional() })
-  .catchall(z.unknown());
+/**
+ * Grammars that ship inside diffninja's own package (regular dependencies). Any
+ * other grammar comes only from the cache below, never from whatever
+ * `node_modules` happens to sit above the install.
+ */
+const BUNDLED_GRAMMARS: ReadonlySet<string> = new Set(["tree-sitter-javascript", "tree-sitter-typescript"]);
 
 /**
- * The cache's own package.json, which also allows the grammar's install
- * script: npm 12 blocks dependency install scripts unless `allowScripts`
- * names them, and rejects `--allow-scripts` in a project install like this
- * one. Earlier npm ignores the field. A cache written before this keeps its
- * other fields and gains the entry.
+ * Where `diffninja grammars install` puts the pinned grammars. Private to
+ * diffninja: the shared calldiff cache holds whatever an unpinned install once
+ * fetched, and is never read.
  */
-export function ensureCachePackageJson(cacheDir: string, npmPackage: string): void {
-  mkdirSync(cacheDir, { recursive: true });
-  const pkgPath = join(cacheDir, "package.json");
-  let pkg: z.infer<typeof cacheManifestSchema> = {
-    name: "calldiff-grammar-cache",
-    private: true,
-    description: "On-demand tree-sitter grammars for calldiff",
-  };
-  if (existsSync(pkgPath)) {
-    try {
-      const parsed = cacheManifestSchema.safeParse(JSON.parse(readFileSync(pkgPath, "utf8")));
-      if (parsed.success) pkg = parsed.data;
-    } catch {
-      // An unreadable cache manifest is replaced; the grammars beside it stay.
-    }
+export function grammarCacheDir(): string {
+  const override = process.env.DIFFNINJA_GRAMMAR_CACHE;
+  if (override) return override;
+  return join(homedir(), ".cache", "diffninja", "grammars");
+}
+
+/**
+ * Written last by the installer, so a cache without it (or with another lock's) is not trusted.
+ * It is a consistency check, not authentication. It holds only public data (the lock's digest),
+ * so anyone who can write the directory can write one. Ownership is what cacheDirectoryProblem checks.
+ */
+const CACHE_MARKER = ".diffninja-grammars.json";
+const markerSchema = z.object({ format: z.literal(1), lockSha256: z.string(), installedAt: z.string(), built: z.boolean().optional() });
+
+/**
+ * Why grammars in this directory must not be loaded, or undefined when it is safe to.
+ * It must belong to the user running diffninja and be writable by no one else. A missing
+ * directory is no problem, since there is nothing in it to trust. Windows has no uid or mode bits,
+ * so nothing is checked there.
+ */
+export function cacheDirectoryProblem(dir: string): string | undefined {
+  const uid = process.getuid?.();
+  const stats = uid === undefined ? undefined : statSync(dir, { throwIfNoEntry: false });
+  if (stats === undefined) return undefined;
+  if (stats.uid !== uid) return `${dir} belongs to another user (uid ${stats.uid})`;
+  if ((stats.mode & 0o022) !== 0) return `other users can write to ${dir} (mode ${(stats.mode & 0o777).toString(8)})`;
+  return undefined;
+}
+
+/** The exact version diffninja pins for a grammar package, or undefined when it is not one of them. */
+export function pinnedVersion(npmPackage: string): string | undefined {
+  // hasOwn: "constructor" and the like must not read as pinned through the prototype.
+  // SAFETY: hasOwn just proved npmPackage is one of GRAMMAR_PINS's own keys.
+  return Object.hasOwn(GRAMMAR_PINS, npmPackage) ? GRAMMAR_PINS[npmPackage as keyof typeof GRAMMAR_PINS] : undefined;
+}
+
+function needsBuild(npmPackage: string): boolean {
+  // SAFETY: widening a tuple of string literals to string[] only to test membership.
+  return (GRAMMAR_BUILD_ONLY as readonly string[]).includes(npmPackage);
+}
+
+let cachedDigest: string | undefined;
+/** Fingerprint of the lock this build of diffninja installs from. */
+export function grammarLockDigest(): string {
+  cachedDigest ??= createHash("sha256").update(JSON.stringify(GRAMMAR_PACKAGE_LOCK)).digest("hex");
+  return cachedDigest;
+}
+
+/** The marker of a cache this diffninja's lock installed, or undefined for anything else. */
+function readCacheMarker(cacheDir: string): z.infer<typeof markerSchema> | undefined {
+  if (cacheDirectoryProblem(cacheDir) !== undefined) return undefined;
+  try {
+    const marker = markerSchema.safeParse(JSON.parse(readFileSync(join(cacheDir, CACHE_MARKER), "utf8")));
+    return marker.success && marker.data.lockSha256 === grammarLockDigest() ? marker.data : undefined;
+  } catch {
+    return undefined;
   }
-  if (pkg.allowScripts?.[npmPackage] === true && existsSync(pkgPath)) return;
-  pkg.allowScripts = { ...pkg.allowScripts, [npmPackage]: true };
-  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
+}
+
+const packageVersionSchema = z.object({ version: z.string() });
+
+/** The installed directory of a pinned grammar, when the cache is one diffninja installed and holds exactly the pinned version. */
+function pinnedGrammarRoot(cacheDir: string, npmPackage: string): string | undefined {
+  const pinned = pinnedVersion(npmPackage);
+  const marker = pinned === undefined ? undefined : readCacheMarker(cacheDir);
+  if (pinned === undefined || marker === undefined) return undefined;
+  // A grammar with no prebuilt binary loads only after the person asked for its source build.
+  if (needsBuild(npmPackage) && marker.built !== true) return undefined;
+  const root = join(cacheDir, "node_modules", npmPackage);
+  try {
+    const manifest = packageVersionSchema.safeParse(JSON.parse(readFileSync(join(root, "package.json"), "utf8")));
+    return manifest.success && manifest.data.version === pinned ? root : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The command that installs these grammars where this diffninja reads them. It names this
+ * version, because a cache is read only by a diffninja with the same lock, and `@latest` or
+ * whatever `diffninja` is on PATH may have another. Kotlin and Perl need `--build`.
+ */
+export function grammarsInstallCommand(npmPackages: readonly string[]): string {
+  return `npx -y diffninja@${packageVersion()} grammars install${npmPackages.some(needsBuild) ? " --build" : ""}`;
+}
+
+/**
+ * A grammar this review needed is not installed. diffninja never downloads code
+ * while it reviews; the person installs the pinned set once, on purpose.
+ */
+export class GrammarNotInstalledError extends Error {
+  constructor(readonly npmPackage: string) {
+    super(
+      pinnedVersion(npmPackage) === undefined
+        ? `${npmPackage} is not one of the grammars diffninja installs, so call flows skip its files.`
+        : needsBuild(npmPackage)
+          ? `The ${npmPackage} grammar ships no prebuilt binary, so call flows skip its files until it is compiled on this machine. diffninja does not download or build code while it reviews: run \`${grammarsInstallCommand([npmPackage])}\` once (needs Python and a C/C++ compiler), then review again.`
+          : `The ${npmPackage} grammar is not installed, so call flows skip its files. diffninja does not download code while it reviews: run \`${grammarsInstallCommand([npmPackage])}\` once to add the pinned grammars, then review again.`,
+    );
+    this.name = "GrammarNotInstalledError";
+  }
+}
+
+const missingGrammars = new Set<string>();
+
+/** The grammars that were needed and absent since the last call, sorted; clears the record. */
+export function takeMissingGrammars(): string[] {
+  const names = [...missingGrammars].sort();
+  missingGrammars.clear();
+  return names;
 }
 
 /**
@@ -261,106 +339,103 @@ function requireGrammar(
       const binding = loadNativeBinding(packageRoot);
       if (binding) return binding;
     } else {
-      // A mislabeled prebuild blocks node-gyp-build's own source-build
-      // fallback. This directory is diffninja's own grammar cache, so remove
-      // the bad artifact and let the load retry compile from source.
+      // A prebuild for another CPU cannot load, and repairing it means compiling:
+      // say so instead of editing the cache.
       const bad = mislabeledPrebuild(packageRoot);
       if (bad !== null) {
-        rmSync(bad, { force: true });
-        try {
-          // SAFETY: grammar packages export a module compatible with GrammarModule.
-          return require(npmPackage) as GrammarModule;
-        } catch {
-          const binding = loadNativeBinding(packageRoot);
-          if (binding) return binding;
-        }
+        throw new Error(`${npmPackage} ships a native build for another CPU (${bad}), so it cannot load on ${process.platform}/${process.arch}.`);
       }
     }
     throw new Error(withNativeLoadHints(npmPackage, failure));
   }
 }
 
-function installSpecFor(npmPackage: string): string {
-  switch (npmPackage) {
-    case "tree-sitter-c-sharp":
-      return "tree-sitter-c-sharp@0.23.1";
-    case "@tree-sitter-grammars/tree-sitter-lua":
-      // 0.4+ is ESM-with-TLA; 0.2.0 is CJS and loads via createRequire.
-      return "@tree-sitter-grammars/tree-sitter-lua@0.2.0";
-    default:
-      return npmPackage;
+/** Runs npm in `cwd`; replaced in tests. Throws with npm's own message when it fails. */
+export type NpmRunner = (cwd: string, args: string[]) => void;
+
+function runNpm(cwd: string, args: string[], build: boolean): void {
+  const npm = npmSpawnSpec(args);
+  try {
+    // A minimal environment: no token of the engineer's reaches npm or any install script.
+    execFileSync(npm.file, npm.args, { cwd, env: npmEnvironment(process.env, { npm_config_global: "false", npm_config_location: "project" }, { build }), stdio: ["ignore", "pipe", "pipe"], timeout: 300_000, maxBuffer: 32 * 1024 * 1024 });
+  } catch (err) {
+    // SAFETY: catch bindings are unknown; execFileSync errors carry the child's stderr.
+    const failure = err as Error & { stderr?: Buffer | string };
+    const tail = String(failure.stderr ?? "").split("\n").filter(line => line.trim() !== "").slice(-6).join("\n");
+    throw new Error(`npm could not install the grammars: ${failure.message}${tail === "" ? "" : `\n${tail}`}`);
   }
 }
 
-function sleepMs(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/** Why this grammar's install can fail beyond npm itself, for the error text. */
-function installFailureHint(npmPackage: string): string | null {
-  if (npmPackage === "tree-sitter-swift") {
-    return (
-      "tree-sitter-swift downloads its parser CLI from GitHub Releases during " +
-      "install; a proxy or offline network fails that download. Retry with " +
-      "network access to github.com, or pre-populate CALLDIFF_GRAMMAR_CACHE."
-    );
-  }
-  if (npmPackage === "tree-sitter-perl" || npmPackage === "tree-sitter-kotlin") {
-    return (
-      "this grammar ships no prebuilt binary and compiles from source: Python " +
-      "and a C/C++ toolchain (build-essential, Xcode command line tools, or " +
-      "Visual Studio Build Tools) are required."
-    );
-  }
-  return null;
+export interface InstalledGrammars {
+  cacheDir: string;
+  packages: Array<{ name: string; version: string }>;
 }
 
 /**
- * Install an on-demand grammar into the cache, retrying transient network
- * failures (the Swift parser CLI download is the known flaky one). Throws an
- * actionable error when the install cannot succeed.
+ * Install exactly the pinned grammars, and nothing else, into the cache. This is
+ * the only place diffninja downloads grammar code, and only when a person runs
+ * `diffninja grammars install`. `npm ci` from the shipped lock refuses any
+ * tarball whose sha512 differs, `--ignore-scripts` keeps every install script
+ * (the packages' own and their dependencies') from running, and the grammars
+ * load from their bundled prebuilt binaries. Reviews never call this.
  */
-function installGrammarPackage(cacheDir: string, npmPackage: string): void {
-  const npm = npmSpawnSpec([
-    "install",
-    "--prefix",
-    cacheDir,
-    "--no-save",
-    "--no-fund",
-    "--no-audit",
-    "--legacy-peer-deps",
-    installSpecFor(npmPackage),
-  ]);
-  for (let attempt = 1; attempt <= 3; attempt++) {
+export function installPinnedGrammars(options: { cacheDir?: string; runNpm?: NpmRunner; build?: boolean } = {}): InstalledGrammars {
+  const cacheDir = options.cacheDir ?? grammarCacheDir();
+  mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+  // mkdir leaves an existing directory's mode alone, so tighten one's own and refuse anyone else's.
+  if (statSync(cacheDir).uid === process.getuid?.()) chmodSync(cacheDir, 0o700);
+  const problem = cacheDirectoryProblem(cacheDir);
+  if (problem !== undefined) throw new Error(`Refusing to install grammars: ${problem}, so its contents could not be trusted. Set DIFFNINJA_GRAMMAR_CACHE to a directory of your own.`);
+  // Untrusted until the install below finishes and verifies.
+  rmSync(join(cacheDir, CACHE_MARKER), { force: true });
+  writeFileSync(join(cacheDir, "package.json"), JSON.stringify(GRAMMAR_PACKAGE_JSON, null, 2) + "\n", "utf8");
+  writeFileSync(join(cacheDir, "package-lock.json"), JSON.stringify(GRAMMAR_PACKAGE_LOCK, null, 2) + "\n", "utf8");
+  // No --prefix: `npm ci` rejects it. The working directory is the project, whatever the user's npm config says.
+  const npm = options.runNpm ?? ((cwd, args) => runNpm(cwd, args, options.build === true));
+  npm(cacheDir, ["ci", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund"]);
+  // The one place an install script runs: the source build of the grammars with no prebuilt
+  // binary, for exactly those packages, and only because the person asked for --build.
+  if (options.build === true) npm(cacheDir, ["rebuild", "--legacy-peer-deps", "--no-audit", "--no-fund", ...GRAMMAR_BUILD_ONLY]);
+  const packages: Array<{ name: string; version: string }> = [];
+  for (const [name, version] of Object.entries(GRAMMAR_PINS)) {
+    let installed: string | undefined;
     try {
-      execFileSync(npm.file, npm.args, {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: process.env,
-        timeout: 300_000,
-      });
-      return;
-    } catch (err) {
-      if (attempt === 3) {
-        // SAFETY: catch bindings are unknown; normalize to Error at the boundary.
-        const failure = err instanceof Error ? err : new Error(String(err));
-        const hint = installFailureHint(npmPackage);
-        throw new Error(
-          `Could not install the ${npmPackage} grammar into ${cacheDir}: ${failure.message}` +
-            (hint ? ` ${hint}` : ""),
-        );
-      }
-      sleepMs(2000 * attempt);
+      const manifest = packageVersionSchema.safeParse(JSON.parse(readFileSync(join(cacheDir, "node_modules", name, "package.json"), "utf8")));
+      installed = manifest.success ? manifest.data.version : undefined;
+    } catch {
+      installed = undefined;
     }
+    if (installed !== version) throw new Error(`${name}@${version} is not in ${cacheDir} after the install (found ${installed ?? "nothing"}); leaving the cache untrusted.`);
+    packages.push({ name, version });
   }
+  writeFileSync(join(cacheDir, CACHE_MARKER), JSON.stringify({ format: 1, lockSha256: grammarLockDigest(), installedAt: new Date().toISOString(), built: options.build === true }) + "\n", "utf8");
+  return { cacheDir, packages };
+}
+
+export interface GrammarStatus {
+  cacheDir: string;
+  /** The cache was installed by this diffninja's lock, so its grammars are used. */
+  trusted: boolean;
+  packages: Array<{ name: string; version: string; installed: boolean; needsBuild: boolean }>;
+}
+
+export function grammarStatus(cacheDir: string = grammarCacheDir()): GrammarStatus {
+  return {
+    cacheDir,
+    trusted: readCacheMarker(cacheDir) !== undefined,
+    packages: Object.entries(GRAMMAR_PINS).map(([name, version]) => ({ name, version, installed: pinnedGrammarRoot(cacheDir, name) !== undefined, needsBuild: needsBuild(name) })),
+  };
 }
 
 /**
- * Install an npm grammar package into the shared cache if missing, then require it.
- * Reuses the cache across CLI invocations.
+ * The grammar package's module. Bundled grammars come from diffninja's own
+ * dependencies; every other one from the cache `diffninja grammars install`
+ * filled, and only when that cache holds the exact pinned version. Nothing is
+ * ever downloaded here: a missing grammar throws GrammarNotInstalledError, which
+ * call-flow analysis reports once instead of skipping silently.
  */
 export function loadGrammarPackage(npmPackage: string): GrammarModule {
-  // Prefer the app's own dependency when present (e.g. tree-sitter-typescript).
-  try {
+  if (BUNDLED_GRAMMARS.has(npmPackage)) {
     const localRequire = createRequire(import.meta.url);
     try {
       // SAFETY: local dependency resolves to a tree-sitter grammar module.
@@ -369,29 +444,22 @@ export function loadGrammarPackage(npmPackage: string): GrammarModule {
       // SAFETY: catch bindings are unknown; normalize to Error at the boundary.
       const failure = err instanceof Error ? err : new Error(String(err));
       const code = errnoCode(failure);
-      if (
-        code === "ERR_REQUIRE_ASYNC_MODULE" ||
-        failure.message.includes("top-level await")
-      ) {
-        const entry = localRequire.resolve(npmPackage);
-        const packageRoot = join(entry, "..", "..");
+      if (code === "ERR_REQUIRE_ASYNC_MODULE" || failure.message.includes("top-level await")) {
+        const packageRoot = join(localRequire.resolve(npmPackage), "..", "..");
         const binding = loadNativeBinding(packageRoot);
         if (binding) return binding;
       }
-      throw err;
+      throw failure;
     }
-  } catch {
-    // fall through to cache
   }
 
   const cacheDir = grammarCacheDir();
-  if (!packageInstalled(cacheDir, npmPackage)) {
-    ensureCachePackageJson(cacheDir, npmPackage);
-    installGrammarPackage(cacheDir, npmPackage);
+  const packageRoot = pinnedGrammarRoot(cacheDir, npmPackage);
+  if (packageRoot === undefined) {
+    missingGrammars.add(npmPackage);
+    throw new GrammarNotInstalledError(npmPackage);
   }
-
   const require = createRequire(join(cacheDir, "package.json"));
-  const packageRoot = join(cacheDir, "node_modules", npmPackage);
   return requireGrammar(require, npmPackage, packageRoot);
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { connectedAnalysisOf } from "../src/review/connected-analysis.js";
+import { renderConnectedPage } from "../src/review/connected-html.js";
 import type { AgentSummary, ReviewItem, ReviewReport } from "../src/review/types.js";
 
 function report(item: ReviewItem, agentSummary?: AgentSummary): ReviewReport {
@@ -49,5 +50,24 @@ describe("connected analysis goal summary", () => {
     const view = analysis(base);
     expect(view.summary).toBeUndefined();
     expect("summary" in view).toBe(false);
+  });
+});
+
+describe("connected analysis update notice", () => {
+  const facts = { language: "c-like", inert: false, answers: {}, evidence: {} } as const;
+  const item: ReviewItem = { ...base, facts };
+  const notice = { current: "0.3.2", latest: "0.4.0", command: "npx diffninja@latest setup" };
+  const view = (updateNotice?: typeof notice) =>
+    connectedAnalysisOf({ ...report(item), updateNotice }, "snap", "r".repeat(32), "http://127.0.0.1:1/report/x", { source: "patch", note: "" });
+
+  test("hands the page the notice the report carries, and nothing when there is none", () => {
+    expect(view(notice).update).toEqual(notice);
+    expect("update" in view()).toBe(false);
+  });
+
+  test("the connected page draws it in its own line", () => {
+    const page = renderConnectedPage({ csrf: "csrf", nonce: "nonce", base: "/secret/" });
+    expect(page).toContain('id="update-notice"');
+    expect(page).toContain("function renderUpdate()");
   });
 });

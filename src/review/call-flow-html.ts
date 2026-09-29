@@ -116,6 +116,7 @@ const AVAILABILITY_NOTE = {
   available: "No call tree reaches a changed file in this range. This is not evidence of safety.",
   "needs-git-range": "Call paths need a git range. This input was a patch, so no call trees were built.",
   "no-changes": "No call path reaches a changed file. This is not evidence of safety.",
+  partial: "No call tree was drawn, but call flows left out some source files of this revision (very large files, or files past the per-revision limit), so a path through them is absent. This is not evidence of safety.",
   failed: "Call-flow analysis failed, so no call trees were built. The diff review is unaffected.",
 } satisfies Record<CallFlowAvailability, string>;
 
