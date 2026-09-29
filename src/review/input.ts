@@ -79,8 +79,11 @@ export function parseDiff(text: string): ReviewUnit[] {
   return units;
 }
 
+/** A git command that has not answered in this long (a dead network share) is stopped, not waited for forever. */
+const GIT_TIMEOUT_MS = 120_000;
+
 export function resolveCommit(cwd: string, ref: string): string {
-  return execFileSync("git", ["--no-replace-objects", "rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd, encoding: "utf8" }).trim();
+  return execFileSync("git", ["--no-replace-objects", "rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS }).trim();
 }
 
 export interface GitDiffInput { diff: string; from: string; to: string }
@@ -88,6 +91,6 @@ export interface GitDiffInput { diff: string; from: string; to: string }
 export function gitDiff(cwd: string, from: string, to: string): GitDiffInput {
   const base = resolveCommit(cwd, from), head = resolveCommit(cwd, to);
   const diff = execFileSync("git", ["--no-replace-objects", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=5", base, head, "--"],
-    { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+    { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: GIT_TIMEOUT_MS });
   return { diff, from: base, to: head };
 }

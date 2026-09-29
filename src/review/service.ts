@@ -1,7 +1,7 @@
 import { takeMissingGrammars } from "../languages/grammars.js";
 import { resolve } from "node:path";
 import { runDiff } from "../run.js";
-import { readSnapshotFile } from "../git.js";
+import { MAX_INDEXED_FILES, MAX_INDEXED_FILE_BYTES, readSnapshotFile, takeSkippedSources } from "../git.js";
 import type { DiffNode, DiffTreeResult, Snapshot } from "../types.js";
 import { parseDiff, gitDiff } from "./input.js";
 import { reviewUnits } from "./pipeline.js";
@@ -139,6 +139,7 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   let callFlowAvailability: CallFlowAvailability = snapshots ? "no-changes" : "needs-git-range";
   if (snapshots && units.length) {
     takeMissingGrammars();
+    takeSkippedSources();
     try {
       const flow = runDiff({
         cwd: cwd!, from: snapshots.from, to: snapshots.to, maxDepth: CALL_FLOW_MAX_DEPTH, color: false, locs: true,
@@ -170,6 +171,14 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
       callFlowAvailability = "failed";
       evidence = buildReviewEvidence(units);
       warnings.push("Call-flow analysis failed. Review is based on the diff only. Inspect repository context manually.");
+    }
+    const left = takeSkippedSources();
+    if (left.oversized > 0 || left.beyondLimit > 0) {
+      const parts = [
+        left.oversized > 0 ? `${left.oversized} source files over ${MAX_INDEXED_FILE_BYTES / 1024 / 1024} MiB (generated or minified code)` : "",
+        left.beyondLimit > 0 ? `${left.beyondLimit} files past the first ${MAX_INDEXED_FILES.toLocaleString("en-US")} of a revision` : "",
+      ].filter((part) => part !== "");
+      warnings.push(`Call flows did not read ${parts.join(" and ")}. Flows through them are absent, which is not evidence of safety.`);
     }
     const missing = takeMissingGrammars();
     if (missing.length > 0) {

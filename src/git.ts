@@ -9,6 +9,9 @@ import type {
   SnapshotWithPaths,
 } from "./types.js";
 
+/** A git command that has not answered in this long (a dead network share) is stopped, not waited for forever. */
+const GIT_TIMEOUT_MS = 120_000;
+
 function gitBuffer(
   cwd: string,
   args: string[],
@@ -19,6 +22,7 @@ function gitBuffer(
     cwd,
     input,
     maxBuffer,
+    timeout: GIT_TIMEOUT_MS,
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
@@ -239,19 +243,43 @@ function pathAllowed(file: string, pathFilters: string[]): boolean {
   });
 }
 
+/**
+ * Bounds on what call-flow analysis parses from one revision: a source file over
+ * this size is generated or minified code, not something a person reads, and the
+ * files beyond the limit are left out (in path order, so the same repository
+ * always leaves out the same ones). The review names what was skipped.
+ */
+export const MAX_INDEXED_FILE_BYTES = 1024 * 1024;
+export const MAX_INDEXED_FILES = 15_000;
+
+const skipped = { oversized: 0, beyondLimit: 0 };
+
+/** What was left out of call-flow analysis since the last call; clears the count. */
+export function takeSkippedSources(): { oversized: number; beyondLimit: number } {
+  const counts = { ...skipped };
+  skipped.oversized = 0;
+  skipped.beyondLimit = 0;
+  return counts;
+}
+
 export function listSnapshotFiles(
   cwd: string,
   snapshot: Snapshot,
   pathFilters: string[] = [],
+  limits: { readonly maxFiles: number; readonly maxFileBytes: number } = { maxFiles: MAX_INDEXED_FILES, maxFileBytes: MAX_INDEXED_FILE_BYTES },
 ): SnapshotFile[] {
   const files =
     snapshot.kind === "worktree"
       ? listWorktreeFiles(cwd)
       : listCommitFiles(cwd, snapshot.ref);
 
-  return files
+  const wanted = files
     .filter((file) => pathAllowed(file.path, pathFilters))
     .sort((a, b) => a.path.localeCompare(b.path));
+  const small = wanted.filter((file) => file.size === undefined || file.size <= limits.maxFileBytes);
+  skipped.oversized += wanted.length - small.length;
+  skipped.beyondLimit += Math.max(0, small.length - limits.maxFiles);
+  return small.slice(0, limits.maxFiles);
 }
 
 const BATCH_BYTES = 32 * 1024 * 1024;
