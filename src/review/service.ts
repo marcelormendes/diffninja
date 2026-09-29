@@ -182,10 +182,11 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
     const left = takeSkippedSources();
     if (left.oversized > 0 || left.beyondLimit > 0) {
       const parts = [
-        left.oversized > 0 ? `${left.oversized} source files over ${MAX_INDEXED_FILE_BYTES / 1024 / 1024} MiB (generated or minified code)` : "",
-        left.beyondLimit > 0 ? `${left.beyondLimit} files past the first ${MAX_INDEXED_FILES.toLocaleString("en-US")} of a revision` : "",
+        left.oversized > 0 ? `${left.oversized} source ${left.oversized === 1 ? "file" : "files"} over ${MAX_INDEXED_FILE_BYTES / 1024 / 1024} MiB (generated or minified code)` : "",
+        left.beyondLimit > 0 ? `${left.beyondLimit} ${left.beyondLimit === 1 ? "file" : "files"} beyond the ${MAX_INDEXED_FILES.toLocaleString("en-US")} read per revision` : "",
       ].filter((part) => part !== "");
       warnings.push(`Call flows did not read ${parts.join(" and ")}. Flows through them are absent, which is not evidence of safety.`);
+      if (callFlowAvailability === "no-changes") callFlowAvailability = "partial";
     }
     const missing = takeMissingGrammars();
     if (missing.length > 0) {
@@ -215,7 +216,7 @@ export async function reviewDiff(input: ReviewInput, options: ReviewOptions = {}
   // Structured flows are grouped per changed file in report order, after
   // ranking, so the HTML can order files by the severity of their worst hunk.
   const callFlows = buildCallFlows(reportOrderedTextHunkFiles(result.items, units), trees, nodeDetail);
-  if (callFlows.length > 0) callFlowAvailability = "available";
+  if (callFlows.length > 0 && callFlowAvailability === "no-changes") callFlowAvailability = "available";
   const report: ReviewReport = { title: options.pr?.title || "Focused PR review", source, createdAt: new Date().toISOString(),
     pr: options.pr,
     evidence: { ...evidence, intent: crossCheckIntent(options.pr, units, evidence.agenda, evidence.findings) },

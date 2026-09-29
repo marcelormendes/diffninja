@@ -246,9 +246,10 @@ function pathAllowed(file: string, pathFilters: string[]): boolean {
 
 /**
  * Bounds on what call-flow analysis parses from one revision: a source file over
- * this size is generated or minified code, not something a person reads, and the
- * files beyond the limit are left out (in path order, so the same repository
- * always leaves out the same ones). The review names what was skipped.
+ * this size is generated or minified code, not something a person reads. Past
+ * the file limit, the files the diff changes are read first, then the rest of
+ * their directories, then everything else in code-point order, so the same range
+ * leaves out the same files on every machine. The review names what was skipped.
  */
 export const MAX_INDEXED_FILE_BYTES = 1024 * 1024;
 export const MAX_INDEXED_FILES = 15_000;
@@ -260,20 +261,35 @@ export interface SkippedSources {
   beyondLimit: number;
 }
 
-const skipped: SkippedSources = { oversized: 0, beyondLimit: 0 };
+/** Paths, so a file left out of both revisions of a diff counts once. */
+const skipped = { oversized: new Set<string>(), beyondLimit: new Set<string>() };
 
 /** What was left out of call-flow analysis since the last call; clears the count. */
 export function takeSkippedSources(): SkippedSources {
-  const counts = { ...skipped };
-  skipped.oversized = 0;
-  skipped.beyondLimit = 0;
+  const counts = { oversized: skipped.oversized.size, beyondLimit: skipped.beyondLimit.size };
+  skipped.oversized.clear();
+  skipped.beyondLimit.clear();
   return counts;
+}
+
+/**
+ * Paths that differ between two snapshots, both sides of a rename included,
+ * relative to `cwd` as the snapshot listings are.
+ */
+export function changedPaths(cwd: string, from: Snapshot, to: Snapshot): Set<string> {
+  const refs = [from, to].filter((snapshot) => snapshot.kind === "commit").map((snapshot) => snapshot.ref);
+  return new Set(git(cwd, ["diff", "--relative", "--name-only", "-z", "--no-renames", ...refs, "--"]).split("\0").filter(Boolean));
+}
+
+function directoryOf(path: string): string {
+  return path.slice(0, path.lastIndexOf("/") + 1);
 }
 
 export function listSnapshotFiles(
   cwd: string,
   snapshot: Snapshot,
   pathFilters: string[] = [],
+  changed: ReadonlySet<string> = new Set(),
   limits: { readonly maxFiles: number; readonly maxFileBytes: number } = { maxFiles: MAX_INDEXED_FILES, maxFileBytes: MAX_INDEXED_FILE_BYTES },
 ): SnapshotFile[] {
   const files =
@@ -283,11 +299,22 @@ export function listSnapshotFiles(
 
   const wanted = files
     .filter((file) => pathAllowed(file.path, pathFilters))
-    .sort((a, b) => a.path.localeCompare(b.path));
-  const small = wanted.filter((file) => file.size === undefined || file.size <= limits.maxFileBytes);
-  skipped.oversized += wanted.length - small.length;
-  skipped.beyondLimit += Math.max(0, small.length - limits.maxFiles);
-  return small.slice(0, limits.maxFiles);
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const small: SnapshotFile[] = [];
+  for (const file of wanted) {
+    if (file.size !== undefined && file.size > limits.maxFileBytes) skipped.oversized.add(file.path);
+    else small.push(file);
+  }
+  if (small.length <= limits.maxFiles) return small;
+
+  const directories = new Set([...changed].map(directoryOf));
+  const first: SnapshotFile[] = [], neighbours: SnapshotFile[] = [], rest: SnapshotFile[] = [];
+  for (const file of small) {
+    (changed.has(file.path) ? first : directories.has(directoryOf(file.path)) ? neighbours : rest).push(file);
+  }
+  const kept = new Set([...first, ...neighbours, ...rest].slice(0, limits.maxFiles));
+  for (const file of small) if (!kept.has(file)) skipped.beyondLimit.add(file.path);
+  return small.filter((file) => kept.has(file));
 }
 
 const BATCH_BYTES = 32 * 1024 * 1024;

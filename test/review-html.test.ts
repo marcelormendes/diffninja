@@ -497,11 +497,15 @@ describe("review HTML", () => {
     const patch = visible(renderReview(report([item()])));
     expect(patch).toMatch(/git.range/i);
     expect(patch).not.toMatch(/<svg class="cf-svg"/);
-    for (const availability of ["no-changes", "failed"] as const) {
+    for (const availability of ["no-changes", "partial", "failed"] as const) {
       const html = visible(renderReview(report([item()], { callFlowAvailability: availability })));
       expect(html).not.toMatch(/<svg class="cf-svg"/);
       expect(html).not.toMatch(/needs a git.range|requires a git.range/i);
     }
+    // Files the analysis left out may hold the path, so a partial analysis never says none reaches the change.
+    const partial = visible(renderReview(report([item()], { callFlowAvailability: "partial" })));
+    expect(partial).toContain("call flows left out some source files");
+    expect(partial).not.toContain("No call path reaches a changed file");
   });
 
   test("call-flow files use their worst hunk and link directly to that diff", () => {
