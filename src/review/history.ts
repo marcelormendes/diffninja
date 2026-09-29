@@ -195,7 +195,10 @@ function hunkHistories(cwd: string, base: string, units: readonly ReviewUnit[]):
     let blame: ParsedBlame;
     try {
       const args = ranges(hunks.flatMap((hunk) => hunk.lines)).flatMap(([a, b]) => ["-L", `${a},${b}`]);
-      blame = parseBlame(git(cwd, ["blame", "--porcelain", ...args, base, "--", file]));
+      // --no-textconv: like `git diff` in input.ts, blame would otherwise run a textconv helper
+      // that the repository's config or attributes select. A git too old to know the option
+      // fails here and the file simply has no line history.
+      blame = parseBlame(git(cwd, ["blame", "--no-textconv", "--porcelain", ...args, base, "--", file]));
     } catch {
       // A file absent at the base (renamed or copied) has no line history here.
       continue;
