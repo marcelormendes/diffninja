@@ -196,7 +196,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     Both include the same JSON in text `content`. Failures return `isError: true`
     with the message as text and no partial report.
   - Connected pages belong to the MCP connection and close on disconnect.
-    Repeated calls for one PR reuse its page; no review is submitted by the tool.
+    Repeated calls for one PR reuse its page; no review is submitted and no file
+    is marked Viewed by the tool.
   - A review never downloads, installs or builds anything through diffninja.
     Inline diffs run no process and open no connection. A git-range review runs
     read-only git plumbing (`blame --no-textconv`; `git`/`gh` resolved to
@@ -280,10 +281,17 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   and access control in layers. Every route of a session (page, `/api/*`,
   `/flow`) lives under `/<256-bit secret>/` (`routeOf`, constant-time compare):
   a local process that was never handed the link gets a 404 for everything and
-  cannot read the PR or post a review as the engineer. The agent is handed the
-  link, and the page carries the CSRF token, so an agent that can fetch local
-  URLs can submit; docs must not claim otherwise (`docs/security.md`), and
-  `nextSteps` tells it never to. Loopback-only
+  cannot read the PR, post a review or set a Viewed mark as the engineer. The
+  agent is handed the link, and the page carries the CSRF token, so an agent
+  that can fetch local URLs can submit and can toggle Viewed marks; docs must
+  not claim otherwise (`docs/security.md`), and `nextSteps` tells it never to
+  submit or open the page. The page writes to GitHub in exactly two ways, a
+  review (`POST api/submit`) and a Viewed mark of one changed file of the loaded
+  snapshot (`POST api/viewed`), both behind that one gate (`requestIsTrusted`,
+  the CSRF token, the 256 KiB and 15 s limits). The other POST routes
+  (`api/load`, `api/preview`, `api/reconcile`) read GitHub or build a payload and
+  write nothing there. Adding a route or a `gh` write means updating this
+  paragraph and `docs/security.md` in the same change. Loopback-only
   Host/Origin/`Sec-Fetch-Site`/CSRF checks defend against browsers, and the
   page's CSP nonce is fresh per response and never the CSRF token. At most 10
   connected pages stay open per connection (the one used least recently closes,
