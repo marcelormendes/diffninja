@@ -152,9 +152,13 @@ export interface ConnectedReviewDeps {
   timeoutMs?: number;
 }
 
-/** No prompt, no pager, no update notice, and never a host other than github.com. */
+/**
+ * No prompt, no pager, no update notice, no usage telemetry (gh reports each
+ * command, its flag names, a device id and which agent runs it to GitHub unless
+ * told not to), and never a host other than github.com.
+ */
 function ghEnvironment(): NodeJS.ProcessEnv {
-  return { ...process.env, GH_HOST: GITHUB_HOST, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" };
+  return { ...process.env, GH_HOST: GITHUB_HOST, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1", GH_TELEMETRY: "false", DO_NOT_TRACK: "1" };
 }
 
 /** Runs the real `gh` with an explicit argv (never a shell) and a hard deadline. */

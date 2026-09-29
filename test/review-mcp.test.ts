@@ -1315,6 +1315,27 @@ describe("review_diff connected pull request mode", () => {
     });
   });
 
+  test("in auto mode a link inside a real diff is source the change adds and is never followed, while a message that names a pull request still is", async () => {
+    await withFakeGh(async ({ log }) => {
+      blockNetwork();
+      const client = await connectReview();
+
+      // A hostile change can put a link to any pull request the reviewer can see in its own text.
+      const inDiff = await review(client, { diff: URL_IN_DIFF });
+      expect(inDiff.isError).toBeFalsy();
+      expect(reportOf(inDiff).source).toBe("MCP inline diff");
+      // Even a fragment that is only a hunk (which this tool then refuses to rank) is not navigated.
+      await review(client, { diff: ["@@ -1,2 +1,3 @@", " context", `+See ${GH_URL}`, " tail"].join("\n") });
+      expect(ghCalls(log)).toEqual([]);
+
+      // Text that is not a diff and names a pull request is a request to review it.
+      const payload = await opened(client, await review(client, { diff: `Please review ${GH_URL}` }));
+      expect(payload).toMatchObject({ mode: "connected", pr: GH_URL });
+      expect(ghCalls(log).some(line => line.startsWith(`pr view ${GH_URL} --json`))).toBe(true);
+      expect(fetchAttempts).toEqual([]);
+    });
+  });
+
   test("mode static reviews a diff literally and never starts connected", async () => {
     await withFakeGh(async ({ log }) => {
       blockNetwork();

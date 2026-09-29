@@ -54,6 +54,16 @@ function schemeStart(head: string): number {
 const MAX_TOKEN_SIDE = 300;
 const MAX_MARKERS = 500;
 
+/**
+ * Whether text is a unified diff (a `diff --git` header, or a hunk header) rather
+ * than a message that names a pull request. A link inside a real diff is source
+ * text the change adds, which a hostile change can put anywhere; only text that
+ * is not a diff may point at a pull request through the `diff` argument.
+ */
+export function looksLikeUnifiedDiff(text: string): boolean {
+  return /^(?:diff --git |@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@|--- \S.*\r?\n\+\+\+ \S)/m.test(text);
+}
+
 /** Every `/pull/`-shaped token in one string; a bare host or repo is not one. */
 function pullTokens(text: string): string[] {
   const tokens: string[] = [];
