@@ -156,3 +156,46 @@ describe("finish_review goal summary", () => {
     }
   });
 });
+
+describe("suggested comments on a file whose name holds a hidden character", () => {
+  /** One hunk per file, each adding line 1. */
+  function reportOf(files: readonly string[]): ReviewReport {
+    return {
+      ...report(),
+      items: files.map((file, index) => ({
+        id: `hunk-${index + 1}`, file, header: "@@ -1 +1 @@", added: 1, removed: 1, oldStart: 1, newStart: 1,
+        diff: "@@ -1 +1 @@\n-old()\n+new()\n", status: "attention" as const, priority: 50, reasons: [],
+      })),
+      questions: [],
+    };
+  }
+  const comment = (path: string) => ({ path, line: 1, side: "RIGHT" as const, body: "Should this stay?", severity: "minor" as const });
+
+  test("take the path as the agent was shown it and keep the file's own path, so the comment anchors to the real line", async () => {
+    const pages = new ReportPages();
+    try {
+      const review = reportOf(["lib\u200B.ts"]);
+      const { reviewId } = await pages.publish(review);
+      expect(pages.suggestComments(reviewId, [comment("lib⟦U+200B⟧.ts")], "agent 1.0").suggested).toBe(1);
+      expect(review.agentComments?.comments.map((kept) => kept.path)).toEqual(["lib\u200B.ts"]);
+      // The file's own path still names it.
+      pages.suggestComments(reviewId, [comment("lib\u200B.ts")], "agent 1.0");
+      expect(review.agentComments?.comments.map((kept) => kept.path)).toEqual(["lib\u200B.ts"]);
+    } finally {
+      await pages.close();
+    }
+  });
+
+  test("refuse a path two different files are shown as, keeping the previous suggestions", async () => {
+    const pages = new ReportPages();
+    try {
+      // One file is literally named with the marker text the other is shown as.
+      const review = reportOf(["lib\u200B.ts", "lib⟦U+200B⟧.ts"]);
+      const { reviewId } = await pages.publish(review);
+      expect(() => pages.suggestComments(reviewId, [comment("lib⟦U+200B⟧.ts")], "agent 1.0")).toThrow(/more than one file/);
+      expect(review.agentComments).toBeUndefined();
+    } finally {
+      await pages.close();
+    }
+  });
+});

@@ -8,7 +8,7 @@ import { callFlowFilesOf, connectedAnalysisOf, type ConnectedAnalysisView } from
 import { ConnectedReview } from "./github.js";
 import { detectPullRequest, looksLikeUnifiedDiff } from "./pr-input.js";
 import { boundedForAgent } from "./result-budget.js";
-import { hiddenControlsIn, visibleControls } from "./hidden-characters.js";
+import { withVisibleControls } from "./hidden-characters.js";
 import { renderBusinessPage, renderCallFlowPage, renderReview } from "./html.js";
 import { MAX_SUGGESTED_COMMENTS, ReportPages } from "./report-pages.js";
 import { reviewDiff } from "./service.js";
@@ -309,6 +309,14 @@ class ReviewServer extends McpServer {
   }
 }
 
+/**
+ * Longest function id and file path the agent may send back. It sends them as
+ * it was shown them, where each hidden character is a marker of up to eight
+ * characters, so the bounds are eight times those of the raw text.
+ */
+const MAX_SHOWN_ID_CHARS = 8 * 1200;
+const MAX_SHOWN_PATH_CHARS = 8 * 1024;
+
 const reviewIdSchema = z.string().regex(/^[a-f0-9]{32}$/).describe("The reviewId a review_diff result returned on this connection.");
 const answerSchema = z.object({
   questionId: z.string().regex(/^q\d{1,3}$/).describe("A question id from that result, such as q1."),
@@ -316,7 +324,7 @@ const answerSchema = z.object({
 }).strict();
 const orderSchema = z.array(z.string().min(1).max(512)).min(1).describe("Every item id of that review exactly once, the hunks a maintainer is most likely to push back on first.");
 const commentSchema = z.object({
-  path: z.string().min(1).max(1024).describe("The file's path in the diff."),
+  path: z.string().min(1).max(MAX_SHOWN_PATH_CHARS).describe("The file's path in the diff."),
   line: z.number().int().positive().describe("The line number on that side."),
   side: z.enum(["LEFT", "RIGHT"]).describe("RIGHT for an added or context line (new side), LEFT for a removed line (old side)."),
   body: z.string().max(1000).describe("The comment, as the reviewer would write it: one short line, no labels or formatting."),
@@ -348,13 +356,13 @@ const stepSchema = z.object({
   change: z.enum(["unchanged", "added", "changed", "removed"]).describe("added, changed, or removed when this change does that to the step; unchanged for context."),
   detail: z.string().max(1000).optional().describe(`The business rule or reason behind the step, at most ${MAX_DETAIL_CHARS} characters.`),
   before: z.string().max(1000).optional().describe("For a changed step only: how it worked before this change."),
-  functions: z.array(z.string().min(1).max(1200)).max(12).optional().describe("Ids from the review's functions list that carry this step out."),
+  functions: z.array(z.string().min(1).max(MAX_SHOWN_ID_CHARS)).max(12).optional().describe("Ids from the review's functions list that carry this step out."),
   hunks: z.array(z.string().min(1).max(512)).max(24).optional().describe("items[].id values of the hunks that change this step."),
   next: z.array(branchSchema).max(MAX_STEP_EXITS).optional().describe("Where the process goes next. Omit on a start or action step that simply continues to the next step listed; an end has none."),
 }).strict();
 const explanationSchema = z.object({
   functions: z.array(z.object({
-    id: z.string().min(1).max(1200).describe("A function id from the review's functions list, such as saleor/order/calculations.py#fetch_order_prices_if_expired."),
+    id: z.string().min(1).max(MAX_SHOWN_ID_CHARS).describe("A function id from the review's functions list, such as saleor/order/calculations.py#fetch_order_prices_if_expired."),
     purpose: z.string().max(1000).describe(`One plain sentence, at most ${MAX_PURPOSE_CHARS} characters: what the function does for the business or its users, without code names.`),
   }).strict()).max(MAX_EXPLAINED_FUNCTIONS).describe("A purpose for every function in the review's functions list, each once; [] when the list is empty."),
   processes: z.array(z.object({
@@ -382,19 +390,6 @@ const CONNECTED_SUMMARY_ERROR = "finish_review for a pull request review must se
 export interface ReviewServerOptions {
   /** Looks up the newest published diffninja version; leave out to never check. */
   readonly latestVersion?: LatestVersion;
-}
-
-/**
- * A review result as the agent gets it. The pull request's words are written by
- * other people, and some characters (the Unicode tag block, bidirectional
- * overrides) carry text or reorder it without being visible to the person reading
- * along, so they are shown as ⟦U+XXXX⟧ markers rather than passed on.
- */
-function neutralized<Payload>(payload: Payload): Payload {
-  const text = JSON.stringify(payload);
-  if (hiddenControlsIn(text).length === 0) return payload;
-  // SAFETY: the replacement only swaps characters inside JSON strings for plain text, so the result parses to the same shape.
-  return JSON.parse(visibleControls(text)) as Payload;
 }
 
 export function createReviewServer(options: ReviewServerOptions = {}): McpServer {
@@ -448,7 +443,7 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
           // Nothing to finish without an analysis: the page itself says why.
           if ("unavailable" in analysis) {
             const unavailable = { mode: "connected", pr: target, snapshot: loaded, url: binding.url, analysisUnavailable: analysis.unavailable };
-            const safe = neutralized(unavailable);
+            const safe = withVisibleControls(unavailable);
             return { content: [{ type: "text", text: JSON.stringify(safe) }], structuredContent: { ...safe } };
           }
           connectedUrls.set(analysis.reviewId, binding.url);
@@ -463,7 +458,7 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
             analysisScope: analysis.scope,
             ...(reports.isFinished(analysis.reviewId) ? { url: binding.url, reportUrl: analysis.reportUrl } : { nextSteps: steps(CONNECTED_NEXT_STEPS) }),
           };
-          const safe = neutralized(payload);
+          const safe = withVisibleControls(payload);
           return { content: [{ type: "text", text: JSON.stringify(safe) }], structuredContent: { ...safe } };
         }
         // No link anywhere: connected intent fails before any access instead of
@@ -483,7 +478,7 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
       // The agent reads the report as data; the human reads the same report as a page.
       const published = await reports.publish(report);
       const payload = { ...boundedForAgent(undefined, report).report, reviewId: published.reviewId, nextSteps: steps(STATIC_NEXT_STEPS) };
-      const safe = neutralized(payload);
+      const safe = withVisibleControls(payload);
       return { content: [{ type: "text", text: JSON.stringify(safe) }], structuredContent: { ...safe } };
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };

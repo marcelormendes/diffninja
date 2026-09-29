@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { ReviewItem, ReviewReport, SuggestedComment } from "./types.js";
 import type { UpdateNotice } from "./update-check.js";
 import { checkExplanation, explanationCounts, normalizeExplanation, type ExplanationCounts, type ExplanationInput } from "./explanation.js";
+import { visibleControls } from "./hidden-characters.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
 export const MAX_REPORT_PAGES = 20;
@@ -185,18 +186,39 @@ function applyOrder(report: ReviewReport, itemIds: readonly string[], orderedBy:
   report.agentOrder = { itemIds: [...itemIds], orderedBy, orderedAt: new Date().toISOString(), diffninjaIds };
 }
 
-/** Every comment names a line of the diff, one per line, and reads like the reviewer's own. */
-function checkComments(report: ReviewReport, comments: readonly SuggestedComment[]): void {
+/**
+ * The file each path a comment may give stands for: its own path, and the path
+ * as the agent was shown it, with hidden characters as ⟦U+XXXX⟧ markers. A
+ * path two different files are shown as maps to undefined.
+ */
+function commentPaths(report: ReviewReport): Map<string, string | undefined> {
+  const paths = new Map<string, string | undefined>();
+  for (const { file } of report.items) {
+    for (const path of [file, visibleControls(file)]) paths.set(path, paths.has(path) && paths.get(path) !== file ? undefined : file);
+  }
+  return paths;
+}
+
+/**
+ * Every comment names a line of the diff, one per line, and reads like the
+ * reviewer's own. The comments come back with each file's own path, so they
+ * anchor to the lines the human reviews.
+ */
+function checkComments(report: ReviewReport, comments: readonly SuggestedComment[]): SuggestedComment[] {
   const anchors = new Set<string>();
   for (const item of report.items) anchorsOf(item, anchors);
+  const paths = commentPaths(report);
   const seen = new Set<string>();
-  comments.forEach((comment, index) => {
-    const key = anchorKey(comment.path, comment.side, comment.line);
+  return comments.map((comment, index) => {
+    if (paths.has(comment.path) && paths.get(comment.path) === undefined) throw new Error(`comments[${index}] names ${comment.path}, which more than one file of this diff is shown as; this review cannot tell which one it means.`);
+    const path = paths.get(comment.path) ?? comment.path;
+    const key = anchorKey(path, comment.side, comment.line);
     if (!anchors.has(key)) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
     if (seen.has(key)) throw new Error(`comments[${index}] is a second comment on the same line; combine them into one.`);
     const problem = commentProblem(comment.body);
     if (problem !== undefined) throw new Error(`comments[${index}] ${problem}.`);
     seen.add(key);
+    return { ...comment, path };
   });
 }
 
@@ -336,12 +358,12 @@ export class ReportPages {
       throw new Error(`answers leave out ${unanswered.length} of ${report.questions.length} questions, starting with ${unanswered[0].id}; answer every question, cannot-tell when the code does not settle it.`);
     }
     checkOrder(report, input.order);
-    checkComments(report, input.comments);
+    const comments = checkComments(report, input.comments);
     const summary = checkSummary(input.summary);
     if (input.explanation !== undefined) checkExplanation(report, input.explanation);
     applyAnswers(report, input.answers, by);
     applyOrder(report, input.order, by);
-    applyComments(report, input.comments, by);
+    applyComments(report, comments, by);
     if (summary !== undefined) report.agentSummary = { text: summary, summarizedBy: by };
     if (input.explanation !== undefined) report.agentExplanation = normalizeExplanation(input.explanation, by);
     page.finished = true;
@@ -401,8 +423,7 @@ export class ReportPages {
    */
   suggestComments(reviewId: string, comments: readonly SuggestedComment[], suggestedBy: string): RecordedComments {
     const { page, report } = this.review(reviewId);
-    checkComments(report, comments);
-    applyComments(report, comments, suggestedBy);
+    applyComments(report, checkComments(report, comments), suggestedBy);
     this.rerender(page, report);
     return { reviewId, suggested: comments.length };
   }

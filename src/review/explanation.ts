@@ -15,6 +15,7 @@
  */
 
 import { testLikeFile } from "./file-role.js";
+import { visibleControls } from "./hidden-characters.js";
 import type { CallFlowNode, ReviewReport } from "./types.js";
 
 /** Most functions one review asks the agent to explain; changed code first. */
@@ -128,8 +129,12 @@ function shortName(name: string): string {
   return segments.length === 0 ? bare : segments[segments.length - 1];
 }
 
+/**
+ * The id is minted the way the agent is shown it, hidden characters as
+ * ⟦U+XXXX⟧ markers, so the id it sends back names the same function.
+ */
 export function functionId(file: string, name: string): string {
-  return `${file}#${shortName(name)}`;
+  return visibleControls(`${file}#${shortName(name)}`);
 }
 
 /** The function id a call-flow node's resolved definition has, or undefined when it resolved none. */

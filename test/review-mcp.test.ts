@@ -1542,6 +1542,76 @@ describe("text written by the pull request's author", () => {
     }
     expect(reportOf(result).pr?.title).toContain("⟦U+202E⟧");
   });
+
+  test("a file whose name holds a zero-width space is shown with a marker, and finish_review takes the ids and paths exactly as shown", async () => {
+    blockNetwork();
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-mcp-zwsp-"));
+    try {
+      const run = (args: string[]) => execFileSync("git", args, { cwd: dir });
+      run(["init", "-b", "main"]);
+      writeFileSync(join(dir, "app.ts"), "export function run(n: number) {\n  return n;\n}\n");
+      run(["add", "."]);
+      run([...GIT_ENV, "commit", "-m", "base"]);
+      writeFileSync(join(dir, "utils\u200B.ts"), "export function helper(n: number) {\n  return n + 1;\n}\n");
+      writeFileSync(join(dir, "app.ts"), "import { helper } from './utils\u200B';\nexport function run(n: number) {\n  return helper(n);\n}\n");
+      run(["add", "-A"]);
+      run([...GIT_ENV, "commit", "-m", "head"]);
+      const client = await connectReview();
+
+      const range = reportOf(await review(client, { mode: "static", repo: dir, from: "HEAD~1", to: "HEAD" }));
+      expect(range.functions?.map((fn) => fn.id)).toContain("utils⟦U+200B⟧.ts#helper");
+      const explained = await finishReview(client, { ...staticFinish(range.reviewId, range), explanation: minimalExplanation(range) });
+      expect(explained.isError, textOf(explained)).toBeFalsy();
+      // SAFETY: finish_review answers with the finished shape; the link asserted here is its own.
+      const page = await loopback((JSON.parse(textOf(explained)) as Finished).reportUrl);
+      expect(page?.body).toContain("Handles one part of the shop");
+
+      const file = "lib\u200B.ts";
+      const diff = [`diff --git a/${file} b/${file}`, "index 1111111..2222222 100644", `--- a/${file}`, `+++ b/${file}`, "@@ -1,3 +1,3 @@", " export function f() {", "-  return 1;", "+  return 2;", " }", ""].join("\n");
+      const inline = reportOf(await review(client, { mode: "static", diff }));
+      expect(inline.items[0].file).toBe("lib⟦U+200B⟧.ts");
+      const comments = [{ path: inline.items[0].file, line: 2, side: "RIGHT", body: "Should this stay at one?", severity: "minor" }];
+      const commented = await finishReview(client, { ...staticFinish(inline.reviewId, inline), comments });
+      expect(commented.isError, textOf(commented)).toBeFalsy();
+      expect(fetchAttempts).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an id or a path that its markers make eight times longer still goes back to finish_review", async () => {
+    blockNetwork();
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-mcp-long-"));
+    try {
+      const run = (args: string[]) => execFileSync("git", args, { cwd: dir });
+      // A valid identifier of 301 characters, 150 of them zero-width joiners.
+      const name = `a${"\u200Da".repeat(150)}`;
+      run(["init", "-b", "main"]);
+      writeFileSync(join(dir, "auth.js"), "export function check(user) {\n  return user.ok;\n}\n");
+      run(["add", "."]);
+      run([...GIT_ENV, "commit", "-m", "base"]);
+      writeFileSync(join(dir, "auth.js"), `export function check(user) {\n  return ${name}(user);\n}\nfunction ${name}(user) {\n  return user.ok;\n}\n`);
+      run(["add", "-A"]);
+      run([...GIT_ENV, "commit", "-m", "head"]);
+      const client = await connectReview();
+
+      const range = reportOf(await review(client, { mode: "static", repo: dir, from: "HEAD~1", to: "HEAD" }));
+      const long = range.functions?.find((fn) => fn.id.startsWith("auth.js#a⟦U+200D⟧a"));
+      expect(long?.id.length).toBeGreaterThan(1200);
+      const explained = await finishReview(client, { ...staticFinish(range.reviewId, range), explanation: minimalExplanation(range) });
+      expect(explained.isError, textOf(explained)).toBeFalsy();
+
+      const file = `src/${"a\u200B".repeat(150)}.ts`;
+      const diff = [`diff --git a/${file} b/${file}`, "index 1111111..2222222 100644", `--- a/${file}`, `+++ b/${file}`, "@@ -1,3 +1,3 @@", " export function f() {", "-  return 1;", "+  return 2;", " }", ""].join("\n");
+      const inline = reportOf(await review(client, { mode: "static", diff }));
+      expect(inline.items[0].file.length).toBeGreaterThan(1024);
+      const comments = [{ path: inline.items[0].file, line: 2, side: "RIGHT", body: "Should this stay at one?", severity: "minor" }];
+      const commented = await finishReview(client, { ...staticFinish(inline.reviewId, inline), comments });
+      expect(commented.isError, textOf(commented)).toBeFalsy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("how many pages one connection keeps open", () => {
