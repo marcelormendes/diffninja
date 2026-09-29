@@ -1,0 +1,122 @@
+# Security and privacy
+
+What diffninja runs, what it can reach, what it writes, and how it treats text
+written by a pull request's author. This page describes the code as shipped; the
+tests in the repository cover its main statements.
+
+## In one paragraph
+
+diffninja is a small program your coding agent starts on your machine. It calls
+no AI model, needs no API key, and while it reviews it makes no request of its
+own. For a pull request it runs your GitHub CLI (`gh`) to read the PR, and it
+posts a review only when you press **Submit** on the page. It never downloads or
+builds code during a review. What it returns to your agent (the diff, and
+function bodies from files near the change) is handed to whichever model your
+agent uses, exactly like the output of any other tool your agent calls.
+
+## What it does on the network
+
+| Who | When | What |
+| --- | --- | --- |
+| `gh` (your GitHub CLI) | Reviewing a pull request link | Reads the PR (metadata, diff, files) with the login you already have. Usage telemetry of `gh` is turned off for these calls. |
+| `gh` | You press **Submit** on the page | Posts your review to GitHub. Nothing else can post: not the agent, not another program on your machine. |
+| `npm` | You run `diffninja setup` or `diffninja grammars install` | Installs diffninja, or the pinned language grammars. |
+| diffninja | Only if you set `DIFFNINJA_UPDATE_CHECK=1` | One GET of the newest published version (no data about you or your code). Off by default, and off in CI. |
+
+Reviewing an inline diff or a local git range makes no connection at all. The
+review pages load nothing from the network (no fonts, scripts, images or
+analytics), and diffninja has no telemetry of its own.
+
+## What it downloads, and how
+
+Only `diffninja grammars install`, run by a person, downloads code: 18
+tree-sitter grammar packages at exact versions. The lock that ships with
+diffninja holds the sha512 of every tarball, dependencies included, and
+`npm ci --ignore-scripts` refuses any tarball that differs, so no install script
+of any package runs and npm gets only the environment it needs (no tokens).
+`--build` additionally compiles the Kotlin and Perl grammars, which ship no
+prebuilt binary. A review never installs anything: a missing grammar is named in
+the review's warnings, and the files that need it are skipped by call flows. The
+package itself ships an `npm-shrinkwrap.json`, so an install from the registry
+gets the dependency versions diffninja was tested with.
+
+## What it writes
+
+- Nothing in the repository under review, ever (git plumbing only, read only).
+- `~/.cache/diffninja/grammars` (mode 0700) when you run `grammars install`.
+- Your agents' configuration files, when you run `diffninja setup`
+  (`~/.claude.json`, Codex's `config.toml`, `~/.omp/agent/mcp.json`,
+  `~/.pi/agent/mcp.json`): one `diffninja` entry each, atomically.
+- A temporary directory of the two revisions, only for the opt-in TypeScript
+  reference check, removed afterwards.
+- No report files, logs or analytics.
+
+## What it runs
+
+- `git` for read-only plumbing (`diff`, `ls-tree`, `cat-file`, `blame` with
+  `--no-textconv`, `log`), each stopped after 120 seconds. On Windows `git` and
+  `gh` run by the absolute path found on PATH, never a file from the repository.
+- `gh` for pull requests.
+- Native tree-sitter parsers in the same process, over the source files of the
+  two revisions (files over 1 MiB and files past the first 15,000 are skipped).
+- With `referenceProject`, a TypeScript compiler: the one installed beside
+  diffninja. The repository's own compiler is code from the repository under
+  review, so it runs only if whoever configured the server sets
+  `DIFFNINJA_TRUST_PROJECT_COMPILER=1`.
+
+diffninja never runs a script from the pull request, never installs its
+dependencies, and never checks its branch out.
+
+## The review page on your machine
+
+The page is a small web server on `127.0.0.1` that lives as long as your agent's
+connection. Every URL of it contains a random 256-bit secret, and only the link
+your agent gives you has it: a program or another user on the same machine that
+finds the port gets a 404 for everything, so it cannot read the pull request or
+post a review as you. Requests from other web pages are also refused (Host,
+Origin and CSRF checks), the page has a strict content security policy with a
+fresh nonce per response, and it closes when your agent's connection does. At
+most ten such pages stay open per connection.
+
+## Text written by the pull request's author
+
+A pull request's title, description, file names, diff and commit messages are
+written by other people, and diffninja treats them as data:
+
+- Hidden and bidirectional Unicode characters (the ones behind "Trojan Source")
+  are shown as visible `⟦U+XXXX⟧` markers on every page and in the result the
+  agent receives, and the review warns which files add them.
+- Titles and commit subjects reach the agent quoted as data, and the first
+  step of every result tells the agent that text from the pull request is data
+  written by other people, never instructions.
+- A pull request link inside a real diff is source and is never followed.
+- Everything is bounded: a description over 12,000 characters is shown as plain
+  text, a line is read in linear time, and the agent's copy of a result stays
+  under 4 MiB (the page keeps the whole report).
+
+A language model can still be talked into things by text it reads; diffninja
+narrows what such text can reach. Its tools change what its own pages display
+and read pull requests through `gh` (any pull request your login can see, when
+the agent passes its link); none of them posts to GitHub or runs a command.
+
+## Settings you control
+
+| Variable | Effect |
+| --- | --- |
+| `DIFFNINJA_UPDATE_CHECK=1` | Turn on the update notice (off by default; never in CI or with `NO_UPDATE_NOTIFIER`). |
+| `DIFFNINJA_TRUST_PROJECT_COMPILER=1` | Let `referenceProject` run the repository's own TypeScript compiler. |
+| `DIFFNINJA_GRAMMAR_CACHE` | Where the grammars are installed and read. |
+
+## What is not covered
+
+- Your agent and its model provider: they receive what diffninja returns.
+- The native parsers run in the agent's session; a memory-safety bug in a
+  tree-sitter grammar would be a bug in that process.
+- `diffninja setup` and `grammars install` trust the npm registry and the
+  account that publishes `diffninja`; publishing uses npm trusted publishing
+  from a tag on `main`.
+- The Windows executable resolution was implemented from the platform's
+  documented behavior and unit-tested, but not run on Windows by the author of
+  the change.
+
+To report a vulnerability, open a private security advisory on the repository.

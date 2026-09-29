@@ -152,11 +152,17 @@ Authentication is delegated entirely to `gh`: no diffninja token store, PAT
 UI, or credential extraction. `GH_TOKEN` (and GitHub CLI's other environment
 overrides) can override stored credentials.
 
-The loopback server validates Host and Origin, requires a per-session CSRF
-token on mutations, disables caching/framing, and serves a restrictive CSP.
-Its only API routes are `GET /api/state` and `POST /api/load`,
-`/api/preview`, `/api/submit`, `/api/reconcile`; none is a generic GitHub or
-command proxy.
+Every route of the loopback server lives under an unguessable path,
+`http://127.0.0.1:PORT/<64 hex characters>/`, which only the link the agent
+hands you contains: another program or user on the same machine that finds the
+port gets a 404 for everything and cannot read the pull request or post a
+review as you. On top of that the server validates Host and Origin, requires a
+per-session CSRF token on mutations, disables caching/framing, and serves a
+CSP with a fresh nonce per response. Its only API routes are
+`GET api/state`, `GET api/analysis` and `POST api/load`, `api/preview`,
+`api/submit`, `api/reconcile` under that path; none is a generic GitHub or
+command proxy. At most ten of these pages stay open per agent connection; the
+oldest closes and reviewing its pull request again opens a fresh one.
 
 ## Setup
 
@@ -202,20 +208,18 @@ policy.
   imports `GLIBCXX_3.4.31` (GCC 13.1+, i.e. libstdc++ from Ubuntu 24.04 or
   newer). `npm rebuild --prefix <installed diffninja> tree-sitter
   --build-from-source` rebuilds it against the host toolchain.
-- **Grammar cache.** Git-range reviews install a missing grammar with npm
-  into `CALLDIFF_GRAMMAR_CACHE` (default `~/.cache/calldiff/grammars`,
-  `C:\Users\<you>\.cache\calldiff\grammars` on Windows). It writes there and
-  needs the network; inline diff text never does. Preinstalling the same
-  grammars keeps a review offline:
-
-  ```bash
-  export CALLDIFF_GRAMMAR_CACHE="$HOME/.cache/calldiff/grammars"
-  npm install --prefix "$CALLDIFF_GRAMMAR_CACHE" --no-save --no-fund --no-audit \
-    --legacy-peer-deps tree-sitter-python
-  ```
-
-  A grammar that cannot be installed is reported per file
-  (`warn: failed to parse <file>`) and the review still runs on the diff and
-  whatever call flows resolved. Some grammar packages have no prebuild for
-  the running platform and compile with node-gyp on first use, which needs a
-  C/C++ toolchain and Python.
+- **Grammars.** Call flows read JavaScript and TypeScript with grammars that
+  ship in the package. Every other language needs its tree-sitter grammar,
+  and a review never downloads one: run `diffninja grammars install` once (or
+  `npx -y diffninja@latest grammars install`). It installs 18 exact versions
+  with `npm ci --ignore-scripts` from a lock that ships with diffninja (the
+  sha512 of every tarball, dependencies included, is checked, and no package
+  runs an install script) into `~/.cache/diffninja/grammars`
+  (`C:\Users\<you>\.cache\diffninja\grammars` on Windows; `DIFFNINJA_GRAMMAR_CACHE`
+  moves it), a private directory diffninja trusts only if it wrote it for this
+  lock. `diffninja grammars status` shows what is installed. Kotlin and Perl
+  grammars ship no prebuilt binary: `diffninja grammars install --build`
+  compiles them on your machine and needs Python and a C/C++ toolchain. A
+  review without a grammar still runs on the diff, and its warnings name the
+  grammars its call flows skipped. Source files over 1 MiB and files beyond the
+  first 15,000 of a revision are left out of call flows, and the review says so.

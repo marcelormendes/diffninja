@@ -60,13 +60,15 @@ The sections below are the manual equivalents, one CLI at a time.
 | `pr` | string | GitHub PR link; starts a connected review. |
 | `input` | string | Free text containing a GitHub PR link; starts a connected review. |
 | `expectedOutcome` | `{ "title": string, "description": string }` | Exact, untrusted expected-outcome metadata for static analysis. Links here never select a PR. |
-| `referenceProject` | string | Static git range only: repository-relative tsconfig for opt-in diagnostics using the trusted installed TypeScript compiler. |
+| `referenceProject` | string | Static git range only: repository-relative tsconfig for opt-in diagnostics. Runs the TypeScript installed beside diffninja; the repository's own compiler is code from the repository under review, so it runs only if whoever configured the server set `DIFFNINJA_TRUST_PROJECT_COMPILER=1`. |
 
 Rules enforced by the schema and the tool:
 
 - In `auto` (default) or `connected`, a GitHub PR link in `diff`, `repo`,
   `from`, `to`, `pr`, or `input` selects connected mode before static input
-  validation. Different links in one call are rejected. Expected-outcome text
+  validation, except that a link inside text that is a real unified diff (a
+  `diff --git` header or a hunk header) is source the change adds and is never
+  followed. Different links in one call are rejected. Expected-outcome text
   is never interpreted as a target.
 - `connected` requires a link even when a valid or empty diff is supplied.
   It rejects `expectedOutcome` and `referenceProject`: GitHub supplies connected
@@ -187,16 +189,17 @@ library-only calls fold away behind a checkbox. The pull request page shows the
 same flowcharts under the goal and tags each hunk with the steps and rules that
 name it. All of it is attributed to the MCP client that sent it.
 
-## Update notice
+## Update notice (off by default)
 
-When `diffninja-mcp` starts it asks the npm registry once for the newest
-`diffninja` version (only that request; nothing about you or your code is
-sent, and a failure is silent). If a newer release exists, the first
-`review_diff` result tells your agent to say so, and the review pages show a
-line with the command, `npx diffninja@latest setup`, which updates the global
-install and re-points your agents. Restart the agent afterwards. Set
-`NO_UPDATE_NOTIFIER=1` in the environment that launches the server to turn the
-lookup off.
+diffninja makes no request of its own unless you turn this on: set
+`DIFFNINJA_UPDATE_CHECK=1` in the environment that launches `diffninja-mcp`.
+Then the first review in a session asks the npm registry for the newest
+`diffninja` version (one GET; nothing about you or your code is sent, and a
+failure is silent). If a newer release exists, the `review_diff` result tells
+your agent to say so, and the review pages show a line with the command,
+`npx diffninja@latest setup`, which updates the global install and re-points
+your agents. Restart the agent afterwards. It stays off in CI and whenever
+`NO_UPDATE_NOTIFIER` is set.
 
 ## Call examples
 
@@ -218,13 +221,11 @@ evidence, a short reading agenda, and check coverage. Nothing is sent anywhere,
 and the same input always gives the same result. The facts point at what to
 read; interpreting what the change means is up to you and your agent.
 
-Git-range call-flow analysis inherits calldiff's on-demand npm grammar
-installation into `CALLDIFF_GRAMMAR_CACHE` (default
-`~/.cache/calldiff/grammars`). This can write cache files and access npm; the
-tool therefore advertises `readOnlyHint: false`,
-although it does not edit repository source. For strictly offline reviews,
-supply inline diff text or preinstall the required grammars (see
-[reference.md](reference.md#install-time-notes)).
+A review never downloads or builds code. Call flows read JavaScript and
+TypeScript out of the box; for other languages, run `diffninja grammars
+install` once (see [reference.md](reference.md#install-time-notes)). The tool
+advertises `readOnlyHint: false` because it opens loopback pages and holds
+review state for the connection; it does not edit repository source.
 
 ## Per-client setup
 

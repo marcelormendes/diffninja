@@ -49,19 +49,45 @@ metadata/documentation. Grammar support comes from npm dependencies:
   `node_modules` tree into the published package — is not used, and the packed
   tarball contains no `node_modules` entries. "Bundled grammar" in older drafts
   meant the first bullet; it was never npm bundling.
-- Every other language's grammar is fetched on demand into
-  `CALLDIFF_GRAMMAR_CACHE` (default `~/.cache/calldiff/grammars`, or
-  `C:\Users\<you>\.cache\calldiff\grammars` on Windows) by running
-  `npm install --prefix <cache> --no-save --no-fund --no-audit
-  --legacy-peer-deps <spec>`. A grammar already present in the cache is loaded
-  from disk without npm running at all.
+- Every other language's grammar is installed only by a person running
+  `diffninja grammars install [--build]`; a review never downloads or builds
+  anything. The command writes `package.json` and `package-lock.json` from
+  `src/languages/grammar-lock.ts` into `~/.cache/diffninja/grammars` (or
+  `C:\Users\<you>\.cache\diffninja\grammars` on Windows, or
+  `DIFFNINJA_GRAMMAR_CACHE`) and runs `npm ci --ignore-scripts --legacy-peer-deps`
+  there, so every tarball, dependencies included, must match the sha512 in the
+  lock and no install script runs. The grammars load from the prebuilt binaries
+  they ship. Kotlin and Perl ship none: `--build` then runs `npm rebuild` for
+  those two packages only. A `.diffninja-grammars.json` marker holding the lock's
+  digest is written last, and a cache without it (or with another lock's) is not
+  read. The shared calldiff cache from earlier versions is never read.
 
-JavaScript is a transitive dependency, not a direct dependency of diffninja.
-If npm nests it under `tree-sitter-typescript`, the loader cannot resolve it
-directly and instead installs `tree-sitter-javascript` into the grammar cache.
-The local `npm ci` layout exercised this fallback. Thus JavaScript/JSX can
-require on-demand installation too; on Windows preinstall it with `npm.cmd`
-using the same cache recipe as other on-demand grammars.
+`tree-sitter-javascript@^0.25.0` is a direct dependency of diffninja, next to
+`tree-sitter-typescript`, so both load from the package's own `node_modules`
+(`BUNDLED_GRAMMARS` in `grammars.ts` names them; nothing else is ever loaded from
+outside the cache).
+
+### Updating the pinned grammars
+
+The set is `PINS` in `scripts/pin-grammars.mjs`; `src/languages/grammar-lock.ts`
+is generated from it. To move a pin, change the version there, run
+`node scripts/pin-grammars.mjs`, review the generated diff (new transitive
+packages appear in it), run `npm view <package>@<version> scripts maintainers` for
+anything new, and check `node scripts/pin-grammars.mjs --check` passes. The pins
+were resolved from registry.npmjs.org on 2026-09-28; their maintainers are the
+tree-sitter organisation, except `tree-sitter-swift` (alex-pinkus),
+`tree-sitter-solidity` (joranhonig) and `tree-sitter-elixir` (the elixir-lang
+project). `tree-sitter-swift` depends on `tree-sitter-cli`, whose install script
+downloads a binary; with `--ignore-scripts` it is installed and never run.
+
+### The shrinkwrap
+
+`npm-shrinkwrap.json` is the repository's lockfile (there is no
+`package-lock.json`) and ships in the tarball, so that npm installs the
+dependency versions diffninja was tested with when it installs from the
+registry. npm applies it to registry installs only; an install from a local
+tarball, as CI does, ignores it. `test/package-shrinkwrap.test.ts` keeps it in
+step with `package.json`.
 
 ## npm-side configuration (required before the workflow can publish)
 
@@ -430,8 +456,7 @@ for MCP, so a successful start waits for protocol input rather than a banner.
   prebuilds (or an explicit "source build" note) for `tree-sitter-perl`,
   `tree-sitter-kotlin` and the ARM64 gaps in
   `@tree-sitter-grammars/tree-sitter-lua@0.2.0`.
-- **Whether to pin every on-demand grammar** rather than only the two in
-  `installSpecFor`.
+- **Pinning every on-demand grammar:** done (`grammar-lock.ts`), see above.
 - **The first manual publish itself:** still blocked on the maintainer's explicit
   go-ahead and credential use. Nothing in this branch logs in, publishes, tags,
   pushes or merges.
