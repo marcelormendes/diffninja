@@ -1,8 +1,10 @@
 /**
  * Deterministic broken-reference check.
  *
- * Runs the TypeScript compiler that the *opted-in* project installed itself —
- * `ReviewOptions.referenceProject`, a repository-relative `tsconfig.json` — over
+ * Runs a TypeScript compiler — the one installed beside diffninja, or, when the
+ * person who configured the server set DIFFNINJA_TRUST_PROJECT_COMPILER=1, the one
+ * the project installed itself — for `ReviewOptions.referenceProject`, a
+ * repository-relative `tsconfig.json`, over
  * both revisions of the repository, each materialized whole into a temporary
  * directory, and reports the errors the head revision has and the base revision
  * does not. Errors are matched by content, not by line, so a pre-existing error
@@ -17,7 +19,8 @@
  *
  * - The repository is read with git plumbing only (`rev-parse`, `ls-tree`,
  *   `cat-file`): no checkout, no index or working-tree write, no hook, no npm
- *   script, and nothing the pull request defines is executed.
+ *   script, and nothing the pull request defines is executed. The one exception
+ *   is the trusted-compiler switch above: with it, the project's compiler runs.
  * - Files are written only into a fresh directory under the OS temp directory,
  *   only from repository-relative paths with no `..`/absolute/backslash/NUL and
  *   no `node_modules` segment, and only for regular-file blob modes. A symbolic
@@ -179,12 +182,18 @@ interface CompilerSelection {
 /** A condition under which the check must report not-checked, never passed. */
 class Unavailable extends Error {}
 
+export interface ReferenceCheckOptions {
+  /** Use the TypeScript installed beside diffninja (default). Tests turn it off to model a machine that has none. */
+  readonly ownCompiler?: boolean;
+}
+
 export async function checkReferences(
   repo: string,
   base: string,
   head: string,
   units: readonly ReviewUnit[],
   project: string,
+  options: ReferenceCheckOptions = {},
 ): Promise<ReferenceCheckResult> {
   const repoRoot = resolve(repo);
   const projectSpec = project.trim();
@@ -204,7 +213,7 @@ export async function checkReferences(
     }
     const baseSha = resolveCommit(repoRoot, base);
     const headSha = resolveCommit(repoRoot, head);
-    const compiler = loadCompiler(dirname(configPath), repoRoot);
+    const compiler = loadCompiler(dirname(configPath), repoRoot, options.ownCompiler !== false);
     const plan: Plan = {
       ts: compiler.ts,
       compilerEntry: compiler.entry,
@@ -288,13 +297,29 @@ function notChecked(reason: string): ReferenceCheckResult {
 }
 
 /**
- * The opted-in project's own installed compiler. Loading it is the trust
- * boundary the user opened by naming the project: it is the only package that
- * is required, and resolution starts at the project directory.
+ * Whether the person who starts the MCP server trusts the compiler inside the
+ * repository under review. Loading it runs that package's JavaScript in this
+ * process, with the engineer's environment, before any check below. `referenceProject`
+ * is an argument the calling agent chooses after reading untrusted pull request
+ * text, so naming a project is not consent: only this switch, set where the server
+ * is configured, is.
  */
-function loadCompiler(projectDir: string, repoRoot: string): CompilerSelection {
-  for (const dir of projectDir === repoRoot ? [projectDir] : [projectDir, repoRoot]) {
-    const require = createRequire(join(dir, "package.json"));
+const TRUST_PROJECT_COMPILER = "DIFFNINJA_TRUST_PROJECT_COMPILER";
+
+/**
+ * The TypeScript compiler to run. By default only the one installed beside
+ * diffninja itself (never anything inside or above the repository under review);
+ * with DIFFNINJA_TRUST_PROJECT_COMPILER=1 the project's own compiler is preferred,
+ * since it is the version the project builds with.
+ */
+function loadCompiler(projectDir: string, repoRoot: string, ownCompiler: boolean): CompilerSelection {
+  const trusted = process.env[TRUST_PROJECT_COMPILER] === "1";
+  const origins = [
+    ...(trusted ? (projectDir === repoRoot ? [projectDir] : [projectDir, repoRoot]).map((dir) => join(dir, "package.json")) : []),
+    ...(ownCompiler ? [import.meta.url] : []),
+  ];
+  for (const origin of origins) {
+    const require = createRequire(origin);
     let entry: string;
     try {
       entry = require.resolve("typescript");
@@ -302,9 +327,9 @@ function loadCompiler(projectDir: string, repoRoot: string): CompilerSelection {
       continue;
     }
     try {
-      // SAFETY: `typescript` resolved from the opted-in project is the trusted
-      // compiler by contract; a package that cannot serve as one throws here
-      // and the check reports not-checked instead of substituting a checker.
+      // SAFETY: `typescript` resolved from a trusted origin is the compiler by
+      // contract; a package that cannot serve as one throws here and the check
+      // reports not-checked instead of substituting a checker.
       const ts = require(entry) as CompilerApi;
       if (ts.version !== undefined && ts.sys !== undefined) return { ts, entry };
     } catch {
@@ -312,7 +337,9 @@ function loadCompiler(projectDir: string, repoRoot: string): CompilerSelection {
     }
   }
   fail(
-    `No installed TypeScript compiler was found for the reference project (looked from ${projectDir} and ${repoRoot}). Install it there or omit referenceProject; the check never falls back to an unverified compiler.`,
+    trusted
+      ? `No installed TypeScript compiler was found for the reference project (looked from ${projectDir} and ${repoRoot}, then beside diffninja). Install it there or omit referenceProject; the check never falls back to an unverified compiler.`
+      : `No TypeScript compiler is installed beside diffninja, and the compiler inside the repository under review is not run because it is that repository's code. Install typescript next to diffninja (npm install -g typescript), or start the MCP server with ${TRUST_PROJECT_COMPILER}=1 if you trust this repository's node_modules.`,
   );
 }
 
