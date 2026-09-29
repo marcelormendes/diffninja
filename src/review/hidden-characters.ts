@@ -4,17 +4,19 @@
  * Source, CVE-2021-42574), and in prose they hide instructions. A review tool
  * shows them as visible markers instead of letting the browser act on them.
  *
- * Bidirectional embeddings, overrides and isolates, the Arabic letter mark, the
- * Unicode tag block, and the supplementary variation selectors are always
- * shown. The other invisible characters (joiners, zero-width spaces, fillers,
- * variation selectors, marks) are also how emoji, Persian, Indic, Mongolian,
- * and Hangul text is written, so one is shown only where no such script
- * surrounds it: neither neighbour is a visible character of a script, so a run
- * of them between ASCII letters is shown whole. A byte order mark that opens a
- * line (after a diff's `+`, `-`, or space) is left alone.
+ * Every Unicode bidirectional control (the left-to-right and right-to-left marks,
+ * embeddings, overrides and isolates, and the Arabic letter mark), the Unicode
+ * tag block, and the supplementary variation selectors are always shown. The
+ * other invisible characters (joiners, zero-width spaces, fillers, variation
+ * selectors, marks) are also how emoji, Persian, Indic, Mongolian, and Hangul
+ * text is written, so one is shown only where no such script surrounds it:
+ * neither neighbour is a visible character of a script, so a run of them
+ * between ASCII letters is shown whole. A byte order mark right after a diff
+ * line's `+`, `-`, or space is left alone; anywhere else, a path or an id
+ * included, it is shown.
  */
-const ALWAYS = "\\u061C\\u202A-\\u202E\\u2066-\\u206F\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}";
-const BESIDE_ASCII = "\\u00AD\\u034F\\u115F\\u1160\\u180B-\\u180F\\u200B-\\u200F\\u2060-\\u2064\\u2800\\u3164\\uFE00-\\uFE0F\\uFFA0";
+const ALWAYS = "\\u061C\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u206F\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}";
+const BESIDE_ASCII = "\\u00AD\\u034F\\u115F\\u1160\\u180B-\\u180F\\u200B-\\u200D\\u2060-\\u2064\\u2800\\u3164\\uFE00-\\uFE0F\\uFFA0";
 const BYTE_ORDER_MARK = "\\uFEFF";
 /**
  * One visible character of a script: a non-ASCII letter, mark, digit, symbol,
@@ -24,7 +26,7 @@ const BYTE_ORDER_MARK = "\\uFEFF";
 const SCRIPT = `(?![\\x00-\\x7F${ALWAYS}${BESIDE_ASCII}${BYTE_ORDER_MARK}]|\\p{Default_Ignorable_Code_Point})[\\p{L}\\p{M}\\p{N}\\p{S}\\p{P}]`;
 
 /** Matches one hidden character at a time, so each match is one code point to mark. */
-export const HIDDEN_CHARACTER_SOURCE = `[${ALWAYS}]|(?<!${SCRIPT})[${BESIDE_ASCII}](?!${SCRIPT})|(?<!${SCRIPT}|(?:^|\\n)[+\\- ]?)${BYTE_ORDER_MARK}(?!${SCRIPT})`;
+export const HIDDEN_CHARACTER_SOURCE = `[${ALWAYS}]|(?<!${SCRIPT})[${BESIDE_ASCII}](?!${SCRIPT})|(?<!${SCRIPT}|(?:^|\\n)[+\\- ])${BYTE_ORDER_MARK}(?!${SCRIPT})`;
 
 /**
  * Every character of both tiers, with no lookaround, for a browser too old to compile

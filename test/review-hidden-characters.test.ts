@@ -20,8 +20,8 @@ describe("hidden and bidirectional control characters", () => {
 
   const hex = (point: number) => `U+${point.toString(16).toUpperCase().padStart(4, "0")}`;
   const span = (first: number, last: number) => Array.from({ length: last - first + 1 }, (_, index) => first + index);
-  const ALWAYS = [0x061c, ...span(0x202a, 0x202e), ...span(0x2066, 0x206f), ...span(0xe0000, 0xe007f), ...span(0xe0100, 0xe01ef)];
-  const BESIDE_ASCII = [0x00ad, 0x034f, 0x115f, 0x1160, ...span(0x180b, 0x180f), ...span(0x200b, 0x200f), ...span(0x2060, 0x2064), 0x2800, 0x3164, ...span(0xfe00, 0xfe0f), 0xfeff, 0xffa0];
+  const ALWAYS = [0x061c, 0x200e, 0x200f, ...span(0x202a, 0x202e), ...span(0x2066, 0x206f), ...span(0xe0000, 0xe007f), ...span(0xe0100, 0xe01ef)];
+  const BESIDE_ASCII = [0x00ad, 0x034f, 0x115f, 0x1160, ...span(0x180b, 0x180f), ...span(0x200b, 0x200d), ...span(0x2060, 0x2064), 0x2800, 0x3164, ...span(0xfe00, 0xfe0f), 0xfeff, 0xffa0];
   const PERSIAN = ["\u0645", "\u06CC"];
 
   test("bidirectional controls, the tag block and the supplementary variation selectors are shown everywhere, even inside another script", () => {
@@ -50,15 +50,35 @@ describe("hidden and bidirectional control characters", () => {
     "red heart \u2764\uFE0F keycap 1\uFE0F\u20E3",
     "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645",
     "\u0915\u094D\u200D\u0937",
-    "\uFEFFexport const first = 1;",
     "@@ -0,0 +1,2 @@\n+\uFEFFexport const a = 1;\n+export const b = 2;",
   ];
 
-  test("emoji sequences, Persian and Devanagari joiners, and a byte order mark that opens a line stay as written", () => {
+  test("emoji sequences, Persian and Devanagari joiners, and a byte order mark that opens a diff line stay as written", () => {
     for (const text of BENIGN) {
       expect(visibleControls(text)).toBe(text);
       expect(hiddenControlsIn(text)).toEqual([]);
     }
+  });
+
+  // Detects the left-to-right and right-to-left marks going unmarked beside any non-ASCII
+  // character: two of them reverse the numbers and neutrals between them on the page, and
+  // the Trojan Source warning did not fire. They are Unicode bidirectional controls.
+  test("the left-to-right and right-to-left marks are always shown, beside Arabic and é too", () => {
+    for (const mark of ["\u200E", "\u200F"]) {
+      const code = mark.codePointAt(0)!.toString(16).toUpperCase();
+      expect(visibleControls(`/*\u00E9${mark}*/ 5000 - 100 /*${mark}\u00E9*/`)).toBe(`/*\u00E9⟦U+${code}⟧*/ 5000 - 100 /*⟦U+${code}⟧\u00E9*/`);
+      expect(visibleControls(`\u0645${mark}\u0645`)).toBe(`\u0645⟦U+${code}⟧\u0645`);
+      expect(hiddenControlsIn(`\u00E9${mark}`)).toEqual([`U+${code}`]);
+    }
+  });
+
+  // Detects a name that starts with a byte order mark reading as the file it copies: the mark
+  // opens the string, so it was exempt, and `\uFEFFsrc/auth.ts` looked exactly like `src/auth.ts`.
+  test("a byte order mark opening a path or an id is shown, one after a diff line's marker is not", () => {
+    expect(visibleControls("\uFEFFsrc/auth.ts")).toBe("⟦U+FEFF⟧src/auth.ts");
+    expect(visibleControls("\uFEFFsrc/auth.ts#login")).toBe("⟦U+FEFF⟧src/auth.ts#login");
+    expect(visibleControls("+\uFEFFexport const a = 1;")).toBe("+\uFEFFexport const a = 1;");
+    expect(visibleControls("@@ -0,0 +1 @@\n \uFEFFexport const a = 1;")).toBe("@@ -0,0 +1 @@\n \uFEFFexport const a = 1;");
   });
 
   test("a change that adds them draws no Trojan Source warning", async () => {
