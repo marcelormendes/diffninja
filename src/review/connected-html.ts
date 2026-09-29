@@ -19,6 +19,12 @@ import { HIDDEN_CHARACTER_FALLBACK_SOURCE, HIDDEN_CHARACTER_SOURCE } from "./hid
  * snapshot id. Restoring a draft revalidates every comment anchor against the
  * snapshot on screen: a comment whose line no longer exists in the new revision
  * is dropped, never silently carried over.
+ *
+ * A change is viewed only by the reader's click on its rail checkbox, never by
+ * scrolling. GitHub's Viewed mark is per file, so the page marks a file Viewed
+ * on GitHub (`POST api/viewed`) exactly when every hunk of it is viewed, and
+ * un-marks it when one is not. Progress inside a file stays in `sessionStorage`,
+ * keyed by snapshot id.
  */
 export function renderConnectedPage(options: { readonly csrf: string; readonly nonce: string; readonly base: string }): string {
   const { csrf, base } = options;
@@ -88,7 +94,9 @@ export function renderConnectedPage(options: { readonly csrf: string; readonly n
     '<header class="rail-head">',
     '<h2 id="analysis-heading">Reading order</h2>',
     '<p id="analysis-sub" class="rail-sub"></p>',
-    '<p id="rail-progress" class="rail-progress" hidden><span id="rail-at"></span><span class="rail-keys"><kbd>j</kbd> <kbd>k</kbd> next and previous</span></p>',
+    '<p id="rail-progress" class="rail-progress" hidden><span id="rail-at"></span><span class="rail-keys"><kbd>j</kbd> <kbd>k</kbd> next and previous</span><span id="rail-viewed-count" class="rail-viewed-count"></span></p>',
+    '<p id="rail-sync-note" class="rail-note" hidden></p>',
+    '<p id="rail-viewed-error" class="rail-note is-error" role="alert" hidden></p>',
     '<div id="analysis-actions" class="rail-actions"></div>',
     "</header>",
     '<div id="analysis-body" class="rail-body"></div>',
@@ -235,8 +243,12 @@ function script(csrf: string, base: string): string {
   var stopsNow = [];
   var currentRank = 0;
   var followedRank = 0;
-  var seenRanks = Object.create(null);
-  var seenFor = '';
+  var DRAFT_VIEWED_PREFIX = 'diffninja.connected.viewed.v1';
+  var viewedHunks = Object.create(null);
+  var viewedFor = '';
+  var viewedDirty = true;
+  var viewedError = '';
+  var fileSync = Object.create(null);
   var el = {};
 
   function byId(id) { return document.getElementById(id); }
@@ -344,6 +356,7 @@ function script(csrf: string, base: string): string {
       return;
     }
     state = next;
+    viewedDirty = true;
     var snap = snapshot();
     if (snap) restoreDraft(snap);
   }
@@ -1304,6 +1317,7 @@ function script(csrf: string, base: string): string {
     var entry = make('li', 'order-item');
     entry.dataset.action = 'goto-stop';
     entry.dataset.rank = String(rank);
+    entry.dataset.hunk = String(hunk.id);
     entry.dataset.path = String(hunk.file);
     entry.dataset.line = String(hunk.line);
     entry.dataset.side = hunk.side === 'LEFT' ? 'LEFT' : 'RIGHT';
@@ -1323,6 +1337,7 @@ function script(csrf: string, base: string): string {
     jump.dataset.rank = entry.dataset.rank;
     main.appendChild(jump);
     entry.appendChild(main);
+    entry.appendChild(viewedBox(hunk, rank));
     return entry;
   }
 
@@ -1424,6 +1439,7 @@ function script(csrf: string, base: string): string {
     el.analysisBody.textContent = '';
     el.analysisActions.textContent = '';
     setText(el.analysisSub, '');
+    clearViewedNotes();
     renderAnalysisDetails(currentAnalysis());
     if (!snap) return;
     if (!analysis || analysisFor !== snap.id) {
@@ -1453,10 +1469,12 @@ function script(csrf: string, base: string): string {
       el.analysisBody.appendChild(make('p', 'inline-note', 'No call-flow diagrams: ' + analysis.scope.note.replace(/^Patch-only: /, '')));
     }
     if (!el.flowDrawer.hidden && flowSnapshot !== analysis.snapshotId) closeFlow();
+    if (viewedDirty || viewedFor !== snap.id) adoptViewed();
     var list = make('ol', 'order-list');
     var hunks = Array.isArray(analysis.hunks) ? analysis.hunks : [];
     for (var h = 0; h < hunks.length; h += 1) list.appendChild(renderHunkEntry(hunks[h], h + 1));
     el.analysisBody.appendChild(list);
+    paintViewed();
   }
 
   function gotoLine(node) {
@@ -1480,6 +1498,211 @@ function script(csrf: string, base: string): string {
     setTimeout(function () { target.classList.remove('is-target'); }, 2000);
     var action = target.querySelector('button');
     if (action) action.focus({ preventScroll: true });
+  }
+
+  /* ------------------------------------------------------------- viewed -- */
+
+  function viewedStoreKey(snap) { return DRAFT_VIEWED_PREFIX + '|' + snap.id; }
+
+  /** The tab's own viewed flags for one snapshot, hunk id to true; none when storage is unusable. */
+  function readViewedStore(snap) {
+    var flags = Object.create(null);
+    var store = storage();
+    if (!store) return flags;
+    try {
+      var stored = JSON.parse(store.getItem(viewedStoreKey(snap)) || '[]');
+      if (Array.isArray(stored)) {
+        for (var i = 0; i < stored.length; i += 1) {
+          if (typeof stored[i] === 'string') flags[stored[i]] = true;
+        }
+      }
+    } catch (error) {
+      /* Unreadable or blocked: this tab starts with none marked. */
+    }
+    return flags;
+  }
+
+  function saveViewedStore() {
+    var snap = snapshot();
+    var store = storage();
+    if (!snap || !store || viewedFor !== snap.id) return;
+    try {
+      store.setItem(viewedStoreKey(snap), JSON.stringify(Object.keys(viewedHunks)));
+    } catch (error) {
+      /* Storage disabled or full: the marks stay in memory. */
+    }
+  }
+
+  function analysisHunks() {
+    var current = currentAnalysis();
+    return current && Array.isArray(current.hunks) ? current.hunks : [];
+  }
+
+  function hunksOfFile(path) {
+    return analysisHunks().filter(function (hunk) { return hunk.file === path; });
+  }
+
+  /** GitHub's Viewed is per file: a file counts as viewed exactly when it has hunks and every one of them is viewed. */
+  function fileViewed(path) {
+    var mine = hunksOfFile(path);
+    return mine.length > 0 && mine.every(function (hunk) { return viewedHunks[hunk.id] === true; });
+  }
+
+  /** Whether the server could read GitHub's marks, so a click may be mirrored there. */
+  function viewedSynced() {
+    return Boolean(state && state.viewed && state.viewed.available === true);
+  }
+
+  /**
+   * Bring the flags in line with what the server last knew of GitHub. GitHub wins
+   * per file: a file it calls viewed shows every hunk viewed, and a file it does
+   * not call viewed cannot show all of them. Progress inside a file is the tab's
+   * own and is kept. A file with a request out is left to that request.
+   */
+  function adoptViewed() {
+    var snap = snapshot();
+    if (!snap) return;
+    if (viewedFor !== snap.id) {
+      viewedFor = snap.id;
+      viewedHunks = readViewedStore(snap);
+      fileSync = Object.create(null);
+    }
+    var hunks = analysisHunks();
+    var known = Object.create(null);
+    for (var h = 0; h < hunks.length; h += 1) known[hunks[h].id] = true;
+    for (var id in viewedHunks) {
+      if (known[id] !== true) delete viewedHunks[id];
+    }
+    var files = viewedSynced() && Array.isArray(state.viewed.files) ? state.viewed.files : [];
+    var synced = Object.create(null);
+    for (var f = 0; f < files.length; f += 1) {
+      var entry = files[f];
+      if (!entry || typeof entry.path !== 'string') continue;
+      synced[entry.path] = true;
+      var record = fileSync[entry.path] || (fileSync[entry.path] = { confirmed: false, sending: false, last: '' });
+      if (record.sending) continue;
+      record.confirmed = entry.viewed === true;
+      var mine = hunksOfFile(entry.path);
+      if (record.confirmed) {
+        for (var a = 0; a < mine.length; a += 1) viewedHunks[mine[a].id] = true;
+      } else if (fileViewed(entry.path)) {
+        for (var b = 0; b < mine.length; b += 1) delete viewedHunks[mine[b].id];
+      }
+    }
+    for (var path in fileSync) {
+      if (synced[path] !== true) delete fileSync[path];
+    }
+    viewedDirty = false;
+    saveViewedStore();
+  }
+
+  /** The rail's checkbox for one change: a real button, so it takes focus, Space and Enter. */
+  function viewedBox(hunk, rank) {
+    var box = make('button', 'viewed-box');
+    box.type = 'button';
+    box.dataset.action = 'toggle-viewed';
+    box.dataset.hunk = String(hunk.id);
+    box.setAttribute('role', 'checkbox');
+    box.setAttribute('aria-checked', viewedHunks[hunk.id] === true ? 'true' : 'false');
+    box.setAttribute('aria-label', visible('Mark change ' + rank + ' of ' + hunk.file + ' as viewed'));
+    var mirrored = viewedSynced() && fileSync[hunk.file] !== undefined;
+    box.title = visible(mirrored ? 'Marks the file viewed on GitHub once every change in it is viewed' : 'Kept in this tab only');
+    return box;
+  }
+
+  /** Repaint the flags in place, so a focused checkbox keeps focus. */
+  function paintViewed() {
+    var stations = el.analysisBody.querySelectorAll('.order-item');
+    var count = 0;
+    for (var i = 0; i < stations.length; i += 1) {
+      var station = stations[i];
+      var on = viewedHunks[station.dataset.hunk] === true;
+      if (on) count += 1;
+      station.classList.toggle('is-viewed', on);
+      var box = station.querySelector('.viewed-box');
+      if (!box) continue;
+      box.setAttribute('aria-checked', on ? 'true' : 'false');
+      var record = fileSync[station.dataset.path];
+      box.classList.toggle('is-pending', Boolean(record && record.sending));
+    }
+    setText(el.railViewedCount, stations.length > 0 ? count + ' of ' + stations.length + ' viewed' : '');
+    var note = '';
+    if (stations.length > 0 && !viewedSynced()) {
+      var reason = state && state.viewed && typeof state.viewed.reason === 'string' && state.viewed.reason !== '' ? state.viewed.reason : 'GitHub did not offer viewed marks';
+      note = 'not synced with GitHub: ' + reason;
+    }
+    setText(el.railSyncNote, note);
+    show(el.railSyncNote, note !== '');
+    setText(el.railViewedError, viewedError);
+    show(el.railViewedError, viewedError !== '');
+  }
+
+  function clearViewedNotes() {
+    setText(el.railViewedCount, '');
+    setText(el.railSyncNote, '');
+    show(el.railSyncNote, false);
+    setText(el.railViewedError, '');
+    show(el.railViewedError, false);
+  }
+
+  /** A click on a change's checkbox: flip it here, then mirror the file's new state to GitHub when the file's state changed. */
+  function toggleViewed(hunkId) {
+    var snap = snapshot();
+    var hunk = null;
+    var hunks = analysisHunks();
+    for (var i = 0; i < hunks.length; i += 1) {
+      if (hunks[i].id === hunkId) { hunk = hunks[i]; break; }
+    }
+    if (!snap || !hunk || viewedFor !== snap.id) return;
+    if (viewedHunks[hunkId] === true) delete viewedHunks[hunkId];
+    else viewedHunks[hunkId] = true;
+    viewedError = '';
+    saveViewedStore();
+    var record = fileSync[hunk.file];
+    if (record) record.last = hunkId;
+    syncFile(hunk.file);
+    paintViewed();
+  }
+
+  /**
+   * Make GitHub's mark of one file match the page. One request per file is out at
+   * a time; a click that lands meanwhile is sent when the answer comes back, so
+   * the file ends in the state of the last click. A request goes out only when
+   * the file's state differs from what GitHub last confirmed.
+   */
+  function syncFile(path) {
+    var snap = snapshot();
+    var record = fileSync[path];
+    if (!snap || !record || record.sending) return;
+    var want = fileViewed(path);
+    if (want === record.confirmed) return;
+    var trigger = record.last;
+    record.sending = true;
+    api('POST', '/api/viewed', { snapshotId: snap.id, path: path, viewed: want }).then(function () {
+      record.sending = false;
+      if (viewedFor !== snap.id) return;
+      record.confirmed = want;
+      // The state the page holds must say what GitHub now says, or the next adoption would undo the click.
+      var files = state && state.viewed && Array.isArray(state.viewed.files) ? state.viewed.files : [];
+      for (var i = 0; i < files.length; i += 1) {
+        if (files[i] && files[i].path === path) files[i].viewed = want;
+      }
+    }, function (error) {
+      record.sending = false;
+      if (viewedFor !== snap.id) return;
+      // Put the click back: GitHub did not take it, so neither does the page.
+      if (want) delete viewedHunks[trigger];
+      else viewedHunks[trigger] = true;
+      viewedError = error && error.message ? error.message : 'The Viewed mark could not be saved.';
+      if (error && error.uncertain) state.viewed = { available: false, reason: 'diffninja did not answer the last Viewed mark' };
+      else if (error && error.state && error.state.viewed && error.state.viewed.available === false) state.viewed = error.state.viewed;
+      viewedDirty = true;
+    }).then(function () {
+      if (viewedDirty) adoptViewed();
+      saveViewedStore();
+      paintViewed();
+      syncFile(path);
+    });
   }
 
   /* -------------------------------------------------------- you are here -- */
@@ -1535,33 +1758,30 @@ function script(csrf: string, base: string): string {
   }
 
   /**
-   * Mark where the reader is on the rail and what they have read. In the
-   * reading order the stops run 1, 2, 3 down the page, so the rail's list
-   * follows each new one; by file the stations of one file sit far apart in the
-   * reading order, so the list stays where the reader put it.
+   * Mark where the reader is on the rail. In the reading order the stops run 1,
+   * 2, 3 down the page, so the rail's list follows each new one; by file the
+   * stations of one file sit far apart in the reading order, so the list stays
+   * where the reader put it. Position only: nothing here says a change was
+   * viewed, because only the reader's click does.
    */
   function markCurrentStation() {
     spyQueued = false;
     fitRail();
-    var snap = snapshot();
-    if (snap && seenFor !== snap.id) { seenFor = snap.id; seenRanks = Object.create(null); }
     var stations = el.analysisBody.querySelectorAll('.order-item');
     var guided = el.diffBody.querySelector('.stop') !== null;
     currentRank = guided ? currentStopRank() : currentFileRank(stations);
-    // Every change read in the current stop is current, and read.
+    // Every change in the current stop is current.
     var here = Object.create(null);
     var stop = guided ? stopOf(currentRank) : null;
     if (stop) {
       for (var h = 0; h < stop.hunks.length; h += 1) here[stop.hunks[h].rank] = true;
     } else if (currentRank > 0) here[currentRank] = true;
-    for (var seen in here) seenRanks[seen] = true;
     var current = null;
     for (var j = 0; j < stations.length; j += 1) {
       var rank = Number(stations[j].dataset.rank);
       var on = here[rank] === true;
       if (rank === currentRank) current = stations[j];
       stations[j].classList.toggle('is-current', on);
-      stations[j].classList.toggle('is-seen', seenRanks[rank] === true);
       if (on) stations[j].setAttribute('aria-current', 'step');
       else stations[j].removeAttribute('aria-current');
     }
@@ -2622,6 +2842,7 @@ function script(csrf: string, base: string): string {
     if (action === 'submit') { event_.preventDefault(); submitReview(); return; }
     if (action === 'refresh') { event_.preventDefault(); refreshState(); return; }
     if (action === 'goto') { event_.preventDefault(); gotoLine(node); return; }
+    if (action === 'toggle-viewed') { event_.preventDefault(); toggleViewed(node.getAttribute('data-hunk') || ''); return; }
     if (action === 'goto-stop') { event_.preventDefault(); gotoStop(Number(node.getAttribute('data-rank'))); return; }
     if (action === 'view') { event_.preventDefault(); setView(node.getAttribute('data-view') || ''); return; }
     if (action === 'show-load') { event_.preventDefault(); showLoad = true; render(); el.prUrl.focus(); return; }
@@ -2688,6 +2909,9 @@ function script(csrf: string, base: string): string {
     el.railFinish = byId('rail-finish');
     el.railProgress = byId('rail-progress');
     el.railAt = byId('rail-at');
+    el.railViewedCount = byId('rail-viewed-count');
+    el.railSyncNote = byId('rail-sync-note');
+    el.railViewedError = byId('rail-viewed-error');
     el.viewSwitch = byId('view-switch');
     view = readView();
     el.analysisActions = byId('analysis-actions');
@@ -2974,7 +3198,7 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
 .order-list { list-style: none; margin: 0; padding: 0; }
 /* Stations sit on one continuous line: the route through the pull request. */
 .order-item {
-  position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 10px;
+  position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; column-gap: 10px;
   padding: 6px 14px 6px 12px; cursor: pointer;
 }
 .order-item::before {
@@ -2982,8 +3206,8 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
 }
 .order-item:first-child::before { top: 16px; }
 .order-item:last-child::before { bottom: calc(100% - 16px); }
-/* The route fills in behind the reader: a read station and the line after it turn accent. */
-.order-item.is-seen::before { background: var(--accent); opacity: 0.55; }
+/* The route fills in behind what the reader marked viewed: a viewed station and the line after it turn accent. */
+.order-item.is-viewed::before { background: var(--accent); opacity: 0.55; }
 .order-item:hover { background: var(--hover); }
 .order-item:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
 .order-rank {
@@ -2992,18 +3216,38 @@ button.fact:hover { border-color: var(--accent); background: var(--accent-soft);
   color: var(--ink-soft); background: var(--panel); border: 2px solid var(--route);
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.order-item.is-seen .order-rank { color: var(--accent); border-color: var(--accent); }
+.order-item.is-viewed .order-rank { color: var(--accent); border-color: var(--accent); }
 .order-item.is-current { background: var(--accent-soft); }
 .order-item.is-current .order-rank { color: var(--primary-ink); background: var(--accent); border-color: var(--accent); }
+/* A 24px target around a 16px box, drawn in CSS so it needs no glyph and follows the theme. */
+.viewed-box {
+  position: relative; z-index: 1; align-self: center; width: 24px; height: 24px; margin: 0; padding: 0;
+  display: grid; place-items: center; background: transparent; border: 0; border-radius: 6px; cursor: pointer;
+}
+.viewed-box::before {
+  content: ""; width: 16px; height: 16px; box-sizing: border-box; border-radius: 4px;
+  border: 2px solid var(--ink-faint); background: var(--panel); transition: background 0.15s, border-color 0.15s;
+}
+.viewed-box:hover::before { border-color: var(--accent); }
+.viewed-box[aria-checked="true"]::before { background: var(--accent); border-color: var(--accent); }
+.viewed-box[aria-checked="true"]::after {
+  content: ""; position: absolute; width: 4px; height: 8px; margin-top: -2px;
+  border: solid var(--primary-ink); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.viewed-box.is-pending { opacity: 0.55; }
 .order-main { min-width: 0; padding-top: 1px; display: flex; flex-direction: column; gap: 3px; }
 .order-path { display: flex; min-width: 0; font-size: 12.5px; white-space: nowrap; }
 .order-path .path-base { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .order-path .path-line { flex: 0 0 auto; }
 .order-path .path-dir { display: none; }
 .order-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.rail-progress { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.rail-progress { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; margin-top: 6px; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .rail-progress[hidden] { display: none; }
 .rail-keys { color: var(--ink-faint); white-space: nowrap; }
+.rail-viewed-count { order: 3; flex: 1 0 100%; color: var(--ink-soft); }
+.rail-viewed-count:empty { display: none; }
+.rail-note { margin-top: 4px; font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.rail-note[hidden] { display: none; }
 kbd {
   display: inline-block; min-width: 18px; padding: 0 4px; font: 11px/16px var(--mono); text-align: center;
   color: var(--ink-soft); background: var(--bg); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px;

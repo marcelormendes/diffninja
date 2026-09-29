@@ -37,5 +37,5 @@ Each feature file starts with an H1 title and one paragraph about the user-visib
 - [Record the agent's reading order](./record-order.md) covers `record_order` acceptance, refusal, replacement, and the attributed list on the page.
 - [Business view](./business-view.md) covers the agent's business explanation: the functions list, `record_explanation`, the "How it works" flowcharts and rules, purposes in the call flows, and the pull request page's framed view.
 - [Report page](./report-page.md) covers the loopback page a human reads: agenda, views, filters, and its security headers.
-- [Connected pull request review](./connected-pr-review.md) covers loading a GitHub pull request through `gh` into a loopback review page.
+- [Connected pull request review](./connected-pr-review.md) covers loading a GitHub pull request through `gh` into a loopback review page, and the Viewed marks the page mirrors to GitHub (drive those against a fake `gh` only).
 - [Setup registration](./setup.md) covers `diffninja setup` detection and config edits, and what `--dry-run` actually does.

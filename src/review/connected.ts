@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { ConnectedReview, type ConnectedSnapshot, type ConnectedState, type ReviewPayload } from "./github.js";
+import { ConnectedReview, type ConnectedSnapshot, type ConnectedState, type ReviewPayload, type ViewedReceipt } from "./github.js";
 import { renderConnectedPage } from "./connected-html.js";
 import { markdownBlocks, type MarkdownBlock } from "./markdown.js";
 import type { ConnectedAnalysisView } from "./connected-analysis.js";
@@ -13,11 +13,12 @@ const reviewSchema = z.object({
   snapshotId: z.string(), event: z.enum(["COMMENT", "APPROVE", "REQUEST_CHANGES"]), body: z.string(),
   comments: z.array(z.object({ path: z.string(), line: z.number().int().positive(), side: z.enum(["LEFT", "RIGHT"]), body: z.string() }).strict()),
 }).strict();
+const viewedSchema = z.object({ snapshotId: z.string(), path: z.string(), viewed: z.boolean() }).strict();
 const emptySchema = z.object({}).strict();
 const tokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export interface ConnectedSession { server: Server; url: string }
 interface ErrorResponse { error: string; state?: ConnectedState }
-type ApiResponse = ConnectedState | ReviewPayload | ErrorResponse | ConnectedAnalysisView;
+type ApiResponse = ConnectedState | ReviewPayload | ViewedReceipt | ErrorResponse | ConnectedAnalysisView;
 
 /**
  * What `GET /api/state` adds to the snapshot: the author's description already
@@ -171,7 +172,7 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
       res.end(html);
       return;
     }
-    const routes = ["api/load", "api/preview", "api/submit", "api/reconcile"];
+    const routes = ["api/load", "api/preview", "api/submit", "api/reconcile", "api/viewed"];
     if (req.method !== "POST" || !routes.includes(route)) { json(404, { error: "Not found." }); return; }
     const token = tokenSchema.safeParse(req.headers["x-diffninja-csrf"]);
     if (req.headers.origin !== origin || !token.success || !timingSafeEqual(Buffer.from(token.data), Buffer.from(csrf))) {
@@ -179,11 +180,12 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
     }
     try {
       const text = await readBody(req);
-      let result: ConnectedState | ReviewPayload;
+      let result: ConnectedState | ReviewPayload | ViewedReceipt;
       switch (route) {
         case "api/load": result = await review.load(loadSchema.parse(JSON.parse(text)).url); break;
         case "api/preview": result = await review.preview(reviewSchema.parse(JSON.parse(text))); break;
         case "api/submit": result = await review.submit(reviewSchema.parse(JSON.parse(text))); break;
+        case "api/viewed": result = await review.setViewed(viewedSchema.parse(JSON.parse(text))); break;
         default: emptySchema.parse(JSON.parse(text)); result = await review.reconcile(); break;
       }
       json(200, result);

@@ -113,8 +113,8 @@ Connected success returns `{ mode: "connected", pr, snapshot }` plus
 without a link until finishing. A later call for an already finished PR
 returns its links again. With `analysisUnavailable`, there is nothing to
 finish, and the result carries the connected page URL directly. Open the page
-in a browser; MCP does not launch one or submit a review itself. Pages live
-for the MCP connection and close on disconnect. Failures return
+in a browser; MCP does not launch one, submit a review, or mark a file Viewed
+itself. Pages live for the MCP connection and close on disconnect. Failures return
 `isError: true`, an error message, and no partial report.
 
 ## `finish_review`, ordering and comments

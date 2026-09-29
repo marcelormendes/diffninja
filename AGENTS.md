@@ -67,7 +67,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     invocation explains how to review through an agent, without echoing its
     arguments.
     `pr-input.ts` — shared PR-link detection and canonicalization.
-    `github.ts` / `connected.ts` — snapshot-bound review and loopback transport.
+    `github.ts` / `connected.ts` — snapshot-bound review and loopback transport,
+    including the read and the write of GitHub's Viewed marks.
   - `mcp.ts` — `createReviewServer()`: builds an `McpServer` and registers
     `review_diff`. `report-pages.ts` — per-connection read-only report pages.
     `mcp-cli.ts` — executable entry that connects the server to
@@ -196,7 +197,56 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     Both include the same JSON in text `content`. Failures return `isError: true`
     with the message as text and no partial report.
   - Connected pages belong to the MCP connection and close on disconnect.
-    Repeated calls for one PR reuse its page; no review is submitted by the tool.
+    Repeated calls for one PR reuse its page; no review is submitted and no file
+    is marked Viewed by the tool.
+  - Viewed marks. The connected page's left list (reading order, one item per
+    hunk) has a checkbox per change, and scrolling marks nothing (the current
+    position, "Change N of M" and `j`/`k` stay). GitHub's Viewed is per file, so
+    a file is marked Viewed on GitHub exactly when every hunk of that file in
+    this diff is viewed on the page. Un-viewing any hunk of a viewed file
+    un-marks it, and a request is sent only when a file's state changes. Every
+    load of the pull request (and a reload from Check GitHub state) reads the
+    signed-in account's per-file state with one fixed GraphQL query
+    (`VIEWED_FILES_QUERY` in `github.ts`, which asks `node(id:) ... on PullRequest {
+    files(first: 100, after:) { nodes { path viewerViewedState } pageInfo } }`
+    for every page, with the pull request's node id as a `-f` variable). `VIEWED` is
+    viewed, `UNVIEWED` and `DISMISSED` are not. The page starts every hunk of a
+    viewed file as viewed, so GitHub wins at file level. Progress inside a
+    file with several hunks is tab-local (`sessionStorage`, key prefix
+    `diffninja.connected.viewed.v1`, one key per snapshot id, hunk ids) and may
+    be lost. `GET api/state` carries `viewed: { available: true, files: [{ path,
+    viewed }] } | { available: false, reason }` for a reviewable snapshot. A
+    failed read, or a pull request whose node id `gh` did not report, gives
+    `available: false` with a short fixed reason, never GitHub's words. The load
+    still succeeds, and the page shows "not synced with GitHub: <reason>" and
+    keeps tab-local marks only.
+  - `POST api/viewed`: strict `{ snapshotId, path, viewed }`, behind exactly the
+    gate of `api/submit`. Refused before any `gh` call: a stale snapshot id, a
+    path that is not exactly one of the loaded snapshot's changed file paths
+    (the new path of a rename), a `viewed` that is not a boolean, extra or
+    missing keys, and marks that are not synced. It then reads the pull request's
+    base and head again (one `gh pr view`) and refuses when either moved since
+    the load, because GitHub applies a mark to the file as it is now, and only
+    then runs one `gh api --hostname
+    github.com graphql -f query=<fixed document> -f pullRequestId=<the snapshot's
+    stored node id> -f path=<path>`, where the document is
+    `MARK_VIEWED_MUTATION` or `UNMARK_VIEWED_MUTATION` (`markFileAsViewed`,
+    `unmarkFileAsViewed`). The node id never comes from the request, and path
+    and id are raw `-f` variables, never in the query text and never `-F`.
+    Success answers `{ path, viewed }`. A refusal is a 400 `{ error, state }`
+    with GitHub's named message cleaned and capped at 400 characters, or a fixed
+    sentence, never GitHub's raw body or `gh`'s stderr. A write whose outcome is
+    unknown (timeout, server error, lost connection, unreadable answer) sets
+    `viewed.available: false` with the reason "the last Viewed mark did not
+    finish" until the pull request is loaded again, like a submit's unknown
+    state. All `gh` calls of a session run one at a time through one queue. The
+    page also sends at most one request per file at a time and then sends the
+    last wanted state, so concurrent clicks end in the state of the last click.
+    A failed request reverts the optimistic click and shows the message next to
+    the list. A browser reload shows what the server last confirmed, and loading
+    the pull request again re-reads GitHub. The page sends a write only on the
+    owner's click, and the route takes only files of the loaded snapshot. There
+    is no generic GraphQL or `gh` route.
   - A review never downloads, installs or builds anything through diffninja.
     Inline diffs run no process and open no connection. A git-range review runs
     read-only git plumbing (`blame --no-textconv`; `git`/`gh` resolved to
@@ -280,10 +330,17 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   and access control in layers. Every route of a session (page, `/api/*`,
   `/flow`) lives under `/<256-bit secret>/` (`routeOf`, constant-time compare):
   a local process that was never handed the link gets a 404 for everything and
-  cannot read the PR or post a review as the engineer. The agent is handed the
-  link, and the page carries the CSRF token, so an agent that can fetch local
-  URLs can submit; docs must not claim otherwise (`docs/security.md`), and
-  `nextSteps` tells it never to. Loopback-only
+  cannot read the PR, post a review or set a Viewed mark as the engineer. The
+  agent is handed the link, and the page carries the CSRF token, so an agent
+  that can fetch local URLs can submit and can toggle Viewed marks; docs must
+  not claim otherwise (`docs/security.md`), and `nextSteps` tells it never to
+  submit or open the page. The page writes to GitHub in exactly two ways, a
+  review (`POST api/submit`) and a Viewed mark of one changed file of the loaded
+  snapshot (`POST api/viewed`), both behind that one gate (`requestIsTrusted`,
+  the CSRF token, the 256 KiB and 15 s limits). The other POST routes
+  (`api/load`, `api/preview`, `api/reconcile`) read GitHub or build a payload and
+  write nothing there. Adding a route or a `gh` write means updating this
+  paragraph and `docs/security.md` in the same change. Loopback-only
   Host/Origin/`Sec-Fetch-Site`/CSRF checks defend against browsers, and the
   page's CSP nonce is fresh per response and never the CSRF token. At most 10
   connected pages stay open per connection (the one used least recently closes,
@@ -380,7 +437,10 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   A cache missing only Kotlin and Perl (no compiler) is kept, not reinstalled
   every run (`global-setup.test.ts`). Check a file a test says was not written
   with `existsSync`, never by running `test -e`, which Windows lacks. `review-explanation.test.ts`
-  covers the functions list, the explanation checks, and the business view. `review-history.test.ts`
+  covers the functions list, the explanation checks, and the business view. `review-viewed.test.ts`
+  covers the Viewed read and write through the real loopback server with a
+  scripted `gh`, including the marks read, the refusals before any `gh` call,
+  the fixed documents and variables, and the unknown outcome. `review-history.test.ts`
   covers the project context against temporary repositories (full and shallow). `review-mcp.test.ts` covers the MCP tool through
   `createReviewServer()`: input validation, the structured report, its JSON
   text twin, and error cases — assert the outward result, not internal wiring.

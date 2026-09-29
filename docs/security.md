@@ -27,10 +27,16 @@ Check what you run with `npm ls -g diffninja`, or read the version in the
   apart from the optional update notice.
 - Reviewing a git range runs `git` in the repository you name.
 - Reviewing a pull request runs your GitHub CLI (`gh`), which talks to GitHub
-  with your login.
+  with your login. It reads the pull request, and it reads which of the changed
+  files you marked **Viewed** on GitHub.
 - None of its tools posts a review. A review is posted when **Submit** is pressed
-  on the review page, normally by you. Anyone holding the page's link can do
-  that, and your agent holds it, because it receives the link to give it to you.
+  on the review page, normally by you.
+- The page has one other write to GitHub. Ticking a change in the page's left
+  list marks that change's file **Viewed** on GitHub, as you, once every change
+  of the file is ticked. Unticking one clears the mark. The page sends it on a
+  click, and only for a file of the loaded pull request.
+- Anyone holding the page's link can submit a review and toggle Viewed marks,
+  and your agent holds it, because it receives the link to give it to you.
 - `diffninja setup` and `diffninja grammars install` run npm, which downloads
   code from the npm registry. `setup` also runs install scripts. A review never
   downloads or builds code.
@@ -46,8 +52,9 @@ sections below list each exception.
 
 | Who | When | What |
 | --- | --- | --- |
-| `gh` (your GitHub CLI) | Reviewing a pull request link | Runs a few read commands (a version check, your login, the PR's metadata, diff and file list) with the login you already have. diffninja sets `GH_TELEMETRY=false` and `DO_NOT_TRACK=1` so `gh` does not report usage. |
+| `gh` (your GitHub CLI) | Reviewing a pull request link | Runs a few read commands (a version check, your login, the PR's metadata, diff and file list, and a GraphQL read of which changed files you marked Viewed) with the login you already have. The Viewed read runs again each time the page loads the pull request, including a load from **Check GitHub state**. diffninja sets `GH_TELEMETRY=false` and `DO_NOT_TRACK=1` so `gh` does not report usage. |
 | `gh` | **Submit** is pressed on the review page | Posts the review to GitHub as you, after a preview of the identical review. Only someone holding the page's link can submit. Your agent holds it, so an agent that can run commands or fetch web pages could submit too. diffninja tells it never to. A program that was never given the link cannot. |
+| `gh` | A file's Viewed state changes on the review page, because you ticked or unticked a change | Reads the pull request's head again, then marks the file **Viewed** or not Viewed on GitHub as you, with one GraphQL mutation (`markFileAsViewed` or `unmarkFileAsViewed`), and only if the head is still the one that was loaded. It goes through the same gated route as Submit, has no preview, and is sent only for a changed file of the loaded pull request. The mutation text is fixed, and the file path and the pull request's id travel as separate variables, never inside the text. Someone holding the page's link, your agent included, can send it. A program that was never given the link cannot. |
 | `npm` | You run `diffninja setup` | `npm root -g`, then `npm install -g diffninja@<version>` when there is no global install or it is older than setup. npm downloads diffninja and its dependencies and runs the install scripts of `diffninja`, `tree-sitter`, `tree-sitter-javascript` and `tree-sitter-typescript`. `--dry-run` and `--no-install` still run `npm root -g` and install nothing. `--uninstall` runs no npm. |
 | `npm` | You run `diffninja grammars install` | Downloads the 20 pinned grammar packages. With `--build`, `node-gyp` also downloads the Node headers from nodejs.org unless they are already cached. |
 | `npm` (the postinstall script) | After an npm install of diffninja, only where the parser or the TypeScript grammar does not load (Linux ARM64 is the known case) | Installs `tree-sitter-typescript` if it is missing, then rebuilds it from source. The rebuild runs install scripts and can download the Node headers. Where the grammar loads, it does nothing. |
@@ -127,6 +134,10 @@ review's warnings, and call flows skip the files that need it.
 
 - Nothing in the repository under review. diffninja runs only read commands
   there. The one exception is git's own behavior in a partial clone, above.
+- On GitHub, as you, and only from the connected review page. A review, when
+  **Submit** is pressed. A file's **Viewed** mark, when the ticks in the page's
+  left list make every change of that file viewed, or stop doing so. Nothing else
+  is written to GitHub.
 - `~/.cache/diffninja/grammars` (mode 0700) when you run `grammars install`.
   diffninja loads grammars from it only while the directory belongs to you and
   no other user can write to it (on Windows this is not checked). The marker
@@ -143,8 +154,10 @@ review's warnings, and call flows skip the files that need it.
   afterwards.
 - In your browser, from the connected review page. A draft of your review
   (its text and comments, which can quote source) goes in `sessionStorage`,
-  per tab. The layout choice (`guided` or `file`) goes in `localStorage`.
-  diffninja writes nothing to disk for these.
+  per tab. So do the changes you ticked as viewed, under a key that starts with
+  `diffninja.connected.viewed.v1`, one per version of the pull request. It holds
+  change ids such as `hunk-3` and no source text. The layout choice (`guided` or
+  `file`) goes in `localStorage`. diffninja writes nothing to disk for these.
 - No report files, logs or analytics.
 
 ### What setup does to your config files
@@ -171,7 +184,8 @@ for example `cp ~/.claude.json ~/.claude.json.bak`.
   that would run them. git uses your repository's configuration and your
   environment. On Windows `git` and `gh` run by the absolute path found on PATH,
   never a file from the repository.
-- `gh` for pull requests.
+- `gh` for pull requests: reads, the review post, and Viewed marks. Every `gh`
+  call of one review session runs one at a time.
 - `npm`, and `node` for the postinstall script, as described above.
 - Native tree-sitter parsers in the same process, over the source files of the
   two revisions. Files over 1 MiB and files beyond 15,000 per revision are
@@ -193,7 +207,7 @@ Every command has a time limit, and a command past its limit is stopped.
 | `git` for the opt-in reference check | 120 seconds each |
 | `git` for project history (`blame`, `log`, `diff-tree`, `ls-tree`, `cat-file`, `rev-parse`) | 30 seconds each |
 | `git` checking that a local clone has a pull request's commits (`cat-file`, `merge-base`) | 10 seconds each |
-| `gh` | 15 seconds per call |
+| `gh` | 15 seconds per call (each page of the Viewed read and each Viewed mark is one call) |
 | `npm` in `grammars install` (`ci`, and `rebuild` with `--build`) | 300 seconds per run |
 | `npm` in the postinstall script | 900 seconds per run |
 | `npm` in `setup` | none |
@@ -220,8 +234,9 @@ other people first. These are the things those arguments can make diffninja do.
   environment, tokens such as `GH_TOKEN` included. Without that variable it uses
   the compiler found from diffninja's own files, not the repository's.
 
-None of the tools posts to GitHub. Posting needs the review page's **Submit**,
-described next.
+None of the tools writes to GitHub. A review needs the review page's **Submit**,
+and a Viewed mark needs a click in the page's list of changes. Both are described
+next.
 
 ## The review page on your machine
 
@@ -230,11 +245,25 @@ connection. Every URL of it contains a random 256-bit secret that only the
 page's link carries. `finish_review` returns that link to your agent, and your
 agent gives it to you. A program or another user on the same machine that finds
 the port but not the link gets a 404 for everything, so it cannot read the pull
-request or post a review as you. Requests from other web pages are also
-refused (Host, Origin and CSRF checks), the page has a strict content security
-policy with a fresh nonce per response, and it closes when your agent's
+request, post a review or set a Viewed mark as you. Requests from other web pages
+are also refused (Host, Origin and CSRF checks), the page has a strict content
+security policy with a fresh nonce per response, and it closes when your agent's
 connection does. At most ten such pages stay open per connection; the one used
 least recently closes, and finishing its review is then refused.
+
+The page writes to GitHub in two ways. **Submit** posts a review. Ticking a
+change marks a file **Viewed**, as you. Both go through one gate (the secret
+path, Host, Origin, `Sec-Fetch-Site` and CSRF checks, a 256 KiB body limit and a
+15 second request time limit). No route is a general GitHub or command proxy. The
+Viewed route takes a snapshot id, a file path and a true or false. It refuses a
+snapshot other than the loaded one, and a path that is not one of that pull
+request's changed files, before it runs `gh`. It reads the pull request's head
+again and refuses when it moved since the load. It takes the pull request's id
+from what it loaded, never from the request, and sends one of two fixed GraphQL
+documents. The path is a separate variable and is never part of the document.
+A mark whose outcome is unknown, because of a timeout or a lost connection,
+stops every later mark from reaching GitHub until the pull request is loaded
+again. The page keeps its ticks in the tab and says the marks are not synced.
 
 The read-only report page (`reportUrl`) is served under its own 256-bit token
 in the path. It answers `GET` only and checks the Host header. At most 20 stay
@@ -242,10 +271,16 @@ open per connection, and they close with it.
 
 Your agent is different. With the link it can load the page, and the page
 carries the token its own Submit button sends, so an agent that can fetch local
-URLs can do whatever the page does, including submitting a review as you.
-diffninja tells the agent to give you the link and never to submit, but it
-cannot enforce that. If your agent can run shell commands, treat it as able to
-post a review.
+URLs can do whatever the page does, including submitting a review as you. It can
+also mark and unmark files Viewed as you. That does little harm. A Viewed mark
+changes nothing in the pull request, and a click on GitHub or on the page clears
+it. But GitHub then shows a file as viewed that you may not have read, and the
+next time the page loads that pull request, it starts that file's changes as
+viewed. The page gives the agent no route to submit a review other than its
+Submit call, and none to mark a file outside the loaded pull request. diffninja
+tells the agent to give you the link and never to submit anything or open the
+page, but it cannot enforce that. If your agent can run shell commands, treat it
+as able to post a review and to toggle Viewed marks.
 
 ## Text written by the pull request's author
 
@@ -302,7 +337,8 @@ written by other people, and diffninja treats them as data.
 A language model can still be talked into things by text it reads. diffninja
 narrows what such text can reach, and the previous section lists what remains.
 An agent that can also run commands is another matter. Text in a pull request
-could talk it into opening the review page and submitting, as described above.
+could talk it into opening the review page, submitting, or marking files viewed,
+as described above.
 
 ## Settings you control
 
@@ -318,7 +354,8 @@ could talk it into opening the review page and submitting, as described above.
 
 - Your agent and its model provider. They receive what diffninja returns.
 - What your agent does with the review page's link. It holds the link, and an
-  agent that can fetch local URLs can submit a review through the page.
+  agent that can fetch local URLs can submit a review through the page, and can
+  mark files Viewed through it.
 - The native parsers run in the agent's session. A memory-safety bug in a
   tree-sitter grammar would be a bug in that process.
 - The npm registry and the accounts that publish. `setup`, `grammars install`
@@ -339,5 +376,25 @@ could talk it into opening the review page and submitting, as described above.
   off. That was not checked against GitHub's servers.
 - The hidden-character markers on the connected page were checked in code, not
   in a real browser.
+- GitHub's real behavior for Viewed marks. The two mutations and the query that
+  reads the marks were checked only against a scripted fake `gh` and unit tests,
+  never against GitHub. Not checked: what GitHub does with a mark on a renamed,
+  deleted or binary file, how it counts `DISMISSED` (diffninja treats it as not
+  viewed, like `UNVIEWED`), who besides you can see a mark, paging on a very
+  large pull request, and rate limits. diffninja talks to github.com only, so
+  GitHub Enterprise Server was not tried.
+- A push that lands between the head check and the mark. GitHub has no atomic
+  check-and-mark, so a mark can still cover a file that changed in that instant,
+  as a review can (see [reference.md](reference.md)).
+- Which accounts and tokens may mark a file Viewed. A token without the scope, or
+  an account without access, was not tried against GitHub. When GitHub refuses,
+  diffninja shows GitHub's named message, cleaned and cut to 400 characters, or
+  a fixed sentence, and never `gh`'s raw output. That was checked against a fake
+  `gh` that refuses.
+- Browsers other than Chrome. The Viewed ticks were driven in headless Google
+  Chrome 154 only, through playwright-core.
+- File names that git quotes in a diff (non-ASCII characters, quotes, backslashes).
+  The page cannot match such a file to the path GitHub lists, so its ticks stay in
+  the tab and never reach GitHub.
 
 To report a vulnerability, open a private security advisory on the repository.

@@ -87,8 +87,13 @@ The tool writes no report files. Arguments and examples:
    its own. Static reviews may omit `summary`.
    The pages list every hunk in the agent's
    order, attributed to it; diffninja's own order stays available one click
-   away, and statuses stay diffninja's. `record_answers`, `record_order`, and
-   `suggest_comments` update a review afterwards. The author's own evaluation on
+   away, and statuses stay diffninja's. On the pull request page you tick a
+   change in that list to mark it viewed. Scrolling ticks nothing, and a tick
+   changes no status, priority or order and hides no diff. A file is marked
+   Viewed on GitHub, as you, once all of its changes are ticked (the page reads
+   GitHub's marks when it loads, and a file already marked starts ticked; see
+   [reference.md](reference.md#viewed-marks)). `record_answers`, `record_order`,
+   and `suggest_comments` update a review afterwards. The author's own evaluation on
    159 held-out open-source pull requests, weighted by the severity of
    maintainers' actual review comments, found that a host model that read
    diffninja's report put the serious comments earlier than diffninja's

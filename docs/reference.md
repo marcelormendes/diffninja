@@ -161,7 +161,8 @@ commit.
 Only one submission can run at a time. A timeout or ambiguous write outcome
 locks submission pending reconciliation against GitHub; absence of a matching
 review is not proof that retry is safe. Recoverable failures preserve browser
-drafts in per-tab `sessionStorage`. The page also keeps its diff layout choice
+drafts in per-tab `sessionStorage`, and so it does the changes you ticked as
+viewed (see [Viewed marks](#viewed-marks)). The page also keeps its diff layout choice
 (`guided` or `file`) in `localStorage`. Closing the tab or stopping the server is
 not a durable draft recovery system. Drafts contain source/review content;
 treat the browser session as private.
@@ -173,15 +174,81 @@ overrides) can override stored credentials.
 Every route of the loopback server lives under an unguessable path,
 `http://127.0.0.1:PORT/<64 hex characters>/`, which only the link the agent
 hands you contains: another program or user on the same machine that finds the
-port gets a 404 for everything and cannot read the pull request or post a
-review as you. On top of that the server validates Host and Origin, requires a
+port gets a 404 for everything and cannot read the pull request, post a review
+or set a Viewed mark as you. On top of that the server validates Host and Origin, requires a
 per-session CSRF token on mutations, disables caching/framing, and serves a
 CSP with a fresh nonce per response. Its only API routes are
 `GET api/state`, `GET api/analysis` and `POST api/load`, `api/preview`,
-`api/submit`, `api/reconcile` under that path; none is a generic GitHub or
-command proxy. At most ten of these pages stay open per agent connection; the
-one used least recently closes, `finish_review` for its review is refused with a
-clear error, and reviewing its pull request again opens a fresh one.
+`api/submit`, `api/reconcile`, `api/viewed` under that path; none is a generic
+GitHub or command proxy. Two of them write to GitHub, `api/submit` (a review) and
+`api/viewed` (a file's Viewed mark). At most ten of these pages stay open per
+agent connection; the one used least recently closes, `finish_review` for its
+review is refused with a clear error, and reviewing its pull request again opens
+a fresh one.
+
+### Viewed marks
+
+The list on the left of the page shows the changes in reading order, one item
+per hunk. Scrolling marks nothing. The highlight on the current change,
+"Change N of M" and `j`/`k` stepping show only where you are, and none of them
+means viewed. Each item has a checkbox (`role="checkbox"`, reachable and
+operable by keyboard, named "Mark change N of <file> as viewed"). Clicking it
+toggles that change and does not jump to it. The progress line also says "N of
+M viewed".
+
+GitHub's Viewed mark belongs to a file, and the list has hunks. A file is
+marked Viewed on GitHub exactly when every hunk of that file in this diff is
+viewed on the page. Unticking any hunk of a viewed file clears the file's mark on
+GitHub. A request goes to GitHub only when a file's state changes, so ticking
+the first hunk of a three-hunk file sends nothing.
+
+When a pull request loads, and each time it loads again (a reload from **Check
+GitHub state** included), diffninja reads the signed-in `gh` account's Viewed
+state of every changed file through GraphQL, all pages. `VIEWED` counts as
+viewed. `UNVIEWED` and `DISMISSED` do not. The page starts every hunk of a
+viewed file as viewed, so GitHub wins at file level. Progress inside a file with
+several hunks lives only in the tab (`sessionStorage`, one key per snapshot,
+prefix `diffninja.connected.viewed.v1`) and can be lost.
+
+If the read fails or GitHub does not offer it, `GET api/state` carries
+`viewed: { available: false, reason }` with a short fixed reason, never GitHub's
+words. The page then shows "not synced with GitHub: <reason>" and keeps the
+marks in the tab only. The review works as before. When the read works, `viewed`
+is `{ available: true, files: [{ path, viewed }] }`. It is present for every
+snapshot that can be reviewed.
+
+`POST api/viewed` writes one mark. Its body is strictly `{ snapshotId, path,
+viewed }`, and it sits behind the same gate as `api/submit`. It is refused
+before any `gh` call when the snapshot id is not the loaded one, when `path` is
+not exactly one of the loaded pull request's changed file paths (a renamed file
+by its new path), when `viewed` is not a boolean, when a key is extra or missing,
+and when the marks are not synced. It then reads the pull request's base and head
+again and refuses when either moved since the load, because GitHub applies a mark
+to the file as it is now and a push would make it cover changes you did not read.
+Otherwise it runs one `gh api graphql` call
+with one of two fixed documents (`markFileAsViewed`, `unmarkFileAsViewed`). The
+pull request's node id is the one diffninja stored at load, never one from the
+request, and the id and the path are separate variables, never part of the
+document. The answer is `{ path, viewed }`. A refusal is a 400 with `{ error,
+state }`, where `error` is GitHub's named message, cleaned and cut to 400
+characters, or a fixed sentence. It is never GitHub's raw body or `gh`'s
+stderr.
+
+A write whose outcome is unknown (a timeout, a server error, a lost connection or
+an answer that cannot be read) makes the marks unread, with `viewed.available:
+false` and the reason "the last Viewed mark did not finish", until the pull
+request is loaded again. Every `gh` call of a session runs one at a time. The
+page sends at most one request per file at a time, and sends the last state you
+chose once the current one answers, so quick clicks end in the state of the last
+click. A failed request reverts your click on the page and shows the message next
+to the list, and the rest of the page keeps working. Reloading the browser page
+shows what the server last confirmed. Loading the pull request again re-reads
+GitHub.
+
+The page writes a mark only when you click, and only for files of the loaded
+pull request. The route is not a way to run a GraphQL query or a `gh` command of
+your own. Anyone who holds the page's link can call it, your agent included (see
+[security.md](security.md)).
 
 ## Setup
 
