@@ -965,7 +965,7 @@ function script(csrf: string, base: string): string {
       if (!node || typeof node !== 'object') continue;
       var type = typeof node.t === 'string' ? node.t : '';
       if (type === 'text') {
-        if (typeof node.v === 'string') host.appendChild(document.createTextNode(node.v));
+        if (typeof node.v === 'string') host.appendChild(document.createTextNode(visible(node.v)));
         continue;
       }
       if (type === 'code') {
@@ -996,7 +996,7 @@ function script(csrf: string, base: string): string {
         continue;
       }
       // Anything this page does not know is shown as its own text.
-      if (typeof node.v === 'string') host.appendChild(document.createTextNode(node.v));
+      if (typeof node.v === 'string') host.appendChild(document.createTextNode(visible(node.v)));
     }
   }
 

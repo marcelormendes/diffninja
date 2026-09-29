@@ -140,6 +140,18 @@ describe("hidden and bidirectional control characters", () => {
     expect(page).toContain("var shown = visible(text);");
   });
 
+  // Detects a text node built from pull request text that never passed through visible(): the
+  // description's paragraphs, headings, list items, table cells and link text were, so a bidirectional
+  // override or tag character in a description reached the reader raw while the title was marked.
+  test("every text node the connected page builds from a string is marked first", () => {
+    const page = renderConnectedPage({ csrf: "c".repeat(64), nonce: "n", base: "/b/" });
+    const arguments_ = [...page.matchAll(/createTextNode\(([^\n]*)/g)].map((match) => match[1]);
+    expect(arguments_.length).toBeGreaterThan(5);
+    // Literals, and the syntax tokens of a code cell that codeNode marked before splitting it.
+    const safe = (argument: string) => argument.startsWith("visible(") || argument.startsWith("'") || argument.startsWith("tokens[t][1]");
+    expect(arguments_.filter((argument) => !safe(argument))).toEqual([]);
+  });
+
   test("a browser that cannot compile the lookbehind still marks every hidden character", () => {
     const page = renderConnectedPage({ csrf: "c".repeat(64), nonce: "n", base: "/b/" });
     const script = page.slice(page.indexOf("var HIDDEN;"), page.indexOf("function make("));
