@@ -60,7 +60,7 @@ The sections below are the manual equivalents, one CLI at a time.
 | `pr` | string | GitHub PR link; starts a connected review. |
 | `input` | string | Free text containing a GitHub PR link; starts a connected review. |
 | `expectedOutcome` | `{ "title": string, "description": string }` | Exact, untrusted expected-outcome metadata for static analysis. Links here never select a PR. |
-| `referenceProject` | string | Static git range only: repository-relative tsconfig for opt-in diagnostics. Runs the TypeScript installed beside diffninja; the repository's own compiler is code from the repository under review, so it runs only if whoever configured the server set `DIFFNINJA_TRUST_PROJECT_COMPILER=1`. |
+| `referenceProject` | string | Static git range only: repository-relative tsconfig for opt-in diagnostics. Runs the TypeScript installed beside diffninja, which ships none. With a global diffninja, `npm install -g typescript` adds it; under npx there is none and the check is not checked. The repository's own compiler is code from the repository under review, so it runs only if whoever configured the server set `DIFFNINJA_TRUST_PROJECT_COMPILER=1`. |
 
 Rules enforced by the schema and the tool:
 

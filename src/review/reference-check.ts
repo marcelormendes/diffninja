@@ -340,7 +340,7 @@ function loadCompiler(projectDir: string, repoRoot: string, ownCompiler: boolean
   fail(
     trusted
       ? `No installed TypeScript compiler was found for the reference project (looked from ${projectDir} and ${repoRoot}, then beside diffninja). Install it there or omit referenceProject; the check never falls back to an unverified compiler.`
-      : `No TypeScript compiler is installed beside diffninja, and the compiler inside the repository under review is not run because it is that repository's code. Install typescript next to diffninja (npm install -g typescript), or start the MCP server with ${TRUST_PROJECT_COMPILER}=1 if you trust this repository's node_modules.`,
+      : `No TypeScript compiler is installed beside diffninja (its package ships none), and the compiler inside the repository under review is not run because it is that repository's code. With diffninja installed globally, which diffninja setup tries first, npm install -g typescript puts one beside it; a diffninja started through npx cannot use one. Or start the MCP server with ${TRUST_PROJECT_COMPILER}=1 if you trust this repository's node_modules.`,
   );
 }
 

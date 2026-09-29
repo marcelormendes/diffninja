@@ -384,7 +384,9 @@ describe("reference check availability and configuration safety", () => {
 
     expect(findings).toEqual([]);
     expect(check.status).toBe("not-checked");
-    expect(check.detail).toContain("No TypeScript compiler is installed beside diffninja");
+    expect(check.detail).toContain("No TypeScript compiler is installed beside diffninja (its package ships none)");
+    // A global typescript is found only from a global diffninja, never from npx's cache.
+    expect(check.detail).toContain("With diffninja installed globally, which diffninja setup tries first, npm install -g typescript puts one beside it; a diffninja started through npx cannot use one.");
     expect(check.detail).toContain("DIFFNINJA_TRUST_PROJECT_COMPILER=1");
   });
 

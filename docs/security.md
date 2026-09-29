@@ -64,10 +64,12 @@ gets the dependency versions diffninja was tested with.
 - `gh` for pull requests.
 - Native tree-sitter parsers in the same process, over the source files of the
   two revisions (files over 1 MiB and files past the first 15,000 are skipped).
-- With `referenceProject`, a TypeScript compiler: the one installed beside
-  diffninja. The repository's own compiler is code from the repository under
-  review, so it runs only if whoever configured the server sets
-  `DIFFNINJA_TRUST_PROJECT_COMPILER=1`.
+- With `referenceProject`, a TypeScript compiler installed beside diffninja.
+  diffninja's package ships none. With a global install of diffninja,
+  `npm install -g typescript` puts one beside it; a diffninja started through
+  npx cannot use one, and the check reports not checked. The repository's own
+  compiler is code from the repository under review, so it runs only if
+  whoever configured the server sets `DIFFNINJA_TRUST_PROJECT_COMPILER=1`.
 
 diffninja never runs a script from the pull request, never installs its
 dependencies, and never checks its branch out.

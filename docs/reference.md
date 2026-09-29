@@ -96,8 +96,12 @@ with bounded candidate and excerpt counts. A finding is a source observation,
 not a runtime defect verdict. Unknown bindings, dynamic calls, and unsupported
 syntax remain unproven. The report lists check coverage and limitations.
 
-The optional reference checker runs the repository's **trusted installed**
-TypeScript compiler against immutable before/after trees. It does not run PR
+The optional reference checker runs a TypeScript compiler installed beside
+diffninja (the repository's own only when whoever configured the server set
+`DIFFNINJA_TRUST_PROJECT_COMPILER=1`) against immutable before/after trees.
+diffninja's package ships no compiler. With a global install of diffninja,
+`npm install -g typescript` puts one beside it. A diffninja started through npx
+cannot use one, and the check then reports not checked. It does not run PR
 scripts, install dependencies, emit code, or change the checkout. It compares
 only diagnostics 2304, 2305, 2307, 2339, 2503, 2551, 2552, and 7016, subtracting
 pre-existing errors even when lines moved; unchanged consumers can be findings.
