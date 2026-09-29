@@ -4,7 +4,7 @@ What diffninja runs, what it can reach, what it writes, and how it treats text
 written by a pull request's author. It states the parts that are not local as
 plainly as the parts that are.
 
-This page describes diffninja 0.3.3 and later. Version 0.3.2 and earlier behave
+This page describes diffninja 0.4.0 and later. Version 0.3.2 and earlier behave
 as two security audits found, and this page does not describe them.
 
 - The pull request page's submit API had no secret in its path. Any local
