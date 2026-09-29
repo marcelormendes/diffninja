@@ -123,7 +123,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     exposed as `summary: { text, summarizedBy }` in connected analysis.
     `answers` must answer every question (as `record_answers`), `order` must
     name every item once (as `record_order`), and `comments` follows
-    `suggest_comments` and may be `[]`. Everything is checked before anything
+    `suggest_comments`, which is blockers only, and may be `[]`. Everything is checked before anything
     is kept; any gap refuses the whole call and hands out no link. Success
     marks the review finished and returns `{ reviewId, answered, ordered,
     suggested, summarized, reportUrl, url? (connected), next }`; `summarized`
@@ -140,17 +140,36 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     no free text; any invalid answer refuses the whole call and keeps nothing;
     answers are attributed to the MCP client's own name/version, re-render the
     page, and never change status, priority, or order.
-  - `suggest_comments`: strict `{ reviewId, comments: [{ path, line, side, body, severity }] }`, `severity` one of
-    `critical`/`major`/`minor` (required, its own field, shown on the suggestion),
-    at most 30. Each names a commentable line of that review's diff (added
-    RIGHT, removed LEFT, context either), at most one per line, and reads like
-    the reviewer's own comment: one line, at most 280 characters, no control
-    characters, no report scaffolding (headings, bold, list markers, labels
-    such as "Finding 1:"). Any bad comment refuses the whole call and keeps the
-    previous set; a later call replaces it, an empty list clears it. They reach
-    the connected page (`/api/analysis` `suggestions`, attributed to the MCP
-    client) as suggestions under their lines; a suggestion joins the human's
-    draft only when they add it, and nothing is posted until they submit.
+  - `suggest_comments`: strict `{ reviewId, comments: [{ path, line, side, body,
+    scenario, evidence, unlessTrue }] }`. A comment exists only for what blocks
+    the merge, so being in `comments` is the claim and there is no severity
+    field. A `severity` key is refused with a message that says so. Anything
+    that does not block is discarded by design. diffninja keeps no list of
+    observations, `[]` is the normal answer, and the agent tells the user the
+    rest in its own reply. diffninja calls no model, so it cannot judge a
+    blocker. It shapes what the agent must fill and refuses what the contract
+    forbids. At most 5, and more is refused with the reason that a review
+    rarely has more real blockers. Each names a line this pull request adds
+    (RIGHT) or removes (LEFT), at most one per line. A context line is refused
+    because unchanged code cannot block this merge, and a line outside the diff
+    keeps its own message. `body` reads like the reviewer's own comment. It is
+    one line of at most 280 characters with no control characters and no report
+    scaffolding (headings, bold, list markers, labels such as "Finding 1:"), and
+    it is the only field that joins the human's draft. `scenario` is a concrete
+    input or state and the wrong result, or the written rule it breaks and where
+    that rule is written (20 to 400 characters trimmed). `evidence` is `ran`
+    (the agent ran or reproduced it) or `traced` (it followed the code path by
+    reading), and nothing else is accepted because a guess is not a blocker.
+    `unlessTrue` is what would have to be true for this not to be a problem (10
+    to 300 characters trimmed). `scenario` and `unlessTrue` are one line each
+    with no control characters, are for the human's triage, are never posted,
+    and are not held to the report-label rule. Any bad comment refuses the whole
+    call and keeps the previous set. A later call replaces it, and an empty list
+    clears it. The comments reach the connected page (`/api/analysis`
+    `suggestions`, attributed to the MCP client) as "Blocks merge" suggestions
+    under their lines, each with its proof ("Why it blocks", how it was
+    checked, "Not a problem if"). A suggestion joins the human's draft, body
+    only, when they add it, and nothing is posted until they submit.
   - `record_order`: strict `{ reviewId, order: string[] }` naming every
     `items[].id` of that review exactly once; anything else refuses the whole
     call and keeps the previous order. The host agent's order is the product's

@@ -112,14 +112,35 @@ async function review() {
       const order = items.map(item => item.id);
       if (values.order === "reverse") order.reverse();
       const comments = [];
+      let unchanged;
       if (values.suggest) {
-        // One comment on the first added line of each of the first three hunks, in a reviewer's voice.
-        for (const item of items.slice(0, 3)) {
+        // Fixtures, not findings: one comment on the first added line of each hunk that adds one, up to five,
+        // carrying the fields a blocker must carry so the checks below can watch them travel.
+        for (const item of items) {
           let line = item.newStart;
           for (const text of item.diff.split("\n").slice(1)) {
-            if (text.startsWith("+")) { comments.push({ path: item.file, line, side: "RIGHT", severity: "minor", body: `Could we cover ${item.file.split("/").pop()} line ${line} with a test?` }); break; }
+            if (text.startsWith("+")) {
+              const file = item.file.split("/").pop();
+              comments.push({
+                path: item.file, line, side: "RIGHT",
+                body: `Harness comment on ${file} line ${line}, anchored on an added line.`,
+                scenario: `Harness fixture for ${file} line ${line}, sent only to prove the proof fields travel.`,
+                evidence: "traced",
+                unlessTrue: "this is a harness fixture, not a finding.",
+              });
+              break;
+            }
             if (!text.startsWith("-")) line += 1;
           }
+          if (comments.length === 5) break;
+        }
+        // An unchanged line of the diff: a comment there must be refused.
+        for (const item of items) {
+          const at = item.diff.split("\n").slice(1).findIndex(text => text.startsWith(" "));
+          if (at < 0) continue;
+          const before = item.diff.split("\n").slice(1, 1 + at).filter(text => !text.startsWith("-")).length;
+          unchanged = { path: item.file, line: item.newStart + before, side: "RIGHT" };
+          break;
         }
       }
       const summary = values.summary;
@@ -151,6 +172,17 @@ async function review() {
         ? await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments: [{ ...comments[0], body: "Finding 1: missing test" }], ...summaryInput } })
         : null;
       if (labelled) { save("finish_review.labelled.json", labelled); check("finish_review refuses report-style comments", labelled.isError === true); }
+      if (comments.length > 0) {
+        const refuse = async (file, name, badComments, expected) => {
+          const result = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments: badComments, ...summaryInput } });
+          save(file, result);
+          check(name, result.isError === true && expected.test(result.content[0].text), result.content[0].text.slice(0, 160));
+        };
+        await refuse("finish_review.severity.json", "finish_review refuses a comment that still carries a severity", [{ ...comments[0], severity: "minor" }], /Unrecognized key "severity"/);
+        await refuse("finish_review.sixth.json", "finish_review refuses more than five comments", Array.from({ length: 6 }, () => comments[0]), /at most 5 are allowed/);
+        if (unchanged) await refuse("finish_review.unchanged.json", "finish_review refuses a comment on an unchanged line", [{ ...comments[0], ...unchanged }], /an unchanged line/);
+        await refuse("finish_review.noscenario.json", "finish_review refuses a comment without its scenario", [{ ...comments[0], scenario: undefined }], /comments\[0\]\.scenario/);
+      }
       const finished = await client.callTool({ name: "finish_review", arguments: { reviewId: payload.reviewId, answers, order, comments, ...summaryInput } });
       save("finish_review.json", finished);
       if (!check("finish_review accepted the whole reading", !finished.isError, finished.isError ? finished.content[0].text : "")) return;
@@ -168,7 +200,7 @@ async function review() {
         save("url.analysis.json", view);
         check("pull request page has the agent's order", view.order?.source === "agent" && view.hunks.map(h => h.id).join(",") === order.join(","), JSON.stringify(view.order));
         check("pull request page has every answer", view.questions?.answered === questions.length, JSON.stringify(view.questions));
-        check("pull request page has the suggested comments", (view.suggestions?.comments.length ?? 0) === comments.length && (comments.length === 0 || view.suggestions.suggestedBy.startsWith(CLIENT.name)));
+        check("pull request page has the suggested comments with their proof", (view.suggestions?.comments.length ?? 0) === comments.length && (comments.length === 0 || (view.suggestions.suggestedBy.startsWith(CLIENT.name) && view.suggestions.comments.every((c, i) => c.scenario === comments[i].scenario && c.evidence === comments[i].evidence && c.unlessTrue === comments[i].unlessTrue && !("severity" in c)))));
         check("pull request page has the attributed PR goal", view.summary?.text === summary && view.summary?.summarizedBy === `${CLIENT.name} ${CLIENT.version}`);
         check("pull request page has the attributed explanation", view.explanation?.explainedBy === `${CLIENT.name} ${CLIENT.version}` && view.explanation?.processes.length === explanation.processes.length, JSON.stringify(view.explanation));
         const business = await get(new URL(`flow?snapshot=${encodeURIComponent(view.snapshotId)}&view=business`, pages.url).href);

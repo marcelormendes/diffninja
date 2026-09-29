@@ -71,7 +71,7 @@ The tool writes no report files. Arguments and examples:
    diffninja itself still calls no model.
    The agent sends its whole reading in one `finish_review` call: an answer to
    every question, the reading order of every hunk (most important first),
-   and the line comments it would leave (or none). Connected PR reviews also
+   and the comments that block the merge (usually none). Connected PR reviews also
    require `summary`: one plain-English paragraph, at most 80 words and 600
    characters, with no Markdown or control characters. The agent explains the
    stated goal, why it matters when known, and important limits, without jargon,
@@ -94,9 +94,15 @@ The tool writes no report files. Arguments and examples:
    diffninja's report put the serious comments earlier than diffninja's
    deterministic order did. The evaluation data is not in this repository, and
    this page has not verified that result.
-   On a pull request, the suggested line comments are short, in the reviewer's
-   own voice, with no "Finding 1:" scaffolding. The page shows each under its line; you add one
-   or all of them to your draft with a click, edit or dismiss them, and submit
+   On a pull request, a suggested comment exists only for what blocks the
+   merge. Each is short, in the reviewer's own voice, with no "Finding 1:"
+   scaffolding, and carries its proof: a concrete scenario, whether the agent
+   ran it or traced the code, and what would have to be true for it not to be a
+   problem. There are at most five, and only on lines the pull request adds or
+   removes. Everything that does not block is discarded by design, and the
+   agent says it in its own reply instead. The page shows each blocker under its
+   line with that proof; you add one or all of them to your draft with a click
+   (only the comment text joins the draft), edit or dismiss them, and submit
    the review yourself. No diffninja tool posts anything, and the agent is told
    never to submit through the page.
 5. **The business explanation.** Function names and call graphs tell a reader

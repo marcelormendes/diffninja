@@ -190,7 +190,7 @@ export interface ReviewReport {
   questions: ReviewQuestion[];
   /** The reading order the reviewing agent recorded; once present, `items` follow it. */
   agentOrder?: AgentOrder;
-  /** Line comments the reviewing agent suggested; nothing is posted until the human submits them. */
+  /** Comments the reviewing agent says block the merge; nothing is posted until the human submits them. */
   agentComments?: AgentComments;
   /**
    * The reviewing agent's own paragraph on the pull request's goal, written

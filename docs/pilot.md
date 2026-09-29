@@ -26,8 +26,8 @@ In your agent (Claude Code, Codex, …):
 > /absolute/path/to/REPO. Answer its questions, then give me the page.
 
 The agent calls `review_diff`, reads the hunks, and sends its whole reading in
-one `finish_review` call (answers to the questions, a reading order, comments and
-an explanation). `finish_review` returns the page link, which the agent gives you
+one `finish_review` call (answers to the questions, a reading order, the comments
+that block the merge, usually none, and an explanation). `finish_review` returns the page link, which the agent gives you
 (a `http://127.0.0.1:…/` address with a 64-character secret in its path). On that
 page:
 
