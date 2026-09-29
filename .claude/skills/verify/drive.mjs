@@ -117,7 +117,7 @@ async function review() {
         for (const item of items.slice(0, 3)) {
           let line = item.newStart;
           for (const text of item.diff.split("\n").slice(1)) {
-            if (text.startsWith("+")) { comments.push({ path: item.file, line, side: "RIGHT", body: `Could we cover ${item.file.split("/").pop()} line ${line} with a test?` }); break; }
+            if (text.startsWith("+")) { comments.push({ path: item.file, line, side: "RIGHT", severity: "minor", body: `Could we cover ${item.file.split("/").pop()} line ${line} with a test?` }); break; }
             if (!text.startsWith("-")) line += 1;
           }
         }
