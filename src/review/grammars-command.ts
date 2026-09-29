@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { GRAMMAR_PINS } from "../languages/grammar-lock.js";
 import { grammarCacheDir, grammarStatus, installPinnedGrammars, type GrammarStatus, type InstalledGrammars } from "../languages/grammars.js";
 
-export const grammarsHelp = `diffninja grammars. The one place diffninja downloads code, and only when you run it.
+export const grammarsHelp = `diffninja grammars. Downloads grammar code through npm, and only when you run it.
 
   diffninja grammars install [--build] [--dry-run]
       Install the tree-sitter grammars call flows need for languages other than

@@ -37,6 +37,10 @@ working, and updates a global install older than this setup, so running
 \`npx -y diffninja@latest setup\` again is how you update. When that install
 fails it registers an npx-based entry pinned to this version and says so.
 
+Each JSON config it changes is rewritten in full, in standard formatting
+(indentation, string escapes and integers above 2^53 can change), and no
+backup is kept. Copy ~/.claude.json before the first run.
+
 Options:
   --cli NAMES    Only these CLIs, comma-separated: claude,codex,omp,pi.
   --uninstall    Remove the diffninja server from every detected CLI.

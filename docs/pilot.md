@@ -8,7 +8,7 @@ and what to write down so we learn whether it helps.
 ```bash
 cd /path/to/diffninja
 npm install && npm run build
-npm install -g .          # install this checkout globally (0.1.0 is not on npm yet)
+npm install -g .          # install this checkout globally
 diffninja setup --dry-run # preview which agent configs change
 diffninja setup           # register in Claude Code, Codex, OMP, pi
 ```
@@ -25,8 +25,11 @@ In your agent (Claude Code, Codex, …):
 > Review https://github.com/OWNER/REPO/pull/123 with diffninja. My clone is at
 > /absolute/path/to/REPO. Answer its questions, then give me the page.
 
-The agent calls `review_diff`, answers the questions with `record_answers`,
-and gives you a `http://127.0.0.1:…/` link. On that page:
+The agent calls `review_diff`, reads the hunks, and sends its whole reading in
+one `finish_review` call (answers to the questions, a reading order, comments and
+an explanation). `finish_review` returns the page link, which the agent gives you
+(a `http://127.0.0.1:…/` address with a 64-character secret in its path). On that
+page:
 
 - **Reading order** lists every hunk: production code before tests, formatting
   last, with the facts found in each (a changed condition, limit, input check,
@@ -35,8 +38,10 @@ and gives you a `http://127.0.0.1:…/` link. On that page:
 - **Questions** show the agent's answers as they arrive, with the client that
   gave them. They are a second opinion, not a verdict, and never reorder the list.
 - **Call flows** appear when your clone already has the pull request's commits.
-  diffninja never fetches; if you want them, run
-  `git fetch origin pull/123/head` in your clone first.
+  diffninja itself never runs a fetch; if you want them, run
+  `git fetch origin pull/123/head` in your clone first. (In a partial clone, git
+  may fetch missing objects from that clone's own remote when diffninja reads
+  them.)
 - The review you write is yours. Nothing is posted until Submit is pressed on
   the page, diffninja tells your agent never to press it, and you do not have
   to submit through diffninja at all.

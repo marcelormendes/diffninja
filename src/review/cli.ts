@@ -13,11 +13,14 @@ import { runGrammars } from "./grammars-command.js";
 const help = `diffninja. Pull request review inside your coding agent.
 
   diffninja setup [--cli claude,codex,omp,pi] [--uninstall] [--dry-run] [--no-install]
-                  Register the diffninja MCP server on every detected agent CLI.
-  diffninja grammars install [--dry-run] | status
+                  Register the diffninja MCP server on every detected agent CLI. Runs
+                  npm to install diffninja globally, and rewrites each JSON config it
+                  changes (see diffninja setup --help).
+  diffninja grammars install [--build] [--dry-run] | status
                   Add the tree-sitter grammars call flows use for languages other than
-                  JavaScript and TypeScript. The only command that downloads code, and
-                  only when you run it (exact versions, integrity-checked, no scripts).
+                  JavaScript and TypeScript. Downloads code through npm, and only when
+                  you run it (exact versions, integrity-checked, no install scripts
+                  unless you pass --build).
   diffninja --help
 
 After setup, ask your agent to review a GitHub pull request link, a diff, or a git

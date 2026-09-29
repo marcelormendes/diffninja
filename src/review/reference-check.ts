@@ -122,6 +122,8 @@ const MAX_DECLARED = 2_000;
 const MAX_FINDINGS = 50;
 const MAX_MESSAGE_CHARS = 240;
 const GIT_MAX_BYTES = 64 * 1024 * 1024;
+/** A git command that has not answered in this long (a dead network share) is stopped, not waited for forever. */
+const GIT_TIMEOUT_MS = 120_000;
 
 const LIMITATION =
   "Diagnostic comparison against the repository's currently installed dependencies: no emit, build, or test runs, so this bounds only these error codes in these two revisions and is not evidence that the project builds or that the change is safe.";
@@ -814,6 +816,7 @@ function git(repoRoot: string, args: readonly string[]): Buffer {
   return execFileSync(resolveExecutable("git"), ["--no-replace-objects", "--no-pager", ...args], {
     cwd: repoRoot,
     maxBuffer: GIT_MAX_BYTES,
+    timeout: GIT_TIMEOUT_MS,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
   });
 }
