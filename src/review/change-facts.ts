@@ -135,12 +135,18 @@ interface ScanState {
   open: OpenBlock;
 }
 
+/** A star followed by whitespace, a slash or the end of the line: how a block comment's continuation line starts. */
+const COMMENT_CONTINUATION = /^\*(?:\s|\/|$)/;
+
 /**
  * One line with strings replaced by `S` and comments removed. `state` carries a
  * block comment or multi-line string into the next line of the same side.
  */
 function scanLine(line: string, language: CodeLanguage, state: ScanState, keepStrings = false): string {
   let out = "";
+  // Whether `out` holds anything but whitespace yet, kept as a flag: trimming it
+  // for every character would make a long line quadratic to scan.
+  let codeSeen = false;
   // A string's text, or its placeholder: facts ignore string content, while the
   // formatting-only check must see it, since changing a literal changes behavior.
   const literal = (from: number, to: number) => (keepStrings ? line.slice(from, to) : "S");
@@ -161,31 +167,32 @@ function scanLine(line: string, language: CodeLanguage, state: ScanState, keepSt
       state.open = null;
       continue;
     }
-    const rest = line.slice(index);
-    if (language === "c-like" && rest.startsWith("//")) break;
+    if (language === "c-like" && line.startsWith("//", index)) break;
     // A hunk can start inside a block comment it never shows opening: a line
     // that begins `* ` or `*/` is that comment's continuation, not code.
-    if (language === "c-like" && out.trim() === "" && /^\*(?:\s|\/|$)/.test(rest)) {
-      if (rest.includes("*/")) {
-        index = line.indexOf("*/", index) + 2;
+    if (language === "c-like" && !codeSeen && COMMENT_CONTINUATION.test(line.slice(index, index + 2))) {
+      const close = line.indexOf("*/", index);
+      if (close >= 0) {
+        index = close + 2;
         continue;
       }
       break;
     }
-    if (language === "c-like" && rest.startsWith("/*")) {
+    if (language === "c-like" && line.startsWith("/*", index)) {
       state.open = "comment";
       index += 2;
       continue;
     }
-    if (language !== "c-like" && rest.startsWith("#")) break;
-    if (language === "python" && (rest.startsWith('"""') || rest.startsWith("'''"))) {
-      const delimiter = rest.startsWith('"""') ? '"""' : "'''";
+    if (language !== "c-like" && line.startsWith("#", index)) break;
+    if (language === "python" && (line.startsWith('"""', index) || line.startsWith("'''", index))) {
+      const delimiter = line.startsWith('"""', index) ? '"""' : "'''";
       const end = closingIndex(line, index + 3, delimiter);
       if (end < 0) {
         state.open = delimiter;
         return out + literal(index, line.length);
       }
       out += literal(index, end + 3);
+      codeSeen = true;
       index = end + 3;
       continue;
     }
@@ -197,6 +204,7 @@ function scanLine(line: string, language: CodeLanguage, state: ScanState, keepSt
         return out + literal(index, line.length);
       }
       out += literal(index, end + 1);
+      codeSeen = true;
       index = end + 1;
       continue;
     }
@@ -204,10 +212,12 @@ function scanLine(line: string, language: CodeLanguage, state: ScanState, keepSt
       const end = closingIndex(line, index + 1, char);
       if (end < 0) return out + literal(index, line.length);
       out += literal(index, end + 1);
+      codeSeen = true;
       index = end + 1;
       continue;
     }
     out += char;
+    if (!codeSeen && char !== undefined && !/\s/.test(char)) codeSeen = true;
     index += 1;
   }
   return out;
@@ -422,15 +432,47 @@ interface ComparisonAtom {
   readonly right: string;
 }
 
+/**
+ * Bounds on one line, so a hostile or generated line cannot make the analysis
+ * superlinear: an operand is read up to this many characters, a line yields at
+ * most MAX_ATOMS_PER_LINE comparisons, and `limitHit` compares at most
+ * MAX_LIMIT_ATOMS per side. A line past a bound is read up to it, which is all
+ * these lexical facts claim for a line that long.
+ */
+const MAX_OPERAND_CHARS = 200;
+const MAX_ATOMS_PER_LINE = 1000;
+const MAX_LIMIT_ATOMS = 150;
+const OPERAND_CHAR = /[\w$.[\]]/;
+const SPACE = /\s/;
+
+/** The operand ending just before `at`: whitespace skipped, then the run of operand characters. */
+function operandBefore(code: string, at: number): string {
+  let end = at;
+  while (end > 0 && at - end < MAX_OPERAND_CHARS && SPACE.test(code[end - 1] ?? "")) end -= 1;
+  let start = end;
+  while (start > 0 && end - start < MAX_OPERAND_CHARS && OPERAND_CHAR.test(code[start - 1] ?? "")) start -= 1;
+  return code.slice(start, end);
+}
+
+/** The operand starting after `from`: whitespace skipped, an optional minus, then the run of operand characters. */
+function operandAfter(code: string, from: number): string {
+  let start = from;
+  while (start < code.length && start - from < MAX_OPERAND_CHARS && SPACE.test(code[start] ?? "")) start += 1;
+  let end = start;
+  if (code[end] === "-") end += 1;
+  const bodyStart = end;
+  while (end < code.length && end - bodyStart < MAX_OPERAND_CHARS && OPERAND_CHAR.test(code[end] ?? "")) end += 1;
+  return end === bodyStart ? "" : code.slice(start, end);
+}
+
 function comparisonAtoms(code: string, language: CodeLanguage): ComparisonAtom[] {
   const atoms: ComparisonAtom[] = [];
   const patterns = language === "python" ? [COMPARISON_OPERATOR, PYTHON_COMPARISON_OPERATOR] : [COMPARISON_OPERATOR];
   for (const pattern of patterns) {
     for (const match of code.matchAll(pattern)) {
+      if (atoms.length >= MAX_ATOMS_PER_LINE) return atoms;
       const at = match.index ?? 0;
-      const left = /[\w$.[\]]+$/.exec(code.slice(0, at).trimEnd())?.[0] ?? "";
-      const right = /^-?[\w$.[\]]+/.exec(code.slice(at + match[0].length).trimStart())?.[0] ?? "";
-      atoms.push({ left, operator: match[0].trim(), right });
+      atoms.push({ left: operandBefore(code, at), operator: match[0].trim(), right: operandAfter(code, at + match[0].length) });
     }
   }
   return atoms;
@@ -488,8 +530,22 @@ const isNumber = (token: string) => /^-?\d[\d_]*(?:\.\d+)?(?:e-?\d+)?$/i.test(to
  * whose only difference is a number.
  */
 function limitHit(removed: readonly Hit[], added: readonly Hit[], language: CodeLanguage): Hit | null {
-  const removedAtoms = removed.flatMap((hit) => comparisonAtoms(hit.line.code, language).map((atom) => ({ atom, hit })));
-  const addedAtoms = added.flatMap((hit) => comparisonAtoms(hit.line.code, language).map((atom) => ({ atom, hit })));
+  // A line has one hit per condition and per comparison; its comparisons are read once, not once per hit.
+  const atomsOf = (hits: readonly Hit[]) => {
+    const seen = new Set<SideLine>();
+    const atoms: Array<{ atom: ComparisonAtom; hit: Hit }> = [];
+    for (const hit of hits) {
+      if (seen.has(hit.line)) continue;
+      seen.add(hit.line);
+      for (const atom of comparisonAtoms(hit.line.code, language)) {
+        if (atoms.length >= MAX_LIMIT_ATOMS) return atoms;
+        atoms.push({ atom, hit });
+      }
+    }
+    return atoms;
+  };
+  const removedAtoms = atomsOf(removed);
+  const addedAtoms = atomsOf(added);
   for (const { atom: before } of removedAtoms) {
     for (const { atom: after, hit } of addedAtoms) {
       const sameOperands = before.left === after.left && before.right === after.right;

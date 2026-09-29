@@ -265,3 +265,47 @@ describe("change facts", () => {
     expect(changeFactsOf({ file: "a.json", diff: hunk('-  "tag": "a"', '+  "tag": "a #b"') }).inert).toBe(false);
   });
 });
+
+describe("change facts on hostile or generated lines", () => {
+  // A pull request chooses its lines. These took minutes (16,000 characters of `=` took
+  // 155 s) while the whole MCP server, every other tool call included, waited.
+  const generous = 3000;
+  const timed = (work: () => void): number => {
+    const started = performance.now();
+    work();
+    return performance.now() - started;
+  };
+
+  test("one enormous line is read in linear time, whatever it is made of", () => {
+    for (const unit of ["=", "a==b || ", "<=", "x <= 1 && y >= 2 || ", "if (a > b) ", "\"a\" == '", "/*", "//"]) {
+      const line = unit.repeat(Math.ceil(400_000 / unit.length));
+      const elapsed = timed(() => {
+        for (const file of ["src/a.ts", "src/a.py", "src/a.go", "src/A.java", "src/a.rb"]) {
+          changeFactsOf({ file, diff: hunk("-old();", `+${line}`) });
+          changeFactsOf({ file, diff: hunk(`-${line}`, `+${line}=`) });
+        }
+      });
+      expect(elapsed, JSON.stringify(unit)).toBeLessThan(generous * 5);
+    }
+  });
+
+  test("a line with hundreds of comparisons is compared once, not once per comparison", () => {
+    const before = Array.from({ length: 400 }, (_, index) => `a${index} < ${index}`).join(" && ");
+    const after = Array.from({ length: 400 }, (_, index) => `a${index} < ${index + 1}`).join(" && ");
+    expect(timed(() => changeFactsOf({ file: "src/a.ts", diff: hunk(`-if (${before}) run();`, `+if (${after}) run();`) }))).toBeLessThan(generous);
+  });
+
+  test("an ordinary relaxed bound is still found next to a long line", () => {
+    const filler = "a==b || ".repeat(5000);
+    const facts = changeFactsOf({ file: "src/a.ts", diff: hunk("-if (n <= 10) stop();", "+if (n < 10) stop();", `+const x = ${filler}1;`) });
+    expect(facts.answers.limitChanged).toBe("yes");
+    expect(facts.evidence.limitChanged?.text).toBe("if (n < 10) stop();");
+  });
+
+  test("operands are read the same way as before on ordinary lines", () => {
+    expect(yesOf("src/a.ts", hunk("-if (items.length >= max) stop();", "+if (items.length > max) stop();"))).toContain("limitChanged");
+    expect(yesOf("src/a.ts", hunk("-if (cfg.limit[i] <= -5) stop();", "+if (cfg.limit[i] <= -9) stop();"))).toContain("limitChanged");
+    expect(yesOf("src/a.py", hunk("-if a is not None: run()", "+if a is None: run()"))).toContain("comparisonChanged");
+    expect(yesOf("src/a.ts", hunk("-if (a == b) run();", "+if (a == b) run();"))).toEqual([]);
+  });
+});
