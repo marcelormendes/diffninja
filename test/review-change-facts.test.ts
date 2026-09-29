@@ -379,11 +379,18 @@ describe("change facts on hostile or generated lines", () => {
     work();
     return performance.now() - started;
   };
-  /** Time to read `diff`, measured against a same-sized ordinary one, so a slower machine moves both. */
+  /**
+   * Time to read `diff`, measured against a same-sized ordinary one, so a slower machine moves both.
+   * It is measured again before it fails: a pause for garbage collection or a busy machine (a full
+   * run of this suite on a loaded laptop once read 546 ms against a 500 ms bound) does not repeat,
+   * and a scan that is quadratic in the hunk takes seconds every time.
+   */
   const withinLinear = (file: string, diff: string, ordinary: string, label: string) => {
     changeFactsOf({ file, diff: hunk("-a();", "+b();") });
-    const baseline = timed(() => changeFactsOf({ file, diff: ordinary }));
-    const elapsed = timed(() => changeFactsOf({ file, diff }));
+    const measure = () => ({ baseline: timed(() => changeFactsOf({ file, diff: ordinary })), elapsed: timed(() => changeFactsOf({ file, diff })) });
+    const slow = ({ baseline, elapsed }: { baseline: number; elapsed: number }) => elapsed >= Math.max(4 * baseline, 500);
+    let { baseline, elapsed } = measure();
+    if (slow({ baseline, elapsed })) ({ baseline, elapsed } = measure());
     expect(elapsed, `${label}: ${Math.round(elapsed)} ms against ${Math.round(baseline)} ms`).toBeLessThan(Math.max(4 * baseline, 500));
   };
   const context = (line: string) => hunk(line, "-a();", "+b();", line);
