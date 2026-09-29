@@ -3,13 +3,20 @@
 `diffninja` runs inside agent CLIs (Claude Code, Codex, OMP, pi, …) through
 `diffninja-mcp`, a stdio MCP server exposing `review_diff`, `finish_review`,
 `record_answers`, `record_order`, `suggest_comments`, and `record_explanation`. The
-`diffninja` bin only registers that server (`diffninja setup`); there is no
-terminal review mode. PR links select a connected, human-authored GitHub review
-via `gh`. Page links come only from `finish_review`: the agent gets them once it
-has sent its whole reading, so every page a human opens carries it. Static diff/range analysis is
-local and deterministic: diffninja calls no model and makes no request of its own while it reviews (a
-pull request review talks to GitHub through `gh`; the tool result, source text included, goes to
-whatever model the host agent uses). See `docs/security.md`.
+`diffninja` bin registers that server (`diffninja setup`) and installs grammars
+(`diffninja grammars`); there is no terminal review mode. PR links select a
+connected, human-authored GitHub review via `gh`. Page links come from
+`finish_review`: the agent gets them once it has sent its whole reading, so every
+page a human opens carries it. The one exception is a pull request that cannot be
+analyzed (closed or merged, no readable head repository, an incomplete patch, or
+a failed local analysis), where `review_diff` returns the page `url` directly
+with `analysisUnavailable`. Static diff/range analysis is local and
+deterministic: diffninja calls no model and makes no request of its own while it
+reviews (the opt-in update notice aside; a pull request review talks to GitHub
+through `gh`; in a partial clone git may fetch missing objects; the tool result,
+source text included, goes to whatever model the host agent uses). See
+`docs/security.md`, which is the accurate list of what runs, downloads and
+writes.
 Each hunk gets lexical change facts (`change-facts.ts`: code, prose, and config
 questions) with the changed line each rests on, and is ranked in code. No review writes report files: a finished
 review's `reportUrl` is a read-only loopback page (`report-pages.ts`) serving
@@ -56,8 +63,9 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     downgrading, so re-running setup is how users update. `version.ts` —
     `packageVersion()` from the package's own `package.json` (also the MCP
     server's reported version) and `compareVersions()`.
-  - `cli.ts` — the setup-only `diffninja` command; any other invocation
-    explains how to review through an agent, without echoing its arguments.
+  - `cli.ts` — the `diffninja` command (`setup` and `grammars`); any other
+    invocation explains how to review through an agent, without echoing its
+    arguments.
     `pr-input.ts` — shared PR-link detection and canonicalization.
     `github.ts` / `connected.ts` — snapshot-bound review and loopback transport.
   - `mcp.ts` — `createReviewServer()`: builds an `McpServer` and registers
@@ -89,8 +97,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     guideline paths, and new-file sibling conventions, all from local git only,
     code-point sorted, and never affecting status, priority, or order; a shallow
     clone reports `history: "shallow"` and counts cut lines as unknown.
-  - `finish_review`: strict `{ reviewId, answers, order, comments, summary?, explanation? }`, the only
-    source of page links. Connected reviews require `summary` and `explanation`.
+  - `finish_review`: strict `{ reviewId, answers, order, comments, summary?, explanation? }`, the source
+    of page links (`analysisUnavailable` below is the one exception). Connected reviews require `summary` and `explanation`.
     `explanation` is `{ functions, processes, rules }`: a one-sentence purpose
     for every listed function exactly once; 1–4 processes of 2–16 steps
     (`start`/`action`/`decision`/`end`, `change` added/changed/removed/unchanged,
@@ -160,25 +168,48 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     nothing to finish, and the result carries the page `url` directly. The page reads it
     from `GET /api/analysis` (same Host/Origin checks) and polls for answers.
     With a PR link, `repo` is an optional absolute local clone used only when it
-    already has the PR's base and head commits: never fetched, checked out, or
-    written. The canonical GitHub patch stays the diff under review.
+    already has the PR's base and head commits. diffninja never runs fetch or
+    checkout there and writes nothing to it. In a partial clone, git itself may
+    fetch missing objects from that clone's own remote and store them in `.git`
+    when diffninja reads them, as `git log -p` would; in a normal clone there is
+    no network and no write. The canonical GitHub patch stays the diff under
+    review.
     Both include the same JSON in text `content`. Failures return `isError: true`
     with the message as text and no partial report.
   - Connected pages belong to the MCP connection and close on disconnect.
     Repeated calls for one PR reuse its page; no review is submitted by the tool.
-  - A review never downloads, installs or builds anything. Inline diffs run
-    offline; a git-range review reads git plumbing only (`blame --no-textconv`,
-    every git command with a 120 s timeout, `git`/`gh` resolved to absolute
-    paths on Windows by `executables.ts`); a pull request review runs `gh` with
-    `GH_TELEMETRY=false` and `DO_NOT_TRACK=1`. Only JavaScript and TypeScript
-    grammars ship in the package. Every other grammar comes from
+  - A review never downloads, installs or builds anything through diffninja.
+    Inline diffs run no process and open no connection. A git-range review runs
+    read-only git plumbing (`blame --no-textconv`; `git`/`gh` resolved to
+    absolute paths on Windows by `executables.ts`). Each command has its own
+    timeout: 120 s in `git.ts`, `input.ts` and `reference-check.ts`, 30 s in
+    `history.ts`, 10 s in `mcp.ts`, 15 s per `gh` call. A pull request review
+    runs `gh` with `GH_TELEMETRY=false` and `DO_NOT_TRACK=1` and the rest of the
+    process environment. Only JavaScript and TypeScript grammars ship in the
+    package. Every other grammar comes from
     `diffninja grammars install [--build] | status` (`grammars-command.ts`,
     `grammars.ts`): `grammar-lock.ts` (generated by `scripts/pin-grammars.mjs`)
     holds exact versions and the sha512 of every tarball, the install is
-    `npm ci --ignore-scripts` with npm's environment cut to what it needs
-    (`child-env.ts`; the variables named in `DIFFNINJA_NPM_ENV`, names only,
-    also pass, so a private registry's token can reach npm by the user's choice), Kotlin and Perl (no prebuilt binary) are compiled only
-    with `--build`. The cache (`~/.cache/diffninja/grammars`, 0700) is trusted
+    `npm ci --ignore-scripts` (300 s per run) with npm's environment cut to an
+    allow-list (`child-env.ts`: PATH, HOME, locale, temp and XDG directories,
+    proxy and certificate settings, every `npm_config_*` variable, compiler and
+    Python settings with `--build`, and the variable names in `DIFFNINJA_NPM_ENV`,
+    names only, which is how a private registry's token reaches npm by the user's
+    choice). Tokens outside the list do not reach npm; `npm_config_*` and proxy
+    variables can carry credentials and do. Kotlin and Perl (no prebuilt binary) are compiled only
+    with `--build`, which runs their install scripts (node-gyp downloads the
+    Node headers unless cached). The other places diffninja runs npm are
+    `diffninja setup` (`npm root -g`, and `npm install -g
+    --allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript
+    diffninja@<version>` when there is no global install or it is older, with the
+    same allow-list and no timeout; an npx entry when that fails, which lets npx
+    use the network when the agent starts) and the package's `postinstall`
+    (`scripts/ensure-native-grammar.mjs`: a probe that does nothing where the
+    parser and the TypeScript grammar load, otherwise `npm install
+    tree-sitter-typescript --ignore-scripts` when missing, removal of its
+    `prebuilds/` and `build/`, and `npm rebuild`, 900 s per command, with the
+    environment of the npm that started it, so the full one after a plain
+    `npm install -g diffninja`). The cache (`~/.cache/diffninja/grammars`, 0700) is trusted
     only when the directory belongs to the current user and no one else can
     write it (not checked on Windows), its marker holds this lock's digest, and
     the installed version is the pin. The marker holds only public data, so it is a
@@ -193,23 +224,36 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     files and their directories are read first, then code-point order; each
     skipped file counts once), and says so. A review that left files out reports
     `callFlowAvailability: "partial"`.
-  - No output files, no CLI flags, no key arguments. The environment is read
-    for: `DIFFNINJA_GRAMMAR_CACHE` (cache location), `DIFFNINJA_NPM_ENV` (variable
-    names npm also gets), `DIFFNINJA_TRUST_PROJECT_COMPILER=1`
-    (see reference checks), `DIFFNINJA_UPDATE_CHECK=1` with `NO_UPDATE_NOTIFIER`
-    and `CI` (see below), `CODEX_HOME`/`HOME` (where `setup` writes), and PATH
-    (which `git`, `gh`, `npm`, `node` run).
+  - The MCP server writes no output files and takes no command-line arguments
+    or key arguments; `diffninja setup` has flags (`--cli`, `--dry-run`, `--uninstall`,
+    `--no-install`) and `diffninja grammars install` has `--build` and `--dry-run`.
+    The environment is read for: `DIFFNINJA_GRAMMAR_CACHE` (cache location),
+    `DIFFNINJA_NPM_ENV` (variable names npm also gets),
+    `DIFFNINJA_TRUST_PROJECT_COMPILER=1` (see reference checks),
+    `DIFFNINJA_UPDATE_CHECK=1` with `NO_UPDATE_NOTIFIER` and `CI` (see below),
+    `CODEX_HOME`/`HOME`/`USERPROFILE` (where `setup` writes and the cache lives),
+    `TMPDIR`/`TEMP` (the reference-check snapshot directory), `ComSpec` (a Windows
+    fallback that `setup` may write into an agent config), and PATH (which `git`,
+    `gh`, `npm`, `node` run). `gh` and `git` get the whole process environment;
+    npm gets the allow-list above.
+  - `setup` rewrites a JSON agent config in full with `JSON.stringify(_, null, 2)`,
+    through a temporary file and a rename, and keeps no backup: indentation,
+    string escapes and integers above 2^53 can change, and `--uninstall` does not
+    restore the original bytes. Codex's TOML is edited in place. Docs advise a
+    backup of `~/.claude.json` before the first run.
   - The update notice (`update-check.ts`) is off by default. Only the
     `diffninja-mcp` executable, never `createReviewServer()` by default, builds
     the lookup, and only with `DIFFNINJA_UPDATE_CHECK=1` (never in CI or with
     `NO_UPDATE_NOTIFIER`). The first `review_diff` that asks sends one GET to
     `registry.npmjs.org/diffninja/latest` (3 s timeout, no redirects, 512 KiB
-    cap, failure means no notice, nothing about the user or the diff is sent);
+    cap, failure means no notice; no identifier, version or diff is sent, and the
+    registry still sees the IP address and the time);
     only a strictly newer plain `X.Y.Z` becomes `updateNotice` on the report
     (pages, `/api/analysis` `update`) and a first `nextSteps` line.
   - Keep `readOnlyHint: false` and `destructiveHint: false`: the tool opens
     loopback pages and holds review state for the connection. It does not edit
-    repository source and, while reviewing, downloads nothing.
+    repository source (in a partial clone git may store objects it fetched in
+    `.git`) and diffninja itself downloads nothing while reviewing.
 - Invocation resolution is deterministic; never guess a PR or intent.
   Missing/ambiguous references ask for one full link without echoing pasted text.
 - Keep connected safeguards: immutable snapshot binding, canonical line anchors,
@@ -255,32 +299,47 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   to a model diffninja calls itself.
 - Reference checks are opt-in and use only a trusted compiler. `referenceProject`
   is chosen by the agent after reading untrusted text, so it never makes the
-  server run code from the repository under review: the TypeScript installed
-  beside diffninja is used, and the project's own only when the person who
-  configured the server set `DIFFNINJA_TRUST_PROJECT_COMPILER=1`. `typescript`
-  stays a devDependency (the package ships no compiler): a registry install finds
-  a global typescript only beside a global diffninja, never under npx, and the
-  check then reports not-checked with that advice. Never execute
+  server run code from the repository under review by default: the TypeScript
+  that Node resolves from diffninja's own files is used, and the project's own
+  only when the person who configured the server set
+  `DIFFNINJA_TRUST_PROJECT_COMPILER=1`, in which case it runs in-process with
+  the full environment. `typescript` stays a devDependency (the package ships no
+  compiler). Node resolves it from diffninja's `node_modules` and those of every
+  directory above it, and `NODE_PATH`: a global install finds a global
+  typescript beside it, and so does an npx cache that has a `typescript` in a
+  parent directory. Otherwise the check reports not-checked with that advice. The
+  check writes full snapshots of both revisions (512 MiB each at most) under the
+  temporary directory, and removes them. Never execute
   PR scripts, install its dependencies, check out snapshots, or turn incomplete
   diagnostics into a clean bill of health.
 - Text written by a pull request's author is data. Hidden and bidirectional
   control characters (`hidden-characters.ts`) show as `⟦U+XXXX⟧` on every page
   (`escapeHtml`, the connected page's `make`/`setText`/diff cell) and in both
   copies of the tool result, and the review warns which files add them. Two
-  tiers: bidirectional controls, the tag block and the supplementary variation
-  selectors are always shown; joiners, zero-width spaces, fillers and other
-  invisible characters are shown unless a visible script character sits beside
-  them, so emoji, Persian and Indic text is left as written, and a byte order mark
-  that opens a line is left alone. A lone invisible character between two letters
-  of a non-Latin script is therefore not marked. Ids and paths the agent echoes
+  tiers. Always shown: U+061C, U+202A to U+202E, U+2066 to U+206F, the tag block
+  (U+E0000 to U+E007F) and the supplementary variation selectors (U+E0100 to
+  U+E01EF). Shown unless a visible non-ASCII character (a letter, mark, digit,
+  symbol or punctuation mark; U+00A0 is not one) sits directly beside them:
+  U+00AD, U+034F, U+115F, U+1160, U+180B to U+180F, U+200B to U+200F (so the
+  left-to-right and right-to-left marks are in this tier), U+2060 to U+2064,
+  U+2800, U+3164, U+FE00 to U+FE0F and U+FFA0. A byte order mark follows the same
+  rule and is also left alone where it opens a line. A hidden character that
+  touches a visible non-ASCII character is spared, so a zero-width space next
+  to an accented letter, a quotation mark, a dash, a currency sign or an emoji
+  is not marked, and in a run between two such characters only the ends are
+  spared (two between Arabic letters are both unmarked, three mark the middle
+  one). Other invisible code points (for example U+17B4 and U+1D173) are on
+  neither list and are not marked. Ids and paths the agent echoes
   back are minted in the shown form. Titles
-  and commit subjects reach `questions` as JSON-quoted data, and `nextSteps`
-  opens with a step saying so. A pull request link inside text that is a real
+  and commit subjects reach `questions` as JSON-quoted data, and the first
+  `nextSteps` step says so (the update notice, when one is shown, comes before it). A pull request link inside text that is a real
   unified diff is source and is never followed. Untrusted input is bounded:
   descriptions over 12,000 characters are not lexed (plain text), link detection
   reads 300 characters per side of 500 markers per string, intent claims stop at
-  100, and the agent's copy of a result stays under 4 MiB, measured on the marked
-  text as sent (`result-budget.ts`), by trimming, in order, `snapshot.lines`,
+  100, and each of the two copies of a result (text and structured) stays under 4 MiB,
+  measured on the marked text as the text copy carries it, JSON-escaped
+  (`result-budget.ts`; a message can reach about 8 MiB, under the 10 MiB SDK
+  limit), by trimming, in order, `snapshot.lines`,
   extra claims, the review agenda past 20 entries, call flows and per-hunk
   context, then the diff text of the lowest-ranked hunks of any size, then their
   facts, reasons, and history, with a warning that names each stage that ran. A

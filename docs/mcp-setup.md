@@ -23,8 +23,10 @@ No install needed, the published package runs as an MCP command too:
 ```
 
 (`-p diffninja` selects the package; `diffninja-mcp` is the binary name. Pin
-a version with `-p diffninja@0.3.1` when you want a fixed release: an
-unversioned package lets npx keep running whichever copy it cached first.)
+a version with `-p diffninja@<version>` when you want a fixed release: an
+unversioned package lets npx keep running whichever copy it cached first. npx
+downloads the package and its dependencies from the npm registry the first time,
+and may contact the registry each time the agent starts.)
 
 ## One-command setup
 
@@ -42,9 +44,17 @@ setup is updated to the setup's version, so re-running
 (no install, no writes), `--uninstall` to remove, `--no-install` to skip
 installing or updating the global package. Codex is written to `~/.codex/config.toml`, or to
 `$CODEX_HOME/config.toml` when that variable is set. Entries carry no API key
-or environment: reviews run locally, and pull requests reuse your `gh` session.
-Re-running setup rewrites an entry from an older version that forwarded
+or environment: reviews run on your machine, and pull requests reuse your `gh`
+session. Re-running setup rewrites an entry from an older version that forwarded
 `TYPESAFE_API_KEY`.
+
+Setup runs npm, which downloads diffninja and its dependencies and runs the
+install scripts of `diffninja`, `tree-sitter`, `tree-sitter-javascript` and
+`tree-sitter-typescript`. It rewrites each JSON config file it changes in full,
+in standard formatting, and keeps no backup. Indentation becomes two spaces,
+`\u` escapes become characters, and integers above 2^53 are rounded. Codex's TOML
+file is edited in place. Copy `~/.claude.json` before the first run, for example
+`cp ~/.claude.json ~/.claude.json.bak`. `--dry-run` still runs `npm root -g`.
 
 The sections below are the manual equivalents, one CLI at a time.
 
@@ -54,13 +64,13 @@ The sections below are the manual equivalents, one CLI at a time.
 |---|---|---|
 | `mode` | `"auto"` / `"connected"` / `"static"` | Optional; defaults to auto. Connected requires a PR link; static treats diff/range strings literally and rejects pr/input. |
 | `diff` | string | Inline unified diff text. Empty string is valid and yields an empty review. |
-| `repo` | string | Absolute local repository path: required for `from`/`to`; with a PR link, an optional clone containing both snapshot commits, used only for local enrichment and never fetched or written. |
+| `repo` | string | Absolute local repository path: required for `from`/`to`; with a PR link, an optional clone containing both snapshot commits, used only for local enrichment. diffninja never runs fetch or checkout there and writes nothing to it. In a partial clone, git may itself fetch missing objects from that clone's own remote when diffninja reads them. |
 | `from` | string | Base ref or commit for a range review. |
 | `to` | string | Head ref or commit for a range review. Endpoints are compared directly, not the merge base. |
 | `pr` | string | GitHub PR link; starts a connected review. |
 | `input` | string | Free text containing a GitHub PR link; starts a connected review. |
 | `expectedOutcome` | `{ "title": string, "description": string }` | Exact, untrusted expected-outcome metadata for static analysis. Links here never select a PR. |
-| `referenceProject` | string | Static git range only: repository-relative tsconfig for opt-in diagnostics. Runs the TypeScript installed beside diffninja, which ships none. With a global diffninja, `npm install -g typescript` adds it; under npx there is none and the check is not checked. The repository's own compiler is code from the repository under review, so it runs only if whoever configured the server set `DIFFNINJA_TRUST_PROJECT_COMPILER=1`. |
+| `referenceProject` | string | Static git range only: repository-relative tsconfig for opt-in diagnostics. Runs the TypeScript that Node resolves from diffninja's own files (the `node_modules` of its install and of every directory above it, and `NODE_PATH`). diffninja ships none. With a global diffninja, `npm install -g typescript` adds it; under npx there is none unless a directory above the npx cache has one, and then the check is not checked. The repository's own compiler is code from the repository under review, so it runs only if whoever configured the server set `DIFFNINJA_TRUST_PROJECT_COMPILER=1`, and then it runs in diffninja's process with your full environment. |
 
 Rules enforced by the schema and the tool:
 
@@ -78,15 +88,18 @@ Rules enforced by the schema and the tool:
 - For static analysis, provide **exactly one** input: `diff`, or `from`
   **and** `to`. `repo` is accepted only for a range review and must be an
   absolute path.
-- Static analysis is local: no model, no API key, no network for inline diffs.
+- Static analysis is local: no model, no API key, and for inline diffs no
+  process started and no connection of diffninja's own (the opt-in update notice
+  aside).
 - Range reviews use the bundled `calldiff` engine for call flows; inline
   diffs report patch-only warnings instead, since full files are unavailable.
 - `expectedOutcome` preserves both strings in `report.pr`. It supports source
   navigation and explicit intent limitations, not an automatic fulfillment
   verdict. Generated and author claims remain separately attributed.
 - `referenceProject` compares selected unresolved-reference diagnostics between
-  immutable snapshots, including unchanged consumers. It never installs or runs
-  PR code; unsupported/incomplete checks are explicit. See
+  immutable snapshots, including unchanged consumers. It never installs a PR's
+  dependencies or runs its scripts (the repository's own compiler runs only with
+  the trust setting above); unsupported/incomplete checks are explicit. See
   [check boundaries](reference.md#automatic-check-boundaries).
 
 For static inputs, `structuredContent` **is** the `ReviewReport` plus
@@ -194,8 +207,8 @@ name it. All of it is attributed to the MCP client that sent it.
 diffninja makes no request of its own unless you turn this on: set
 `DIFFNINJA_UPDATE_CHECK=1` in the environment that launches `diffninja-mcp`.
 Then the first review in a session asks the npm registry for the newest
-`diffninja` version (one GET; nothing about you or your code is sent, and a
-failure is silent). If a newer release exists, the `review_diff` result tells
+`diffninja` version (one GET that carries no identifier, version or code, though
+the registry still sees your IP address and the time; a failure is silent). If a newer release exists, the `review_diff` result tells
 your agent to say so, and the review pages show a line with the command,
 `npx diffninja@latest setup`, which updates the global install and re-points
 your agents. Restart the agent afterwards. It stays off in CI and whenever
@@ -217,8 +230,9 @@ your agents. Restart the agent afterwards. It stays off in CI and whenever
 
 Every static result carries each hunk's status, priority, reasons, and local
 change facts (each `yes` with the changed line it rests on), plus deterministic
-evidence, a short reading agenda, and check coverage. Nothing is sent anywhere,
-and the same input always gives the same result. The facts point at what to
+evidence, a short reading agenda, and check coverage. diffninja itself sends
+nothing anywhere, but the result goes to whatever model your agent uses, and the
+same input always gives the same result. The facts point at what to
 read; interpreting what the change means is up to you and your agent.
 
 A review never downloads or builds code. Call flows read JavaScript and
