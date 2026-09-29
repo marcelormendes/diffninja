@@ -137,16 +137,21 @@ export interface AgentOrder {
   /** diffninja's own order of the same items, kept so the page can still offer it. */
   diffninjaIds: string[];
 }
-/** How much a suggested comment matters, most to least: what a reviewer triages by. */
-export const COMMENT_SEVERITIES = ["critical", "major", "minor"] as const;
-export type CommentSeverity = (typeof COMMENT_SEVERITIES)[number];
-/** One line comment the reviewing agent suggests; the human adds it to their review or not. */
+/** How the agent came to believe a comment: it ran or reproduced the failure, or followed the code path by reading it. A guess is not a blocker. */
+export const COMMENT_EVIDENCE = ["ran", "traced"] as const;
+export type CommentEvidence = (typeof COMMENT_EVIDENCE)[number];
+/** One line comment the reviewing agent suggests. Every one claims to block the merge, so each carries its proof. */
 export interface SuggestedComment {
   path: string;
   line: number;
   side: "LEFT" | "RIGHT";
+  /** The reviewer's own words; the only field that joins the human's draft. */
   body: string;
-  severity: CommentSeverity;
+  /** A concrete input or state and the wrong result, or the written rule it breaks and where the rule is written. */
+  scenario: string;
+  evidence: CommentEvidence;
+  /** What would have to be true for this not to be a problem. */
+  unlessTrue: string;
 }
 export interface AgentComments {
   comments: SuggestedComment[];
@@ -185,7 +190,7 @@ export interface ReviewReport {
   questions: ReviewQuestion[];
   /** The reading order the reviewing agent recorded; once present, `items` follow it. */
   agentOrder?: AgentOrder;
-  /** Line comments the reviewing agent suggested; nothing is posted until the human submits them. */
+  /** Comments the reviewing agent says block the merge; nothing is posted until the human submits them. */
   agentComments?: AgentComments;
   /**
    * The reviewing agent's own paragraph on the pull request's goal, written

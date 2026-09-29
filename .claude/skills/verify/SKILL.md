@@ -60,7 +60,7 @@ node .claude/skills/verify/drive.mjs review --args '<json>' [--summary '<plain-E
   - It first checks that a reading that leaves a question out is refused.
   - The answers are `cannot-tell`, or with `--answer first` each question's first option.
   - The order is the report's own, or its reverse with `--order reverse`.
-  - The comments are `[]`, or with `--suggest` one short comment on the first added line of each of the first three hunks. With comments, it also checks that a report-style comment ("Finding 1: …") is refused.
+  - The comments are `[]`, or with `--suggest` one fixture comment on the first added line of each hunk that adds one, up to five, with the scenario, evidence and unlessTrue a blocker carries. They are fixtures, not findings. With comments, it also checks that a report-style comment ("Finding 1: …"), a leftover `severity` key, a sixth comment, a comment on an unchanged line, and a comment without its scenario are each refused.
   - Then it checks that the report page shows the answers and the order attributed to `diffninja-verify`. For a connected review, it also checks that `/api/analysis` has the agent's order, every answer, and the comments.
 - `--hold N`: keeps the connection, and so the pages, alive for N seconds, and prints the URLs. Use it to open a page in a browser while the drive waits (see `features/report-page.md`).
 - `--out`: the evidence directory. The default is `<os tmpdir>/diffninja-verify/<ISO timestamp>/`, and the path is printed on the first line.
@@ -97,6 +97,7 @@ Each drive writes these files to its evidence directory:
 | `finish_review.json` | The accepted reading and the page links it returned. |
 | `finish_review.refused.json` | The refused reading that left a question out. |
 | `finish_review.labelled.json` | The refused report-style comment (with `--suggest`). |
+| `finish_review.severity.json`, `.sixth.json`, `.unchanged.json`, `.noscenario.json` | The refused comment with a leftover `severity`, six comments, a comment on an unchanged line, and a comment without a scenario (with `--suggest`). |
 | `reportUrl.finished.html` | The report page right after `finish_review`. |
 | `url.analysis.json` | The connected page's `/api/analysis` after `finish_review` (connected reviews only). |
 | `server-stderr.txt` | Server diagnostics. |

@@ -19,8 +19,11 @@ submit the review to GitHub yourself.
 - **Your agent does the first pass.** For each change, the agent answers simple
   questions: does it change behavior, is it tested, does it match the PR's
   goal. The answers sit above the code.
-- **Suggested comments, never posted for you.** The agent can suggest short
-  line comments. You add them with one click, edit them, or dismiss them.
+- **Suggested comments are blockers only, never posted for you.** The agent
+  suggests a comment only for what blocks the merge, and shows its proof: the
+  case that fails, how it checked, and what would make it fine. No comment at
+  all is the normal result, and anything that does not block is dropped. You
+  add a comment with one click, edit it, or dismiss it.
   None of diffninja's tools posts anything. The review reaches GitHub when
   Submit is pressed on your review page, and your agent is told never to do
   that itself.

@@ -21,10 +21,15 @@ import { visibleControls } from "./hidden-characters.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
 export const MAX_REPORT_PAGES = 20;
-/** Most comments one review may carry from the agent: a reviewer's handful, not a lint dump. */
-export const MAX_SUGGESTED_COMMENTS = 30;
+/** Most comments one review may carry from the agent. Every one claims to block the merge, and a review rarely has more than a few real blockers. */
+export const MAX_SUGGESTED_COMMENTS = 5;
 /** Longest suggested comment: a sentence or two, the way a reviewer writes one. */
 export const MAX_SUGGESTED_CHARS = 280;
+/** Bounds of a comment's proof, in trimmed characters: enough to name a case, short enough to read at a glance. */
+export const MIN_SCENARIO_CHARS = 20;
+export const MAX_SCENARIO_CHARS = 400;
+export const MIN_UNLESS_TRUE_CHARS = 10;
+export const MAX_UNLESS_TRUE_CHARS = 300;
 /** Longest goal summary: one short paragraph a maintainer reads before the diff. */
 export const MAX_SUMMARY_CHARS = 600;
 /** Longest goal summary by words: the same paragraph, kept short on purpose. */
@@ -200,12 +205,16 @@ function commentPaths(report: ReviewReport): Map<string, string | undefined> {
 }
 
 /**
- * Every comment names a line of the diff, one per line, and reads like the
- * reviewer's own. The comments come back with each file's own path, so they
- * anchor to the lines the human reviews.
+ * Every comment claims to block the merge. It names a line this pull request
+ * adds or removes, one per line, reads like the reviewer's own words, and
+ * carries its proof for the human's triage. The comments come back with each
+ * file's own path, so they anchor to the lines the human reviews.
  */
 function checkComments(report: ReviewReport, comments: readonly SuggestedComment[]): SuggestedComment[] {
-  const anchors = new Set<string>();
+  if (comments.length > MAX_SUGGESTED_COMMENTS) {
+    throw new Error(`comments has ${comments.length} entries and at most ${MAX_SUGGESTED_COMMENTS} are allowed. A review rarely has more than ${MAX_SUGGESTED_COMMENTS} real blockers. Check each one again and drop every one you cannot show fails.`);
+  }
+  const anchors = new Map<string, LineKind>();
   for (const item of report.items) anchorsOf(item, anchors);
   const paths = commentPaths(report);
   const seen = new Set<string>();
@@ -213,10 +222,19 @@ function checkComments(report: ReviewReport, comments: readonly SuggestedComment
     if (paths.has(comment.path) && paths.get(comment.path) === undefined) throw new Error(`comments[${index}] names ${comment.path}, which more than one file of this diff is shown as; this review cannot tell which one it means.`);
     const path = paths.get(comment.path) ?? comment.path;
     const key = anchorKey(path, comment.side, comment.line);
-    if (!anchors.has(key)) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
+    const kind = anchors.get(key);
+    if (kind === undefined) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
+    if (kind === "context") throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), an unchanged line. Unchanged code cannot block this merge. Anchor the comment on the nearest line this pull request adds or removes and say the rest in the body, or leave it out.`);
     if (seen.has(key)) throw new Error(`comments[${index}] is a second comment on the same line; combine them into one.`);
     const problem = commentProblem(comment.body);
-    if (problem !== undefined) throw new Error(`comments[${index}] ${problem}.`);
+    if (problem !== undefined) throw new Error(`comments[${index}].body ${problem}.`);
+    for (const [field, text, min, max] of [
+      ["scenario", comment.scenario, MIN_SCENARIO_CHARS, MAX_SCENARIO_CHARS],
+      ["unlessTrue", comment.unlessTrue, MIN_UNLESS_TRUE_CHARS, MAX_UNLESS_TRUE_CHARS],
+    ] as const) {
+      const flaw = proofProblem(text, min, max);
+      if (flaw !== undefined) throw new Error(`comments[${index}].${field} ${flaw}.`);
+    }
     seen.add(key);
     return { ...comment, path };
   });
@@ -224,7 +242,9 @@ function checkComments(report: ReviewReport, comments: readonly SuggestedComment
 
 function applyComments(report: ReviewReport, comments: readonly SuggestedComment[], suggestedBy: string): void {
   report.agentComments = {
-    comments: comments.map(({ path, line, side, body, severity }) => ({ path, line, side, body: body.trim(), severity })),
+    comments: comments.map(({ path, line, side, body, scenario, evidence, unlessTrue }) => ({
+      path, line, side, body: body.trim(), scenario: scenario.trim(), evidence, unlessTrue: unlessTrue.trim(),
+    })),
     suggestedBy,
     suggestedAt: new Date().toISOString(),
   };
@@ -253,16 +273,19 @@ function anchorKey(path: string, side: "LEFT" | "RIGHT", line: number): string {
   return JSON.stringify([path, side, line]);
 }
 
-/** Every line a comment may anchor to in one hunk: added lines on the new side, removed on the old, context on both. */
-function anchorsOf(item: ReviewItem, into: Set<string>): void {
+/** Whether a diff line is one the pull request changes, or unchanged context around it. */
+type LineKind = "changed" | "context";
+
+/** Every line a comment may name in one hunk: added lines on the new side, removed on the old, context on both. */
+function anchorsOf(item: ReviewItem, into: Map<string, LineKind>): void {
   let oldLine = item.oldStart;
   let newLine = item.newStart;
   for (const text of item.diff.split("\n").slice(1)) {
-    if (text.startsWith("+")) into.add(anchorKey(item.file, "RIGHT", newLine++));
-    else if (text.startsWith("-")) into.add(anchorKey(item.file, "LEFT", oldLine++));
+    if (text.startsWith("+")) into.set(anchorKey(item.file, "RIGHT", newLine++), "changed");
+    else if (text.startsWith("-")) into.set(anchorKey(item.file, "LEFT", oldLine++), "changed");
     else if (text.startsWith(" ")) {
-      into.add(anchorKey(item.file, "RIGHT", newLine++));
-      into.add(anchorKey(item.file, "LEFT", oldLine++));
+      into.set(anchorKey(item.file, "RIGHT", newLine++), "context");
+      into.set(anchorKey(item.file, "LEFT", oldLine++), "context");
     }
   }
 }
@@ -274,6 +297,16 @@ function commentProblem(body: string): string | undefined {
   if (CONTROL_CHARACTERS.test(body)) return "contains control characters";
   if (body.length > MAX_SUGGESTED_CHARS) return `is longer than ${MAX_SUGGESTED_CHARS} characters; say it the way a reviewer would, in a sentence or two`;
   if (REPORT_LABEL.test(body)) return "reads like a report (a heading, list marker, bold, or a label such as \"Finding 1:\"); write it the way the reviewer would say it";
+  return undefined;
+}
+
+/** Why a comment's scenario or unlessTrue cannot be shown to the human as written, or undefined when it can. They are never posted, so only their shape is checked. */
+function proofProblem(text: string, min: number, max: number): string | undefined {
+  const trimmed = text.trim();
+  if (/[\r\n]/.test(trimmed)) return "must be one line of text";
+  if (CONTROL_CHARACTERS.test(trimmed)) return "contains control characters";
+  if (trimmed.length < min) return `is shorter than ${min} characters; say what would actually happen`;
+  if (trimmed.length > max) return `is longer than ${max} characters; keep to the one case that fails`;
   return undefined;
 }
 
@@ -337,8 +370,8 @@ export class ReportPages {
 
   /**
    * Accept the reviewing agent's whole reading of a review at once: an answer
-   * to every question, the reading order of every hunk, the line comments it
-   * suggests (an empty list says it has none), and, for a connected pull
+   * to every question, the reading order of every hunk, the comments it says
+   * block the merge (an empty list says none does), and, for a connected pull
    * request, one short paragraph on the goal. Everything is checked before
    * anything is kept, so one gap or bad entry refuses the call and changes
    * nothing. Only a finished review's page addresses are handed out: an agent
@@ -416,10 +449,10 @@ export class ReportPages {
   }
 
   /**
-   * Update the line comments the reviewing agent suggests. The human sees them
-   * under their lines on the pull request page and adds each to their own
-   * review, or not; nothing here posts anything. Any bad comment refuses the
-   * call and keeps the previous set; an empty list clears it.
+   * Update the comments the reviewing agent says block the merge. The human
+   * sees them under their lines on the pull request page and adds each to
+   * their own review, or not; nothing here posts anything. Any bad comment
+   * refuses the call and keeps the previous set; an empty list clears it.
    */
   suggestComments(reviewId: string, comments: readonly SuggestedComment[], suggestedBy: string): RecordedComments {
     const { page, report } = this.review(reviewId);

@@ -1884,7 +1884,9 @@ function script(csrf: string, base: string): string {
       var s = list[i];
       var shaped = s && typeof s === 'object' && typeof s.path === 'string' && typeof s.line === 'number'
         && (s.side === 'LEFT' || s.side === 'RIGHT') && typeof s.body === 'string' && s.body !== ''
-        && SEVERITY_LABELS[s.severity] !== undefined;
+        && typeof s.scenario === 'string' && s.scenario !== ''
+        && (s.evidence === 'ran' || s.evidence === 'traced')
+        && typeof s.unlessTrue === 'string' && s.unlessTrue !== '';
       if (!shaped || !currentLine(s) || settled[suggestionKey(current.snapshotId, s)]) continue;
       out.push(s);
     }
@@ -1951,19 +1953,24 @@ function script(csrf: string, base: string): string {
     render();
   }
 
-  var SEVERITY_LABELS = { critical: 'Critical', major: 'Major', minor: 'Minor' };
-
+  /** A suggestion is a claim that the pull request should not merge until it is fixed, so it shows its proof under the comment. */
   function suggestionRow(suggestion, disabled) {
     var wrap = make('div', 'suggestion');
     var head = make('p', 'suggestion-by');
     head.appendChild(make('span', 'agent-dot', ''));
     head.appendChild(make('strong', '', suggestedBy()));
     head.appendChild(document.createTextNode(' suggests'));
-    var severity = make('span', 'severity severity-' + suggestion.severity, SEVERITY_LABELS[suggestion.severity]);
-    severity.title = 'How much the agent thinks this matters';
-    head.appendChild(severity);
+    var badge = make('span', 'blocks-badge', 'Blocks merge');
+    badge.title = 'The agent says this must be fixed before the pull request merges';
+    head.appendChild(badge);
     wrap.appendChild(head);
     wrap.appendChild(make('p', 'suggestion-body', suggestion.body));
+    var proof = make('div', 'suggestion-proof');
+    proof.appendChild(make('p', 'proof-title', 'Why it blocks'));
+    proof.appendChild(make('p', 'proof-scenario', suggestion.scenario));
+    proof.appendChild(make('p', 'proof-evidence', 'Checked: ' + (suggestion.evidence === 'ran' ? 'ran it' : 'traced the code')));
+    proof.appendChild(make('p', 'proof-unless', 'Not a problem if: ' + suggestion.unlessTrue));
+    wrap.appendChild(proof);
     var actions = make('div', 'suggestion-actions');
     var add = make('button', 'btn btn-primary btn-sm', 'Add to review');
     add.type = 'button';
@@ -1998,8 +2005,8 @@ function script(csrf: string, base: string): string {
       var said = make('p', '');
       said.appendChild(make('span', 'agent-dot', ''));
       said.appendChild(make('strong', '', suggestedBy()));
-      said.appendChild(document.createTextNode(' suggested ' + open.length + (open.length === 1 ? ' comment' : ' comments')
-        + ' on the lines below. Nothing is posted until you submit.'));
+      said.appendChild(document.createTextNode(' suggested ' + open.length + (open.length === 1 ? ' comment that blocks' : ' comments that block')
+        + ' the merge on the lines below. Nothing is posted until you submit.'));
       bar.appendChild(said);
       var all = make('button', 'btn btn-primary btn-sm', open.length === 1 ? 'Add it to review' : 'Add all ' + open.length);
       all.type = 'button';
@@ -3123,13 +3130,16 @@ kbd {
 .editor-input { flex: 1 1 240px; min-width: 0; }
 .suggestion-by { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-soft); }
 .suggestion-by strong { color: var(--ink); font-weight: 600; }
-.severity {
+.blocks-badge {
   margin-left: 6px; padding: 1px 7px; border-radius: 4px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em;
-  color: var(--ink-soft); background: var(--neutral-soft);
+  color: var(--alarm); background: var(--alarm-bg);
 }
-.severity-critical { color: var(--alarm); background: var(--alarm-bg); }
-.severity-major { color: var(--warn); background: var(--warn-soft); }
 .suggestion-body { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.suggestion-proof {
+  display: flex; flex-direction: column; gap: 2px; padding: 2px 0 2px 10px; border-left: 2px solid var(--line);
+  font-size: 13px; line-height: 1.45; color: var(--ink-soft); overflow-wrap: anywhere;
+}
+.proof-title { font-weight: 600; color: var(--ink); }
 .suggestion-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 
 /* ---------------------------------------------------------------- forms */

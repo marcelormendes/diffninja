@@ -109,6 +109,13 @@ async function finishReview(client: Client, args: NonNullable<CallToolRequest["p
   return CallToolResultSchema.parse(await client.callTool({ name: "finish_review", arguments: args }));
 }
 
+/** The proof a blocker carries next to its body: what fails, how the agent knows, and what would make it fine. */
+const PROOF = {
+  scenario: "A token with a past expiry still opens a session because its claims are never verified.",
+  evidence: "traced" as const,
+  unlessTrue: "another layer verifies the token signature before this runs.",
+};
+
 /**
  * The least an agent must send for a static report's page: every answer
  * cannot-tell, diffninja's own order, no comments. A connected review owes a
@@ -824,46 +831,150 @@ describe("suggest_comments", () => {
     return CallToolResultSchema.parse(await client.callTool({ name: "suggest_comments", arguments: args }));
   }
 
-  /** The first added line of the review's first hunk, as a comment anchor. */
-  function addedLine(report: ReturnType<typeof reportOf>) {
-    const item = report.items[0];
-    let line = item.newStart;
-    for (const text of item.diff.split("\n").slice(1)) {
-      if (text.startsWith("+")) return { path: item.file, line, side: "RIGHT" as const, severity: "minor" as const };
-      if (!text.startsWith("-")) line += 1;
+  /** Where a comment may and may not go: every line the hunks add (new side) or remove (old side), and one unchanged line on each side. */
+  function lines(report: ReturnType<typeof reportOf>) {
+    const changed: Array<{ path: string; line: number; side: "LEFT" | "RIGHT" }> = [];
+    let unchanged: { path: string; newLine: number; oldLine: number } | undefined;
+    for (const item of report.items) {
+      let oldLine = item.oldStart;
+      let newLine = item.newStart;
+      for (const text of item.diff.split("\n").slice(1)) {
+        if (text.startsWith("+")) changed.push({ path: item.file, line: newLine++, side: "RIGHT" });
+        else if (text.startsWith("-")) changed.push({ path: item.file, line: oldLine++, side: "LEFT" });
+        else if (text.startsWith(" ")) {
+          unchanged ??= { path: item.file, newLine, oldLine };
+          newLine += 1;
+          oldLine += 1;
+        }
+      }
     }
-    throw new Error("the fixture's first hunk adds no line");
+    if (unchanged === undefined) throw new Error("the fixture has no unchanged line");
+    return { changed, unchanged };
   }
 
-  test("keeps short comments on lines of the diff, attributed, and a later call replaces them", async () => {
+  const BODY = "Is this right?";
+
+  test("keeps short comments on lines the diff changes, and a later call replaces them", async () => {
     const client = await connectReview();
     const report = await reviewed(client);
-    const anchor = addedLine(report);
-    const first = await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, body: "  Should this handle a missing value?  " }] });
-    expect(first.isError).toBeFalsy();
+    const [anchor] = lines(report).changed;
+    const first = await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, ...PROOF, body: "  Should this handle a missing value?  " }] });
+    expect(first.isError, textOf(first)).toBeFalsy();
     expect(first.structuredContent).toEqual({ reviewId: report.reviewId, suggested: 1, next: expect.stringContaining("finish_review") });
-    expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, body: "nit: could this reuse the helper above?" }] })).isError).toBeFalsy();
+    expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, ...PROOF, body: "This lets an expired token in." }] })).isError).toBeFalsy();
     expect((await suggest(client, { reviewId: report.reviewId, comments: [] })).structuredContent).toMatchObject({ suggested: 0 });
   });
 
-  test("every suggested comment carries a critical, major or minor severity, kept beside its body", async () => {
+  test("every comment carries its proof, and a call missing any of it is refused whole", async () => {
     const client = await connectReview();
     const report = await reviewed(client);
-    const { severity: _omitted, ...bare } = addedLine(report);
-    for (const bad of [{ ...bare, body: "Is this right?" }, { ...bare, severity: "blocker", body: "Is this right?" }, { ...bare, severity: "Major", body: "Is this right?" }]) {
-      const refused = await suggest(client, { reviewId: report.reviewId, comments: [bad] });
-      expect(refused.isError).toBe(true);
-      expect(JSON.stringify(refused.content)).toMatch(/severity/);
+    const [anchor] = lines(report).changed;
+    const blocker = { ...anchor, ...PROOF, body: BODY };
+    expect((await suggest(client, { reviewId: report.reviewId, comments: [blocker] })).isError).toBeFalsy();
+    const { scenario: _s, ...noScenario } = blocker;
+    const { evidence: _e, ...noEvidence } = blocker;
+    const { unlessTrue: _u, ...noUnlessTrue } = blocker;
+    const cases: Array<{ comment: unknown; expected: RegExp }> = [
+      { comment: noScenario, expected: /scenario is required\. Say on one line what input or state fails.* at comments\[0\]\.scenario/ },
+      { comment: noEvidence, expected: /evidence must be "ran" .* at comments\[0\]\.evidence/ },
+      { comment: { ...blocker, evidence: "guessed" }, expected: /evidence must be "ran" .* or "traced" .*A guess is not a blocker.* at comments\[0\]\.evidence/ },
+      { comment: noUnlessTrue, expected: /unlessTrue is required\. Say on one line what would have to be true.* at comments\[0\]\.unlessTrue/ },
+      { comment: { ...blocker, scenario: "too short" }, expected: /comments\[0\]\.scenario is shorter than 20 characters/ },
+      { comment: { ...blocker, scenario: `   ${"x".repeat(10)}   ` }, expected: /comments\[0\]\.scenario is shorter than 20 characters/ },
+      { comment: { ...blocker, scenario: "x".repeat(401) }, expected: /comments\[0\]\.scenario is longer than 400 characters/ },
+      { comment: { ...blocker, unlessTrue: "too short" }, expected: /comments\[0\]\.unlessTrue is shorter than 10 characters/ },
+      { comment: { ...blocker, unlessTrue: "x".repeat(301) }, expected: /comments\[0\]\.unlessTrue is longer than 300 characters/ },
+      { comment: { ...blocker, scenario: `${PROOF.scenario}\nand a second line` }, expected: /comments\[0\]\.scenario must be one line of text/ },
+      { comment: { ...blocker, scenario: `${PROOF.scenario}\tand a tab` }, expected: /comments\[0\]\.scenario contains control characters/ },
+      { comment: { ...blocker, unlessTrue: `${PROOF.unlessTrue}\u0000` }, expected: /comments\[0\]\.unlessTrue contains control characters/ },
+    ];
+    for (const { comment, expected } of cases) {
+      for (const result of [
+        await suggest(client, { reviewId: report.reviewId, comments: [comment] }),
+        await finishReview(client, { ...staticFinish(report.reviewId, report), comments: [comment] }),
+      ]) {
+        expect(result.isError, JSON.stringify(comment)).toBe(true);
+        expect(textOf(result)).toMatch(expected);
+      }
     }
-    for (const severity of ["critical", "major", "minor"] as const) {
-      expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...bare, severity, body: "Is this right?" }] })).isError).toBeFalsy();
+  });
+
+  test("only the body has to read like a reviewer; the proof may name a rule or start with a label", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const [anchor] = lines(report).changed;
+    const comment = { ...anchor, body: BODY, scenario: "Finding 1: docs/api.md says a token is verified, and this code skips that.", evidence: "ran", unlessTrue: "Severity: none, if docs/api.md is out of date." };
+    const result = await suggest(client, { reviewId: report.reviewId, comments: [comment] });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    const label = await suggest(client, { reviewId: report.reviewId, comments: [{ ...comment, body: "Finding 1: the token is not verified" }] });
+    expect(label.isError).toBe(true);
+    expect(textOf(label)).toMatch(/comments\[0\]\.body reads like a report/);
+  });
+
+  test("a severity key is refused with what to send instead, and nothing of the call is kept", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const [anchor] = lines(report).changed;
+    const full = { ...anchor, ...PROOF, body: BODY };
+    expect((await suggest(client, { reviewId: report.reviewId, comments: [full] })).isError).toBeFalsy();
+    // A stale agent that kept the old shape names its severity and none of the proof.
+    const stale = { ...anchor, body: BODY, severity: "major" };
+    for (const comment of [{ ...full, severity: "major" }, stale]) {
+      for (const result of [
+        await suggest(client, { reviewId: report.reviewId, comments: [comment] }),
+        await finishReview(client, { ...staticFinish(report.reviewId, report), comments: [comment] }),
+      ]) {
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain('Unrecognized key "severity". A comment has exactly path, line, side, body, scenario, evidence and unlessTrue.');
+        expect(textOf(result)).toContain("Every comment in this list blocks the merge, and a comment that does not block is not sent.");
+      }
     }
+    const missing = textOf(await suggest(client, { reviewId: report.reviewId, comments: [stale] }));
+    for (const field of ["scenario", "evidence", "unlessTrue"]) expect(missing).toContain(`comments[0].${field}`);
+  });
+
+  test("at most five comments, and a sixth is refused with why", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const { changed } = lines(report);
+    expect(changed.length).toBeGreaterThan(5);
+    const blockers = changed.slice(0, 6).map((anchor, index) => ({ ...anchor, ...PROOF, body: `Is this right (${index})?` }));
+    const five = await suggest(client, { reviewId: report.reviewId, comments: blockers.slice(0, 5) });
+    expect(five.isError, textOf(five)).toBeFalsy();
+    expect(five.structuredContent).toMatchObject({ suggested: 5 });
+    for (const result of [
+      await suggest(client, { reviewId: report.reviewId, comments: blockers }),
+      await finishReview(client, { ...staticFinish(report.reviewId, report), comments: blockers }),
+    ]) {
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe("comments has 6 entries and at most 5 are allowed. A review rarely has more than 5 real blockers. Check each one again and drop every one you cannot show fails.");
+    }
+  });
+
+  test("an unchanged line cannot carry a blocker, and a line outside the diff keeps its own message", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const { changed, unchanged } = lines(report);
+    const blocker = { ...changed[0], ...PROOF, body: BODY };
+    expect((await suggest(client, { reviewId: report.reviewId, comments: [blocker] })).isError).toBeFalsy();
+    for (const anchor of [{ path: unchanged.path, line: unchanged.newLine, side: "RIGHT" }, { path: unchanged.path, line: unchanged.oldLine, side: "LEFT" }]) {
+      for (const result of [
+        await suggest(client, { reviewId: report.reviewId, comments: [{ ...blocker, ...anchor }] }),
+        await finishReview(client, { ...staticFinish(report.reviewId, report), comments: [{ ...blocker, ...anchor }] }),
+      ]) {
+        expect(result.isError, JSON.stringify(anchor)).toBe(true);
+        expect(textOf(result)).toContain(`comments[0] names ${anchor.path}:${anchor.line} (${anchor.side}), an unchanged line. Unchanged code cannot block this merge. Anchor the comment on the nearest line this pull request adds or removes`);
+      }
+    }
+    const outside = await suggest(client, { reviewId: report.reviewId, comments: [{ ...blocker, line: 9999 }] });
+    expect(outside.isError).toBe(true);
+    expect(textOf(outside)).toMatch(/not a line of this review's diff/);
   });
 
   test("refuses the whole call for a line outside the diff, a repeated line, or report-style text", async () => {
     const client = await connectReview();
     const report = await reviewed(client);
-    const anchor = addedLine(report);
+    const anchor = { ...lines(report).changed[0], ...PROOF };
     const cases: Array<{ comments: unknown[]; expected: RegExp }> = [
       { comments: [{ ...anchor, line: 9999, body: "Is this right?" }], expected: /not a line of this review's diff/ },
       { comments: [{ ...anchor, side: "LEFT", path: "nowhere.ts", body: "Is this right?" }], expected: /not a line of this review's diff/ },
@@ -1023,13 +1134,15 @@ describe("review_diff connected pull request mode", () => {
       const reviewId = payload.reviewId!;
       const report = payload.report!;
       const complete = minimalFinish(reviewId, report);
-      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", severity: "major" };
+      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", ...PROOF };
 
       // Anything short of the whole reading is refused, keeps nothing, and hands out no link.
       const incomplete: Array<{ args: NonNullable<CallToolRequest["params"]["arguments"]>; expected: RegExp }> = [
         { args: { ...complete, answers: complete.answers.slice(1) }, expected: /answers leave out 1 of/ },
         { args: { ...complete, order: [...complete.order, complete.order[0]] }, expected: /repeats a hunk/ },
         { args: { ...complete, comments: [{ ...comment, body: "Finding 1: dropped check" }] }, expected: /reads like a report/ },
+        { args: { ...complete, comments: [{ ...comment, scenario: "too short" }] }, expected: /scenario is shorter than 20 characters/ },
+        { args: { ...complete, comments: [{ ...comment, line: 1, side: "RIGHT" }] }, expected: /an unchanged line/ },
         { args: { reviewId, answers: complete.answers, order: complete.order }, expected: /comments|invalid arguments/i },
       ];
       for (const { args, expected } of incomplete) {
@@ -1055,6 +1168,8 @@ describe("review_diff connected pull request mode", () => {
       expect(view?.questions).toEqual({ total: report.questions.length, answered: report.questions.length });
       expect(view?.order).toEqual({ source: "agent", orderedBy: "diffninja-mcp-test 0.1.0" });
       expect(view?.suggestions).toEqual({ suggestedBy: "diffninja-mcp-test 0.1.0", comments: [comment] });
+      // Every kept comment is a blocker with its proof, and no severity rides along.
+      expect(view?.suggestions?.comments[0]).toEqual({ path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", scenario: PROOF.scenario, evidence: "traced", unlessTrue: PROOF.unlessTrue });
       // The goal paragraph the agent sent is handed back as the agent's own reading.
       expect(view?.summary).toEqual({ text: GOAL_SUMMARY, summarizedBy: "diffninja-mcp-test 0.1.0" });
       // A patch-only analysis has no call flows to show, and says why.
@@ -1087,6 +1202,51 @@ describe("review_diff connected pull request mode", () => {
     });
   });
 
+  test("blockers reach the page with their proof, a refused call keeps the previous set, and [] clears it", async () => {
+    await withFakeGh(async ({ log }) => {
+      blockNetwork();
+      const client = await connectReview();
+      const payload = connectedOf(await review(client, { pr: GH_URL }));
+      const reviewId = payload.reviewId!;
+      const report = payload.report!;
+      const url = (await finished(client, reviewId, report)).url!;
+      const kept = async () => (await connectedAnalysis(url))?.suggestions?.comments;
+      expect(await kept()).toEqual([]);
+
+      const first = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", ...PROOF };
+      const second = { path: "app.ts", line: 3, side: "RIGHT", body: "This second line can throw.", scenario: "more() is called with no order loaded, so it throws on a guest checkout.", evidence: "ran", unlessTrue: "guests cannot reach this path." };
+      const set = await client.callTool({ name: "suggest_comments", arguments: { reviewId, comments: [first, second] } });
+      expect(set.isError, JSON.stringify(set.content)).toBeFalsy();
+      expect(await kept()).toEqual([first, second]);
+
+      const refused: Array<{ label: string; comments: unknown[] }> = [
+        { label: "an unchanged line before the first", comments: [{ ...first, line: 1, side: "RIGHT" }] },
+        { label: "an unchanged line after the last", comments: [{ ...first, line: 4, side: "RIGHT" }] },
+        { label: "no scenario", comments: [{ ...first, scenario: undefined }] },
+        { label: "a guess", comments: [{ ...first, evidence: "guessed" }] },
+        { label: "a severity", comments: [{ ...first, severity: "critical" }] },
+        { label: "six comments", comments: Array.from({ length: 6 }, () => first) },
+      ];
+      for (const { label, comments } of refused) {
+        for (const name of ["suggest_comments", "finish_review"]) {
+          const args = name === "finish_review" ? { ...minimalFinish(reviewId, report), comments } : { reviewId, comments };
+          const result = await client.callTool({ name, arguments: args });
+          expect(result.isError, `${name}: ${label}`).toBe(true);
+          expect(await kept(), `${name}: ${label}`).toEqual([first, second]);
+        }
+      }
+
+      const replaced = await client.callTool({ name: "suggest_comments", arguments: { reviewId, comments: [second] } });
+      expect(replaced.isError).toBeFalsy();
+      expect(await kept()).toEqual([second]);
+      const cleared = await client.callTool({ name: "suggest_comments", arguments: { reviewId, comments: [] } });
+      expect(cleared.isError).toBeFalsy();
+      expect(await kept()).toEqual([]);
+      // Nothing was posted: the suggestions live on the page until the human adds them.
+      expect(ghCalls(log).some(line => /reviews|comments/.test(line))).toBe(false);
+    });
+  });
+
   test("a connected finish owes a plain-English goal summary; a missing or malformed one refuses the whole call, and the one kept is shown attributed", async () => {
     await withFakeGh(async ({ log }) => {
       blockNetwork();
@@ -1095,7 +1255,7 @@ describe("review_diff connected pull request mode", () => {
       const payload = connectedOf(await review(client, { pr: GH_URL }));
       const reviewId = payload.reviewId!;
       const report = payload.report!;
-      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", severity: "major" };
+      const comment = { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", ...PROOF };
       // Every refused call sends answers and a comment the accepted one does not,
       // so a finish that partly applied before refusing would show up on the page.
       const substitute = {
@@ -1632,7 +1792,7 @@ describe("text written by the pull request's author", () => {
       const diff = [`diff --git a/${file} b/${file}`, "index 1111111..2222222 100644", `--- a/${file}`, `+++ b/${file}`, "@@ -1,3 +1,3 @@", " export function f() {", "-  return 1;", "+  return 2;", " }", ""].join("\n");
       const inline = reportOf(await review(client, { mode: "static", diff }));
       expect(inline.items[0].file).toBe("lib⟦U+200B⟧.ts");
-      const comments = [{ path: inline.items[0].file, line: 2, side: "RIGHT", body: "Should this stay at one?", severity: "minor" }];
+      const comments = [{ path: inline.items[0].file, line: 2, side: "RIGHT", body: "Should this stay at one?", ...PROOF }];
       const commented = await finishReview(client, { ...staticFinish(inline.reviewId, inline), comments });
       expect(commented.isError, textOf(commented)).toBeFalsy();
       expect(fetchAttempts).toEqual([]);
@@ -1667,7 +1827,7 @@ describe("text written by the pull request's author", () => {
       const diff = [`diff --git a/${file} b/${file}`, "index 1111111..2222222 100644", `--- a/${file}`, `+++ b/${file}`, "@@ -1,3 +1,3 @@", " export function f() {", "-  return 1;", "+  return 2;", " }", ""].join("\n");
       const inline = reportOf(await review(client, { mode: "static", diff }));
       expect(inline.items[0].file.length).toBeGreaterThan(1024);
-      const comments = [{ path: inline.items[0].file, line: 2, side: "RIGHT", body: "Should this stay at one?", severity: "minor" }];
+      const comments = [{ path: inline.items[0].file, line: 2, side: "RIGHT", body: "Should this stay at one?", ...PROOF }];
       const commented = await finishReview(client, { ...staticFinish(inline.reviewId, inline), comments });
       expect(commented.isError, textOf(commented)).toBeFalsy();
     } finally {

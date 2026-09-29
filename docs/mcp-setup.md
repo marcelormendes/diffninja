@@ -121,7 +121,8 @@ for the MCP connection and close on disconnect. Failures return
 
 `finish_review` takes `{ reviewId, answers, order, comments, summary?, explanation? }`.
 Answer every question with one listed choice; name every item id exactly once
-in `order`; use `comments: []` when there is nothing worth leaving.
+in `order`; use `comments: []` when nothing blocks the merge, which is the
+normal answer.
 Connected reviews require `summary`: the agent's plain-English reading of
 the author's stated goal, one paragraph, at most 600 characters and 80 words,
 not a claim of verified fulfillment. They also require `explanation`, the
@@ -135,14 +136,42 @@ The call validates everything before keeping anything. Success returns
 can give the user.
 
 `record_order` replaces the order with `{ reviewId, order }`, naming all
-items exactly once. `suggest_comments` replaces suggestions with
-`{ reviewId, comments: [{ path, line, side, body, severity }] }`: at most 30, one per
-commentable diff line, `side` LEFT or RIGHT, one plain line of at most
-280 characters per body, and a `severity` of `critical`, `major` or `minor`
-that the page shows next to the suggestion. An empty list clears them. Suggestions appear on
-the connected page and join the human's draft only when they add them.
-Nothing is posted by these tools. Both return counts and `next`, never a
-page link, and work before or after finishing.
+items exactly once. `suggest_comments` replaces the suggested comments with
+`{ reviewId, comments: [{ path, line, side, body, scenario, evidence, unlessTrue }] }`.
+An empty list clears them. Both return counts and `next`, never a page link,
+and work before or after finishing. Nothing is posted by these tools.
+
+### Comments are for blockers only
+
+A suggested comment says the pull request should not merge until it is fixed.
+Being in `comments` is that claim, so there is no severity. Anything that does
+not block is discarded by design: a nit, a name, a missing test that is not a
+defect, a design preference, a question about intent, a problem that was
+already there, a risk the agent could not demonstrate. diffninja keeps no list
+of these. The agent is told to say them in its own reply instead, and `[]` is
+the normal answer.
+
+diffninja calls no model, so it cannot judge whether something blocks. It
+shapes what the agent must fill in and refuses what the contract forbids.
+
+| Field | Meaning |
+| --- | --- |
+| `path`, `line`, `side` | A line this pull request adds (`RIGHT`) or removes (`LEFT`), one comment per line. A context line is refused, because unchanged code cannot block this merge. So is a line outside the diff. |
+| `body` | The comment in the reviewer's own words: one plain line of at most 280 characters, with no headings, bold, list markers, or labels such as "Finding 1:". Only this joins your draft. |
+| `scenario` | A concrete input or state and the wrong result, or the written rule it breaks and where that rule is written. One line, 20 to 400 characters. |
+| `evidence` | `ran` if the agent ran or reproduced the failure. `traced` if it followed the code path by reading. Nothing else is accepted, because a guess is not a blocker. |
+| `unlessTrue` | What would have to be true for this not to be a problem. One line, 10 to 300 characters. The agent is told to try to prove itself wrong here. |
+
+At most 5 comments are accepted. A review rarely has more real blockers, so a
+sixth is refused with that reason. Any bad comment refuses the whole call and
+keeps the previous set. A `severity` key from an older agent is refused with a
+message that says every comment now blocks the merge.
+
+On the connected page each suggestion is marked "Blocks merge" under its line.
+Below the comment it shows "Why it blocks" (the scenario and how it was
+checked, "ran it" or "traced the code") and "Not a problem if" (`unlessTrue`).
+Only the body joins your draft when you add it. The proof stays on the
+suggestion, is never posted, and is there for your triage.
 
 ## `record_answers`
 

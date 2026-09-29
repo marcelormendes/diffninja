@@ -112,7 +112,7 @@ export interface ConnectedAnalysis {
   readonly questions: { readonly total: number; readonly answered: number };
   /** Changed files that have call-flow diagrams, for the page's "Call flow" buttons; empty for a patch-only analysis. */
   readonly callFlowFiles: readonly string[];
-  /** Line comments the reviewing agent suggested, for the human to add to their review or not. */
+  /** Comments the reviewing agent says block the merge, each with its proof, for the human to add to their review or not. */
   suggestions?: { readonly suggestedBy: string; readonly comments: readonly SuggestedComment[] };
   /**
    * The reviewing agent's own short paragraph on what the pull request does and
