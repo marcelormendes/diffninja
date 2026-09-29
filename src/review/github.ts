@@ -20,6 +20,7 @@
  *   never retried; only an exact match found on GitHub resolves it.
  */
 
+import { resolveExecutable } from "../executables.js";
 import { execFile, type ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
 
@@ -186,7 +187,14 @@ export function ghCliRunner(): GhRunner {
           }
           reject(new GhCommandError(firstLine(stderr) || firstLine(stdout) || "gh failed", stdout, stderr));
         };
-        const child = execFile("gh", [...invocation.args], {
+        let ghPath: string;
+        try {
+          ghPath = resolveExecutable("gh");
+        } catch {
+          reject(new GhCommandError("gh was not found", "", ""));
+          return;
+        }
+        const child = execFile(ghPath, [...invocation.args], {
           timeout: invocation.timeoutMs,
           killSignal: "SIGKILL",
           maxBuffer: GH_OUTPUT_LIMIT,

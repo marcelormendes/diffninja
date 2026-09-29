@@ -14,6 +14,7 @@
  * are counted as unknown rather than attributed to the boundary commit.
  */
 
+import { resolveExecutable } from "../executables.js";
 import { execFileSync } from "node:child_process";
 import { posix } from "node:path";
 import { testLikeFile } from "./file-role.js";
@@ -110,7 +111,7 @@ const STOP_WORDS = new Set([
 ]);
 
 function git(cwd: string, args: readonly string[], input?: string): string {
-  return execFileSync("git", ["--no-replace-objects", "--no-pager", ...args], {
+  return execFileSync(resolveExecutable("git"), ["--no-replace-objects", "--no-pager", ...args], {
     cwd, input, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: GIT_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"],
   });
 }
@@ -340,7 +341,7 @@ function identifiers(text: string): Set<string> {
 function readBlobs(cwd: string, rev: string, paths: readonly string[]): Map<string, string> {
   const out = new Map<string, string>();
   if (paths.length === 0) return out;
-  const raw = execFileSync("git", ["--no-replace-objects", "cat-file", "--batch"], {
+  const raw = execFileSync(resolveExecutable("git"), ["--no-replace-objects", "cat-file", "--batch"], {
     cwd, input: paths.map((path) => `${rev}:${path}`).join("\n") + "\n", maxBuffer: 256 * 1024 * 1024, timeout: GIT_TIMEOUT_MS,
   });
   let offset = 0;

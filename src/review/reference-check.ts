@@ -44,6 +44,7 @@
  *   check never reports passed, and an empty finding list is never a claim that
  *   the project compiles.
  */
+import { resolveExecutable } from "../executables.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -810,7 +811,7 @@ function resolveCommit(repoRoot: string, ref: string): string {
 }
 
 function git(repoRoot: string, args: readonly string[]): Buffer {
-  return execFileSync("git", ["--no-replace-objects", "--no-pager", ...args], {
+  return execFileSync(resolveExecutable("git"), ["--no-replace-objects", "--no-pager", ...args], {
     cwd: repoRoot,
     maxBuffer: GIT_MAX_BYTES,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },

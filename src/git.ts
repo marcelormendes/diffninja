@@ -1,3 +1,4 @@
+import { resolveExecutable } from "./executables.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -18,7 +19,7 @@ function gitBuffer(
   input?: Buffer,
   maxBuffer = 64 * 1024 * 1024,
 ): Buffer {
-  return execFileSync("git", ["--no-replace-objects", ...args], {
+  return execFileSync(resolveExecutable("git"), ["--no-replace-objects", ...args], {
     cwd,
     input,
     maxBuffer,

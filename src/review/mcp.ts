@@ -1,3 +1,4 @@
+import { resolveExecutable } from "../executables.js";
 import { execFileSync } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -88,7 +89,7 @@ export interface AnalysisScope {
 /** True when `sha` names a commit this clone already has; never fetches. */
 function hasCommit(repo: string, sha: string): boolean {
   try {
-    execFileSync("git", ["-C", repo, "cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore", timeout: 10_000 });
+    execFileSync(resolveExecutable("git"), ["-C", repo, "cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore", timeout: 10_000 });
     return true;
   } catch {
     return false;
@@ -110,7 +111,7 @@ function localRange(repo: string | undefined, baseSha: string, headSha: string, 
       note: `Patch-only: the clone at ${repo} does not have this pull request's commits. diffninja never fetches; run \`git fetch origin pull/${number}/head\` there yourself for call flows.`,
     };
   }
-  const from = execFileSync("git", ["-C", repo, "--no-replace-objects", "merge-base", baseSha, headSha], { encoding: "utf8", timeout: 10_000 }).trim();
+  const from = execFileSync(resolveExecutable("git"), ["-C", repo, "--no-replace-objects", "merge-base", baseSha, headSha], { encoding: "utf8", timeout: 10_000 }).trim();
   return { from, to: headSha };
 }
 
