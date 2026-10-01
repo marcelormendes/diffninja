@@ -57,7 +57,7 @@ sections below list each exception.
 | `gh` | A file's Viewed state changes on the review page, because you ticked or unticked a change | Reads the pull request's head again, then marks the file **Viewed** or not Viewed on GitHub as you, with one GraphQL mutation (`markFileAsViewed` or `unmarkFileAsViewed`), and only if the head is still the one that was loaded. It goes through the same gated route as Submit, has no preview, and is sent only for a changed file of the loaded pull request. The mutation text is fixed, and the file path and the pull request's id travel as separate variables, never inside the text. Someone holding the page's link, your agent included, can send it. A program that was never given the link cannot. |
 | `npm` | You run `diffninja setup` | `npm root -g`, then `npm install -g diffninja@<version>` when there is no global install or it is older than setup. npm downloads diffninja and its dependencies and runs the install scripts of `diffninja`, `tree-sitter`, `tree-sitter-javascript` and `tree-sitter-typescript`. `--dry-run` and `--no-install` still run `npm root -g` and install nothing. `--uninstall` runs no npm. |
 | `npm` | You run `diffninja grammars install` | Downloads the 20 pinned grammar packages. With `--build`, `node-gyp` also downloads the Node headers from nodejs.org unless they are already cached. |
-| `npm` (the postinstall script) | After an npm install of diffninja, only where the parser or the TypeScript grammar does not load (Linux ARM64 is the known case) | Installs `tree-sitter-typescript` if it is missing, then rebuilds it from source. The rebuild runs install scripts and can download the Node headers. Where the grammar loads, it does nothing. |
+| `npm` (the postinstall script) | After an npm install of diffninja, only where the parser or the TypeScript grammar does not load (Linux ARM64 is the known case) | Installs `tree-sitter-typescript` if it is missing, then rebuilds it from source and keeps a copy of the rebuilt grammar in diffninja's package directory. The rebuild runs install scripts and can download the Node headers. Where the grammar loads, it does nothing. |
 | `npx` | Your agent starts diffninja, when `setup` could not install globally and registered the npx form | npx may contact the npm registry, and downloads the package the first time, as it does for any package. |
 | `git` | A git-range review, or a pull request review with a local clone, when that clone is a partial clone | May fetch missing objects from that clone's own remote, exactly as `git log -p` would. See below. |
 | diffninja | Only if you set `DIFFNINJA_UPDATE_CHECK=1` | One GET of `registry.npmjs.org/diffninja/latest`, at the first review. It carries no identifier, version or code. The registry still sees your IP address and the time of the request. Off by default, and off in CI or with `NO_UPDATE_NOTIFIER` set. |
@@ -100,8 +100,13 @@ package and runs after every npm install of diffninja. It first checks that
 `tree-sitter` and `tree-sitter-typescript` load and parse a line of TypeScript.
 If they do, it stops. If not, it installs `tree-sitter-typescript` without its
 scripts when that package is missing, deletes the package's `prebuilds/` and
-`build/` directories, and runs `npm rebuild tree-sitter-typescript`. It gives
-each npm command 900 seconds and always exits 0.
+`build/` directories, and runs `npm rebuild tree-sitter-typescript`. When the
+rebuilt grammar loads, or when the grammar that loads was compiled on this
+machine during the install, it copies the files the grammar needs at run time
+into `native-grammar/` in diffninja's own package directory, because npm can
+still delete that package at the end of the install, and diffninja loads that
+copy when the package itself does not load. It gives each npm command 900
+seconds and always exits 0.
 
 A review itself never installs anything. A missing grammar is named in the
 review's warnings, and call flows skip the files that need it.
@@ -144,7 +149,9 @@ review's warnings, and call flows skip the files that need it.
   file inside records which lock installed the cache. It holds only public
   data, so it is a consistency check, not a signature.
 - npm's global prefix and npm's cache, when npm runs. The postinstall script can
-  also delete and rebuild files inside the installed `tree-sitter-typescript`.
+  also delete and rebuild files inside the installed `tree-sitter-typescript`,
+  and write its copy of the rebuilt grammar to `native-grammar/` inside
+  diffninja's own package directory.
 - Your agents' configuration files, when you run `diffninja setup`
   (`~/.claude.json`, Codex's `config.toml`, `~/.omp/agent/mcp.json`,
   `~/.pi/agent/mcp.json`). See the next section.

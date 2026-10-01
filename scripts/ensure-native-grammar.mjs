@@ -17,11 +17,15 @@
 // On every platform whose prebuild loads (Linux/Windows/macOS x64, macOS arm64)
 // the probe below succeeds and this is a fast no-op that touches nothing.
 //
+// npm can still delete the package after this script ran (see keepRepairedCopy),
+// so a grammar compiled on this machine is also copied into `native-grammar/`,
+// which the loader falls back to.
+//
 // This is a heal, not a gate: it always exits 0, including when no C/C++ toolchain
 // is present. Extraction degrades to a per-file warning in that case, and a user
 // can retry later with `npm run rebuild:native`.
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +38,18 @@ const PROBE_SOURCE = "const x: number = 1;";
 const RECURSION_GUARD = "DIFFNINJA_NATIVE_GRAMMAR_HEAL";
 /** Generous for a source compile; a hung npm must not hang the install forever. */
 const NPM_TIMEOUT_MS = 900_000;
+/**
+ * Where the repaired grammar is kept, relative to diffninja's package root. The
+ * loader (`loadRepairedGrammar` in src/languages/grammars.ts) falls back to it.
+ */
+const REPAIRED_DIR = "native-grammar";
+/** What the grammar needs at run time: its entry, the compiled binding and the node types. */
+const RUNTIME_FILES = [
+  "package.json",
+  "bindings/node/index.js",
+  "typescript/src/node-types.json",
+  "tsx/src/node-types.json",
+];
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const require = createRequire(new URL("../package.json", import.meta.url));
@@ -56,18 +72,19 @@ function grammarWorks() {
 }
 
 /**
- * Same parse, in a child process. The in-process probe above already failed once
+ * Same parse, in a child process, of the installed package or of the directory
+ * `grammar` names. The in-process probe above already failed once
  * in this process, and an installer's process is a poor place to judge the result
  * of an install it just performed; a fresh process is what the next `diffninja`
  * run will do. Run with `-e` and cwd at the package root, so a bare `require`
  * resolves through the same `node_modules` chain the CLI uses. Only the failure
  * reason is echoed — a child's full stack trace would bury the outcome line.
  */
-function grammarWorksInFreshProcess() {
+function grammarWorksInFreshProcess(grammar = PACKAGE) {
   const script = `
     const Parser = require("tree-sitter");
     const parser = new Parser();
-    parser.setLanguage(require(${JSON.stringify(PACKAGE)}).typescript);
+    parser.setLanguage(require(${JSON.stringify(grammar)}).typescript);
     parser.parse(${JSON.stringify(PROBE_SOURCE)});
   `;
   try {
@@ -165,23 +182,84 @@ function heal() {
   npm(["rebuild", PACKAGE, "--no-audit", "--no-fund"]);
 }
 
-if (!process.env[RECURSION_GUARD] && !grammarWorks()) {
-  console.error(
-    `[native-grammar] ${PACKAGE} does not load on ${process.platform}/${process.arch}; rebuilding from source`,
-  );
+/**
+ * Copy the grammar compiled on this machine into `native-grammar/` at
+ * diffninja's own root.
+ *
+ * Why: when an install script under the package failed (on Linux ARM64 a
+ * node-gyp build can fail while npm runs install scripts in parallel), npm
+ * marks the optional dependency failed and deletes its directory at the end of
+ * the install, after this script has run, whether it repaired the package or
+ * found it already working. npm does not track this
+ * directory, so the copy survives, and the loader falls back to it when the
+ * package itself is gone. Written beside the target and renamed into place, so
+ * a half-written copy is never the one loaded.
+ */
+function keepRepairedCopy() {
+  const installed = packageRoot();
+  const target = join(root, REPAIRED_DIR, PACKAGE);
+  const staging = `${target}.partial-${process.pid}`;
+  rmSync(staging, { recursive: true, force: true });
+  for (const file of RUNTIME_FILES) cpSync(join(installed, file), join(staging, file));
+  // node-gyp-build loads the first binding it finds under build/Release.
+  const release = join(installed, "build", "Release");
+  mkdirSync(join(staging, "build", "Release"), { recursive: true });
+  cpSync(release, join(staging, "build", "Release"), {
+    recursive: true,
+    filter: source => source === release || source.endsWith(".node"),
+  });
+  rmSync(target, { recursive: true, force: true });
+  renameSync(staging, target);
+  if (!grammarWorksInFreshProcess(target)) throw new Error(`the copy in ${target} does not load`);
+  console.error(`[native-grammar] kept the rebuilt grammar in ${join(REPAIRED_DIR, PACKAGE)}`);
+}
+
+/**
+ * The installed grammar loads from a binding compiled on this machine rather
+ * than a shipped prebuild. Such a package is the one npm may still delete: its
+ * own build, or that of the `tree-sitter-javascript` npm nests under it, ran in
+ * an install script that can fail, and npm removes the optional dependency
+ * when either does, even after the package itself built and loads.
+ */
+function builtOnThisMachine() {
   try {
-    heal();
-  } catch (error) {
-    console.error(`[native-grammar] rebuild failed: ${error.message}`);
+    const release = join(packageRoot(), "build", "Release");
+    return readdirSync(release).some(name => name.endsWith(".node"));
+  } catch {
+    return false;
   }
-  if (grammarWorksInFreshProcess()) {
-    console.error(`[native-grammar] OK — ${PACKAGE} loads after the rebuild`);
+}
+
+function keepCopy() {
+  try {
+    keepRepairedCopy();
+  } catch (error) {
+    console.error(`[native-grammar] could not keep a copy of the rebuilt grammar: ${error.message}`);
+  }
+}
+
+if (!process.env[RECURSION_GUARD]) {
+  if (grammarWorks()) {
+    if (builtOnThisMachine()) keepCopy();
   } else {
     console.error(
-      `[native-grammar] WARNING: ${PACKAGE} still does not load. Install a C/C++ toolchain ` +
-        "(build-essential on Linux) and re-run `npm run rebuild:native`. TypeScript/TSX " +
-        "extraction warns per file until then; nothing else is affected.",
+      `[native-grammar] ${PACKAGE} does not load on ${process.platform}/${process.arch}; rebuilding from source`,
     );
+    try {
+      heal();
+    } catch (error) {
+      console.error(`[native-grammar] rebuild failed: ${error.message}`);
+    }
+    if (grammarWorksInFreshProcess()) {
+      console.error(`[native-grammar] OK — ${PACKAGE} loads after the rebuild`);
+      keepCopy();
+    } else {
+      console.error(
+        `[native-grammar] WARNING: ${PACKAGE} still does not load. Install a C/C++ toolchain ` +
+          "(build-essential on Linux) and re-run `npm run rebuild:native`. TypeScript/TSX " +
+          "extraction warns per file until then; nothing else is affected.",
+      );
+    }
   }
 }
 
