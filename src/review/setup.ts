@@ -96,6 +96,8 @@ export interface SetupDeps {
   npm?: Npm;
   /** Version this setup installs and pins; defaults to the running package's. */
   version?: string;
+  /** Repairs the native parser and grammars of the global install in `packageDir`; defaults to running its postinstall script. */
+  repairNative?: (packageDir: string, quiet: boolean) => Promise<void>;
 }
 
 type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
@@ -235,6 +237,33 @@ async function installGlobal(npm: Npm, spec: string): Promise<boolean> {
   }
 }
 
+interface Resolution {
+  entry: McpEntry;
+  viaNpx: boolean;
+  /** The global install's package directory, when the entry runs one. */
+  packageDir?: string;
+}
+
+function globalResolution(globalRoot: string): Resolution {
+  return { entry: globalEntry(globalRoot), viaNpx: false, packageDir: join(globalRoot, "diffninja") };
+}
+
+/**
+ * Run the global install's own postinstall script, which rebuilds the native
+ * parser or a bundled grammar that does not load on this machine and does
+ * nothing where they load. npm 12 blocks install scripts unless they are
+ * allowed by name, so a plain `npm install -g diffninja` never runs it, and an
+ * install that is already current is not reinstalled. Its exit code is not
+ * checked: the script always exits 0 and prints what it could not fix.
+ */
+export async function repairNativeGrammars(packageDir: string, quiet: boolean): Promise<void> {
+  const script = join(packageDir, "scripts", "ensure-native-grammar.mjs");
+  if (!existsSync(script)) return;
+  // The same allow-list as the install, plus the compiler and Python settings a rebuild reads.
+  const child = spawn(process.execPath, [script], { cwd: packageDir, env: npmEnvironment(process.env, {}, { build: true }), stdio: quiet ? "ignore" : "inherit" });
+  await exitCode(child);
+}
+
 /**
  * Resolve the registration entry. A global install older than `version` is
  * updated to it first; one that cannot be updated keeps its entry, with a
@@ -248,12 +277,12 @@ async function resolveEntry(
   quiet: boolean,
   dryRun: boolean,
   version: string,
-): Promise<{ entry: McpEntry; viaNpx: boolean }> {
+): Promise<Resolution> {
   const spec = `diffninja@${version}`;
   const root = await globalRoot(npm);
   if (root !== undefined && globalEntryExists(root)) {
     const installed = globalVersion(root);
-    if (!globalIsOlder(installed, version)) return { entry: globalEntry(root), viaNpx: false };
+    if (!globalIsOlder(installed, version)) return globalResolution(root);
     const from = installed ?? "an unknown version";
     const update = `npm install -g ${spec}`;
     if (noInstall) {
@@ -264,20 +293,20 @@ async function resolveEntry(
       if (!quiet) console.log(`diffninja: updating the global install from ${from} to ${version} (${update})...`);
       const updated = await installGlobal(npm, spec);
       const updatedRoot = updated ? await globalRoot(npm) : undefined;
-      if (updatedRoot !== undefined && globalEntryExists(updatedRoot)) return { entry: globalEntry(updatedRoot), viaNpx: false };
+      if (updatedRoot !== undefined && globalEntryExists(updatedRoot)) return globalResolution(updatedRoot);
       if (!globalEntryExists(root)) {
         if (!quiet) console.error("diffninja: global update failed and left no install; registering npx-based entries instead.");
         return { entry: npxEntry(process.platform, version), viaNpx: true };
       }
       if (!quiet) console.error(`diffninja: update failed; the global install is still ${globalVersion(root) ?? from}. Update it with ${update}.`);
     }
-    return { entry: globalEntry(root), viaNpx: false };
+    return globalResolution(root);
   }
 
   if (dryRun) {
     if (!noInstall && root !== undefined) {
       if (!quiet) console.log(`diffninja: dry run: would install the package globally (npm install -g ${spec}).`);
-      return { entry: globalEntry(root), viaNpx: false };
+      return globalResolution(root);
     }
     if (!quiet) console.error("diffninja: dry run: global install unavailable; would register npx-based entries instead.");
     return { entry: npxEntry(process.platform, version), viaNpx: true };
@@ -288,7 +317,7 @@ async function resolveEntry(
     if (await installGlobal(npm, spec)) {
       const installedRoot = await globalRoot(npm);
       if (installedRoot !== undefined && globalEntryExists(installedRoot)) {
-        return { entry: globalEntry(installedRoot), viaNpx: false };
+        return globalResolution(installedRoot);
       }
     }
   }
@@ -673,9 +702,11 @@ export async function runSetup(options: SetupOptions = {}, deps: SetupDeps = {})
   let entry: McpEntry | undefined;
   let viaNpx = false;
   if (!uninstall) {
-    const resolved = await resolveEntry(options.noInstall === true, deps.npm ?? createNpm(), quiet, dryRun, version);
+    const noInstall = options.noInstall === true;
+    const resolved = await resolveEntry(noInstall, deps.npm ?? createNpm(), quiet, dryRun, version);
     entry = resolved.entry;
     viaNpx = resolved.viaNpx;
+    if (resolved.packageDir !== undefined && !noInstall && !dryRun) await (deps.repairNative ?? repairNativeGrammars)(resolved.packageDir, quiet);
   }
 
   const reports: CliReport[] = [];

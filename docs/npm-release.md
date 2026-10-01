@@ -401,9 +401,39 @@ is `"failed"` only when the analysis itself throws).
 ### 7. npm 12: dependency install scripts are blocked by default
 
 npm 12 skips every dependency's `preinstall`/`install`/`postinstall` unless it
-is allowed by name, and only warns. Where tree-sitter has a prebuild for the
-platform nothing visible breaks, but the Linux ARM64 repair (finding 3) would
-silently not run. `diffninja setup` names what it needs:
+is allowed by name, and only warns. Where tree-sitter's prebuilds load nothing
+visible breaks. Where they do not, nothing parses, and `diffninja-mcp` cannot
+start, because the server imports the parser as it starts. Reproduced on
+`node:24.21.0-bookworm` (Linux ARM64) with npm 12.2.0: after a plain
+`npm install -g diffninja` the `tree-sitter` parser prebuild needs
+`GLIBCXX_3.4.31` (GCC 13), which Debian 12 lacks, and the TypeScript prebuild is
+the mislabeled x86-64 one (finding 3). npm 11 compiled both from source in their
+install scripts; npm 12 runs none of them, nor diffninja's postinstall.
+
+Three changes cover it:
+
+- `diffninja setup` runs the registered global install's postinstall with
+  `node` after it installs, and also when the install is already current, so
+  `npm install -g diffninja` followed by setup repairs the install.
+- The postinstall checks the parser and both bundled grammars and rebuilds,
+  one at a time, each that does not load. Its npm commands run with
+  diffninja's own directory as the project. npm 12 refuses `--allow-scripts` on
+  the command line there (`EALLOWSCRIPTS`), so `package.json` carries an
+  `allowScripts` field naming `tree-sitter`, `tree-sitter-javascript` and
+  `tree-sitter-typescript`. npm 12 reads that field only when diffninja is the
+  project, which is the case for these commands and in a checkout, never when
+  diffninja is someone's dependency.
+- `diffninja-mcp` imports the server lazily, so when the parser does not load it
+  prints one line naming the script to run instead of a stack trace.
+
+Verified in Docker (`node:24.21.0-bookworm`, npm 12.2.0): plain global install,
+then `diffninja setup` rebuilt `tree-sitter` and `tree-sitter-typescript`, and
+afterwards JavaScript and TypeScript parse and the server answers `initialize`.
+The same tarball passed `scripts/verify-package.mjs` 5/5 with npm 11.19.0 and
+5/5 with npm 10.9.9 (Node 22). An npx-based entry (setup's fallback) runs from
+npx's own cache, which setup does not repair.
+
+For the install itself, `diffninja setup` names what it needs:
 `npm install -g --allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript diffninja@<its version>`.
 The names match a registry install's identity; a local tarball install matches
 by file path instead, so the consumer matrix cannot prove this part. npm 10.9

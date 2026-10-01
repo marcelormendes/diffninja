@@ -313,8 +313,14 @@ policy.
   call flows with a warning per file.
 - **Linux needs a recent libstdc++.** The `tree-sitter@0.25.1` Linux prebuild
   imports `GLIBCXX_3.4.31` (GCC 13.1+, i.e. libstdc++ from Ubuntu 24.04 or
-  newer). `npm rebuild --prefix <installed diffninja> tree-sitter
-  --build-from-source` rebuilds it against the host toolchain.
+  newer). The same heal rebuilds it against the host toolchain when it does not
+  load.
+- **npm 12 runs no install script unless it is allowed.** After a plain
+  `npm install -g diffninja` neither the heal nor tree-sitter's own builds ran,
+  so where a prebuild does not load nothing parses and `diffninja-mcp` stops at
+  start with a line naming the fix. `diffninja setup` runs the heal of the
+  global install it registers, so `npx -y diffninja@latest setup` repairs it; so
+  does `node <installed diffninja>/scripts/ensure-native-grammar.mjs`.
 - **Grammars.** Call flows read JavaScript and TypeScript with grammars that
   ship in the package. Every other language needs its tree-sitter grammar,
   and a review never downloads one: run `diffninja grammars install` once, with

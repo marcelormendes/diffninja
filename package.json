@@ -78,6 +78,11 @@
       "tree-sitter-javascript": "0.25.0"
     }
   },
+  "allowScripts": {
+    "tree-sitter": true,
+    "tree-sitter-javascript": true,
+    "tree-sitter-typescript": true
+  },
   "devDependencies": {
     "@oxlint/plugins": "^1.79.0",
     "@types/node": "^24.2.0",

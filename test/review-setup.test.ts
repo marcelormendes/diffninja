@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -24,6 +25,7 @@ import {
   globalIsOlder,
   globalVersion,
   npxEntry,
+  repairNativeGrammars,
   runSetup,
   updateFile,
   windowsCliEntry,
@@ -385,6 +387,48 @@ describe("runSetup", () => {
       expect(globalVersion(npm.root)).toBe("0.2.0");
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs the native parser of the global install it registers, except on a dry run, with --no-install, or through npx", async () => {
+    const home = fakeHome();
+    try {
+      mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+      const npm = fakeNpm(home, false);
+      const repaired: string[] = [];
+      const repairNative = async (packageDir: string) => {
+        repaired.push(packageDir);
+      };
+      // Installed now, and again when the install is already current: npm 12 may have run no install script either time.
+      await runSetup(options(home), { npm, repairNative });
+      await runSetup(options(home), { npm, repairNative });
+      expect(npm.installs).toBe(1);
+      expect(repaired).toEqual([join(npm.root, "diffninja"), join(npm.root, "diffninja")]);
+
+      await runSetup(options(home, { dryRun: true }), { npm, repairNative });
+      await runSetup(options(home, { noInstall: true }), { npm, repairNative });
+      const failing: Npm = { rootG: async () => "", installG: async () => false };
+      await runSetup(options(home), { npm: failing, repairNative });
+      expect(repaired).toHaveLength(2);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("repairNativeGrammars runs the package's own postinstall script, and nothing when the package has none", async () => {
+    const dir = fakeHome();
+    try {
+      mkdirSync(join(dir, "scripts"));
+      writeFileSync(join(dir, "scripts", "ensure-native-grammar.mjs"), 'import { writeFileSync } from "node:fs";\nwriteFileSync("ran.txt", process.cwd());\n');
+      await repairNativeGrammars(dir, true);
+      expect(readFileSync(join(dir, "ran.txt"), "utf8")).toBe(realpathSync(dir));
+
+      const empty = join(dir, "empty");
+      mkdirSync(empty);
+      await repairNativeGrammars(empty, true);
+      expect(existsSync(join(empty, "ran.txt"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
