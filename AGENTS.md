@@ -272,11 +272,19 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     --allow-scripts=diffninja,tree-sitter,tree-sitter-javascript,tree-sitter-typescript
     diffninja@<version>` when there is no global install or it is older, with the
     same allow-list and no timeout; an npx entry when that fails, which lets npx
-    use the network when the agent starts) and the package's `postinstall`
+    use the network when the agent starts; after registering a global install,
+    current or just installed, setup runs that install's postinstall with
+    `node`, since npm 12 runs no install script after a plain `npm install -g`;
+    not with `--dry-run` or `--no-install`) and the package's `postinstall`
     (`scripts/ensure-native-grammar.mjs`: a probe that does nothing where the
-    parser and the TypeScript grammar load, otherwise `npm install
-    tree-sitter-typescript --ignore-scripts` when missing, removal of its
-    `prebuilds/` and `build/`, and `npm rebuild`; after a successful rebuild, or
+    parser and the JavaScript and TypeScript grammars load and parse, otherwise
+    `npm install tree-sitter-typescript --ignore-scripts` (with `--omit=dev` in
+    an installed copy) when missing, then, one package at a time for each of
+    `tree-sitter`, `tree-sitter-javascript` and `tree-sitter-typescript` that
+    does not load, removal of its `prebuilds/` and `build/` and `npm rebuild
+    <package>`, all with diffninja's package directory as the npm project, whose
+    `allowScripts` field allows exactly those three packages' scripts (npm 12
+    refuses `--allow-scripts` inside a project); after a successful rebuild, or
     when the grammar that loads was compiled on this machine, a copy of its
     run-time files in `native-grammar/` at the package root, which npm
     does not track and `loadGrammarPackage` falls back to when the package does

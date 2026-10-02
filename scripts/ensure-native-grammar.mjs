@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Postinstall heal for tree-sitter-typescript's native binding.
+// Postinstall heal for the native tree-sitter bindings diffninja ships with: the
+// parser and the JavaScript and TypeScript grammars.
 //
 // Why this exists: tree-sitter-typescript@0.23.2 publishes an x86-64 ELF as its
 // `prebuilds/linux-arm64/` binary, so on Linux ARM64 the addon cannot load. The
@@ -21,9 +22,18 @@
 // so a grammar compiled on this machine is also copied into `native-grammar/`,
 // which the loader falls back to.
 //
+// npm 12 blocks dependency install scripts unless they are allowed by name, so
+// a plain `npm install -g diffninja` builds nothing: where a prebuild does not
+// load (the TypeScript grammar on Linux ARM64, or a parser prebuild that needs a
+// newer libstdc++ than the system has) nothing works. `diffninja setup` runs this
+// script after it installs, and it rebuilds whichever of the three packages does
+// not load. The rebuilds run with diffninja's own package.json as the project,
+// whose `allowScripts` field names the three packages: npm 12 refuses
+// `--allow-scripts` on the command line inside a project.
+//
 // This is a heal, not a gate: it always exits 0, including when no C/C++ toolchain
 // is present. Extraction degrades to a per-file warning in that case, and a user
-// can retry later with `npm run rebuild:native`.
+// can retry later by running this script again.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -32,6 +42,14 @@ import { fileURLToPath } from "node:url";
 
 /** The one grammar package with a broken prebuild; see the header comment. */
 const PACKAGE = "tree-sitter-typescript";
+/** The native packages this script checks and rebuilds, in build order. */
+const NATIVE_PACKAGES = ["tree-sitter", "tree-sitter-javascript", PACKAGE];
+/** What loads each package on its own, so a failure names the package to rebuild. */
+const LOAD_PROBES = {
+  "tree-sitter": 'new (require("tree-sitter"))();',
+  "tree-sitter-javascript": 'require("tree-sitter-javascript");',
+  [PACKAGE]: `require(${JSON.stringify(PACKAGE)});`,
+};
 /** Parse shape used by the probe: TypeScript syntax only this grammar accepts. */
 const PROBE_SOURCE = "const x: number = 1;";
 /** Set for the nested npm calls below, which re-enter this package's lifecycle. */
@@ -55,14 +73,17 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const require = createRequire(new URL("../package.json", import.meta.url));
 
 /**
- * Real end-to-end check: require the parser and the grammar, set the language and
- * parse. A prebuild that exists but targets another CPU fails here, which is the
- * only reliable signal — the file is present and its wrapper loads.
+ * Real end-to-end check: require the parser and both grammars, set each language
+ * and parse. A prebuild that exists but targets another CPU, or needs a newer C++
+ * library than the system has, fails here, which is the only reliable signal —
+ * the file is present and its wrapper loads.
  */
 function grammarWorks() {
   try {
     const Parser = require("tree-sitter");
     const parser = new Parser();
+    parser.setLanguage(require("tree-sitter-javascript"));
+    parser.parse("let a = 1;");
     parser.setLanguage(require(PACKAGE).typescript);
     parser.parse(PROBE_SOURCE);
     return true;
@@ -81,16 +102,23 @@ function grammarWorks() {
  * reason is echoed — a child's full stack trace would bury the outcome line.
  */
 function grammarWorksInFreshProcess(grammar = PACKAGE) {
-  const script = `
+  return worksInFreshProcess(`
     const Parser = require("tree-sitter");
     const parser = new Parser();
+    parser.setLanguage(require("tree-sitter-javascript"));
+    parser.parse("let a = 1;");
     parser.setLanguage(require(${JSON.stringify(grammar)}).typescript);
     parser.parse(${JSON.stringify(PROBE_SOURCE)});
-  `;
+  `);
+}
+
+/** Whether `script` runs without an error in a fresh Node process at the package root. */
+function worksInFreshProcess(script, quiet = false) {
   try {
     execFileSync(process.execPath, ["-e", script], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
     return true;
   } catch (error) {
+    if (quiet) return false;
     const lines = String(error.stderr ?? "").split("\n").filter(line => line.trim() !== "");
     const reason = lines.find(line => line.includes("Error")) ?? lines[0];
     if (reason) console.error(`[native-grammar] probe still fails: ${reason.trim()}`);
@@ -141,18 +169,31 @@ function withCxx20(cxxflags) {
  * MODULE_NOT_FOUND after the npm install below landed the package (a fresh process
  * resolved the same path fine). A filesystem check reads what is on disk now.
  */
-function packageRoot() {
+function packageRoot(name = PACKAGE) {
   for (let dir = root; ; dir = dirname(dir)) {
-    const manifest = join(dir, "node_modules", PACKAGE, "package.json");
-    if (readJson(manifest)?.name === PACKAGE) return dirname(manifest);
-    if (dirname(dir) === dir) throw new Error(`Cannot locate the installed ${PACKAGE} directory`);
+    const manifest = join(dir, "node_modules", name, "package.json");
+    if (readJson(manifest)?.name === name) return dirname(manifest);
+    if (dirname(dir) === dir) throw new Error(`Cannot locate the installed ${name} directory`);
   }
 }
 
-function heal() {
+/**
+ * The native packages that do not load, in build order. When each loads on its
+ * own and only the parse fails, all of them are rebuilt, since the probe cannot
+ * tell which one is wrong.
+ */
+function brokenPackages() {
+  const broken = NATIVE_PACKAGES.filter(name => !worksInFreshProcess(LOAD_PROBES[name], true));
+  return broken.length > 0 ? broken : [...NATIVE_PACKAGES];
+}
+
+function heal(broken) {
   const manifest = readJson(join(root, "package.json"));
   const spec = manifest?.optionalDependencies?.[PACKAGE] ?? manifest?.dependencies?.[PACKAGE] ?? "latest";
-  const env = { ...process.env, [RECURSION_GUARD]: "1" };
+  // Every npm call below runs with diffninja's own package.json as the project,
+  // even when npm started this script from a global install, so the packages it
+  // touches are diffninja's own and npm 12 reads the `allowScripts` field there.
+  const env = { ...process.env, [RECURSION_GUARD]: "1", npm_config_global: "false", npm_config_location: "project" };
   if (process.platform !== "win32") env.CXXFLAGS = withCxx20(process.env.CXXFLAGS);
   const npm = args => {
     const { file, args: argv } = npmSpawnSpec(args);
@@ -163,23 +204,31 @@ function heal() {
   // may be absent rather than merely broken. Fetch it without running its scripts:
   // the compile below is the single source of truth for the binding.
   //
-  // No `--omit=dev`: `npm install <spec>` reconciles the whole tree, so adding it
-  // would delete a developer's devDependencies (measured: 54 packages removed from
-  // a checkout) to save inert packages in a consumer's global install. The probe
-  // above means this branch only runs where npm actually dropped the package.
-  if (!existsSync(join(root, "node_modules", PACKAGE, "package.json"))) {
+  // `--omit=dev` only in an installed copy: in a checkout, `npm install <spec>`
+  // reconciles the whole tree and would delete a developer's devDependencies
+  // (measured: 54 packages removed), while in an installed copy, which is the
+  // project here, leaving it out would install diffninja's devDependencies.
+  if (broken.includes(PACKAGE) && !existsSync(join(root, "node_modules", PACKAGE, "package.json"))) {
     console.error(`[native-grammar] ${PACKAGE} is missing; fetching ${spec}`);
-    npm(["install", `${PACKAGE}@${spec}`, "--no-save", "--ignore-scripts", "--no-audit", "--no-fund"]);
+    const installedCopy = root.split(/[\\/]/).includes("node_modules");
+    npm(["install", `${PACKAGE}@${spec}`, "--no-save", "--ignore-scripts", "--no-audit", "--no-fund", ...(installedCopy ? ["--omit=dev"] : [])]);
   }
 
   // node-gyp-build loads build/Release ahead of prebuilds, and reports "already
   // built" when either exists. Removing both forces one from-source compile, with
-  // the wrong-architecture prebuild that caused this gone for good.
-  const installed = packageRoot();
-  for (const stale of ["prebuilds", "build"]) {
-    rmSync(join(installed, stale), { recursive: true, force: true });
+  // the prebuild that did not load gone for good. One package at a time: builds
+  // that npm runs side by side can fail on Linux ARM64.
+  for (const name of broken) {
+    try {
+      const installed = packageRoot(name);
+      for (const stale of ["prebuilds", "build"]) {
+        rmSync(join(installed, stale), { recursive: true, force: true });
+      }
+      npm(["rebuild", name, "--no-audit", "--no-fund"]);
+    } catch (error) {
+      console.error(`[native-grammar] rebuilding ${name} failed: ${error.message}`);
+    }
   }
-  npm(["rebuild", PACKAGE, "--no-audit", "--no-fund"]);
 }
 
 /**
@@ -195,7 +244,7 @@ function heal() {
  * package itself is gone. Written beside the target and renamed into place, so
  * a half-written copy is never the one loaded.
  */
-function keepRepairedCopy() {
+function keepRepairedCopy(announce) {
   const installed = packageRoot();
   const target = join(root, REPAIRED_DIR, PACKAGE);
   const staging = `${target}.partial-${process.pid}`;
@@ -211,7 +260,7 @@ function keepRepairedCopy() {
   rmSync(target, { recursive: true, force: true });
   renameSync(staging, target);
   if (!grammarWorksInFreshProcess(target)) throw new Error(`the copy in ${target} does not load`);
-  console.error(`[native-grammar] kept the rebuilt grammar in ${join(REPAIRED_DIR, PACKAGE)}`);
+  if (announce) console.error(`[native-grammar] kept the rebuilt grammar in ${join(REPAIRED_DIR, PACKAGE)}`);
 }
 
 /**
@@ -230,37 +279,35 @@ function builtOnThisMachine() {
   }
 }
 
-function keepCopy() {
+function keepCopy(announce) {
   try {
-    keepRepairedCopy();
+    keepRepairedCopy(announce);
   } catch (error) {
     console.error(`[native-grammar] could not keep a copy of the rebuilt grammar: ${error.message}`);
   }
 }
 
 if (!process.env[RECURSION_GUARD]) {
-  if (grammarWorks()) {
-    if (builtOnThisMachine()) keepCopy();
-  } else {
+  const works = grammarWorks();
+  if (!works) {
+    const broken = brokenPackages();
     console.error(
-      `[native-grammar] ${PACKAGE} does not load on ${process.platform}/${process.arch}; rebuilding from source`,
+      `[native-grammar] ${broken.join(", ")} ${broken.length === 1 ? "does" : "do"} not load on ${process.platform}/${process.arch}; rebuilding from source`,
     );
-    try {
-      heal();
-    } catch (error) {
-      console.error(`[native-grammar] rebuild failed: ${error.message}`);
-    }
+    heal(broken);
     if (grammarWorksInFreshProcess()) {
-      console.error(`[native-grammar] OK — ${PACKAGE} loads after the rebuild`);
-      keepCopy();
+      console.error("[native-grammar] OK — the parser and the JavaScript and TypeScript grammars load after the rebuild");
     } else {
       console.error(
-        `[native-grammar] WARNING: ${PACKAGE} still does not load. Install a C/C++ toolchain ` +
-          "(build-essential on Linux) and re-run `npm run rebuild:native`. TypeScript/TSX " +
-          "extraction warns per file until then; nothing else is affected.",
+        "[native-grammar] WARNING: the parser or a grammar still does not load. Install a C/C++ " +
+          "toolchain and Python (build-essential and python3 on Linux), then run " +
+          `\`node ${JSON.stringify(fileURLToPath(import.meta.url))}\` or \`npx -y diffninja@latest setup\` again. ` +
+          "Call flows skip the files they cannot parse until then.",
       );
     }
   }
+  // Refreshed quietly on every run, so the copy always matches the package's build.
+  if (builtOnThisMachine()) keepCopy(!works);
 }
 
 process.exit(0);
