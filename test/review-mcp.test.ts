@@ -1310,6 +1310,29 @@ describe("review_diff connected pull request mode", () => {
     });
   });
 
+  test("finish_review keeps every distinct blocker, one per changed line on either side, and the page gets them all", async () => {
+    await withFakeGh(async ({ log }) => {
+      blockNetwork();
+      const client = await connectReview();
+      const payload = connectedOf(await review(client, { pr: GH_URL }));
+      const reviewId = payload.reviewId!;
+      const report = payload.report!;
+      const three = [
+        { path: "app.ts", line: 2, side: "LEFT", body: "Why drop this check here?", ...PROOF },
+        { path: "app.ts", line: 2, side: "RIGHT", body: "added() runs before the guard, so it can fire twice.", scenario: "A retry after a timeout calls added() again and the order is charged twice.", evidence: "traced", unlessTrue: "added() is idempotent for the same order id." },
+        { path: "app.ts", line: 3, side: "RIGHT", body: "This second line can throw.", scenario: "more() is called with no order loaded, so it throws on a guest checkout.", evidence: "ran", unlessTrue: "guests cannot reach this path." },
+      ];
+      const result = await finishReview(client, { ...minimalFinish(reviewId, report), comments: three });
+      expect(result.isError, textOf(result)).toBeFalsy();
+      // SAFETY: finish_review answers with the finished shape; its fields are asserted just below.
+      const done = JSON.parse(textOf(result)) as Finished;
+      expect(done.suggested).toBe(3);
+      // The same line number on the old and new side is two anchors, so nothing is merged or dropped.
+      expect((await connectedAnalysis(done.url!))?.suggestions?.comments).toEqual(three);
+      expect(ghCalls(log).some(line => /reviews|comments/.test(line))).toBe(false);
+    });
+  });
+
   test("a connected finish owes a plain-English goal summary; a missing or malformed one refuses the whole call, and the one kept is shown attributed", async () => {
     await withFakeGh(async ({ log }) => {
       blockNetwork();
