@@ -276,7 +276,12 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     (`scripts/ensure-native-grammar.mjs`: a probe that does nothing where the
     parser and the TypeScript grammar load, otherwise `npm install
     tree-sitter-typescript --ignore-scripts` when missing, removal of its
-    `prebuilds/` and `build/`, and `npm rebuild`, 900 s per command, with the
+    `prebuilds/` and `build/`, and `npm rebuild`; after a successful rebuild, or
+    when the grammar that loads was compiled on this machine, a copy of its
+    run-time files in `native-grammar/` at the package root, which npm
+    does not track and `loadGrammarPackage` falls back to when the package does
+    not load, because npm can delete a failed optional dependency after the
+    repair, 900 s per command, with the
     environment of the npm that started it, so the full one after a plain
     `npm install -g diffninja`). The cache (`~/.cache/diffninja/grammars`, 0700) is trusted
     only when the directory belongs to the current user and no one else can
