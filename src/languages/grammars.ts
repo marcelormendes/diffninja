@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { packageVersion } from "../review/version.js";
 import { npmEnvironment } from "./child-env.js";
@@ -428,6 +429,31 @@ export function grammarStatus(cacheDir: string = grammarCacheDir()): GrammarStat
 }
 
 /**
+ * Where the postinstall (`scripts/ensure-native-grammar.mjs`) keeps a grammar
+ * compiled on this machine: `native-grammar/` at diffninja's package root. npm
+ * removes an optional dependency at the end of the install when an install
+ * script under it failed, even after diffninja's postinstall repaired it or
+ * found it working, so the copy lives in a directory npm does not track.
+ */
+const REPAIRED_GRAMMAR_DIR = fileURLToPath(new URL("../../native-grammar/", import.meta.url));
+
+/**
+ * A bundled grammar from the repair's own copy, or undefined when there is no
+ * copy or it does not load. Only tried after the normal `require` failed.
+ * Exported for tests.
+ */
+export function loadRepairedGrammar(npmPackage: string, directory: string = REPAIRED_GRAMMAR_DIR): GrammarModule | undefined {
+  const packageRoot = join(directory, npmPackage);
+  if (!existsSync(join(packageRoot, "package.json"))) return undefined;
+  try {
+    // SAFETY: the repair copies the grammar package's own entry, so it resolves to a tree-sitter grammar module.
+    return createRequire(join(packageRoot, "package.json"))(packageRoot) as GrammarModule;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The grammar package's module. Bundled grammars come from diffninja's own
  * dependencies; every other one from the cache `diffninja grammars install`
  * filled, and only when that cache holds the exact pinned version. Nothing is
@@ -449,6 +475,8 @@ export function loadGrammarPackage(npmPackage: string): GrammarModule {
         const binding = loadNativeBinding(packageRoot);
         if (binding) return binding;
       }
+      const repaired = loadRepairedGrammar(npmPackage);
+      if (repaired) return repaired;
       throw failure;
     }
   }

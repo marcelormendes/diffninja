@@ -296,6 +296,25 @@ is the one loaded afterwards. The script is a heal, not a gate: it always exits
 0, warns when no toolchain is available, and never touches a platform whose
 prebuild loads.
 
+npm can still delete the repaired package. When install scripts run in
+parallel, the package's own `node-gyp rebuild` sometimes fails on Linux ARM64
+(`No rule to make target ... node_addon_api_except.stamp`). npm then marks the
+optional dependency failed and removes its directory at the end of the install,
+after the postinstall has already repaired it. Reproduced on
+`node:24.21.0-bookworm` with npm 11.19.0, and it is what failed the consumer
+matrix's ARM64 jobs from time to time. `--allow-scripts` does not change it, and
+`--foreground-scripts` (serial scripts) avoids it. The same happens when
+`tree-sitter-typescript` itself builds but the `tree-sitter-javascript@0.23.1`
+npm nests under it fails: npm deletes the working parent too (diffninja's
+`overrides` replace that nested copy only when diffninja is the root project, so
+a global install still gets it). So after a successful repair, and whenever the
+grammar that loads was compiled on this machine (`build/Release` holds a
+`.node`), the script copies what the grammar needs at run time (its `package.json`,
+`bindings/node/index.js`, the compiled `.node` and the two `node-types.json`)
+into `native-grammar/tree-sitter-typescript` at diffninja's package root, a
+directory npm does not track, and checks that the copy loads. When the normal
+`require` fails, `loadGrammarPackage` falls back to that copy.
+
 For grammars in the grammar cache, `src/languages/grammars.ts` also reads a
 prebuild's binary header (ELF/Mach-O/PE machine type) when a load fails. If the
 platform's prebuild targets another CPU, the loader refuses to load it and says

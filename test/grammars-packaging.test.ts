@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { mislabeledPrebuild, npmSpawnSpec } from "../src/languages/grammars.js";
+import { loadRepairedGrammar, mislabeledPrebuild, npmSpawnSpec } from "../src/languages/grammars.js";
 
 test("Windows npm execution preserves cache paths without shell expansion", () => {
   const directory = mkdtempSync(join(tmpdir(), "diffninja npm "));
@@ -111,5 +111,36 @@ test("mislabeledPrebuild skips unreadable prebuild files", () => {
     expect(mislabeledPrebuild(root)).toBeNull();
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** A stand-in for the copy the postinstall repair keeps: a package whose entry is index.js. */
+function repairedCopy(entry: string) {
+  const directory = mkdtempSync(join(tmpdir(), "diffninja native grammar "));
+  const packageRoot = join(directory, "tree-sitter-typescript");
+  mkdirSync(packageRoot, { recursive: true });
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "tree-sitter-typescript", main: "index.js" }));
+  writeFileSync(join(packageRoot, "index.js"), entry);
+  return directory;
+}
+
+test("loadRepairedGrammar loads the copy the postinstall repair kept", () => {
+  const directory = repairedCopy("module.exports = { typescript: { repaired: true } };");
+  try {
+    expect(loadRepairedGrammar("tree-sitter-typescript", directory)).toEqual({ typescript: { repaired: true } });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("loadRepairedGrammar returns undefined when there is no copy or it does not load", () => {
+  const empty = mkdtempSync(join(tmpdir(), "diffninja native grammar "));
+  const broken = repairedCopy("throw new Error('wrong CPU');");
+  try {
+    expect(loadRepairedGrammar("tree-sitter-typescript", empty)).toBeUndefined();
+    expect(loadRepairedGrammar("tree-sitter-typescript", broken)).toBeUndefined();
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+    rmSync(broken, { recursive: true, force: true });
   }
 });

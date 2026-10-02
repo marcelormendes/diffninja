@@ -53,7 +53,9 @@ try {
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
   assert.equal(manifest.name, "diffninja");
   assert.deepEqual(manifest.bin, { diffninja: "dist/review/cli.js", "diffninja-mcp": "dist/review/mcp-cli.js" });
-  assert.deepEqual(readdirSync(packageDir).sort(), ["LICENSE", "README.md", "dist", "node_modules", "npm-shrinkwrap.json", "package.json", "scripts"]);
+  // native-grammar/ is the postinstall's copy of a grammar it had to rebuild (Linux ARM64), never shipped.
+  const shipped = readdirSync(packageDir).filter(name => name !== "native-grammar").sort();
+  assert.deepEqual(shipped, ["LICENSE", "README.md", "dist", "node_modules", "npm-shrinkwrap.json", "package.json", "scripts"]);
   // npm-shrinkwrap.json ships in the package: when npm installs diffninja from the registry it
   // pins every dependency to the tested version (a tarball install, as here, does not use it).
 
