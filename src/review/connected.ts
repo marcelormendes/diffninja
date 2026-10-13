@@ -6,6 +6,7 @@ import { renderConnectedPage } from "./connected-html.js";
 import { markdownBlocks, type MarkdownBlock } from "./markdown.js";
 import type { ConnectedAnalysisView } from "./connected-analysis.js";
 import { reportPolicy } from "./report-pages.js";
+import { listenLoopback, trustedOrigins, type LoopbackOptions } from "./loopback.js";
 
 const MAX_BODY = 256 * 1024;
 const loadSchema = z.object({ url: z.string() }).strict();
@@ -71,6 +72,8 @@ export interface ConnectedOptions {
    * nothing to show there.
    */
   readonly flow?: (snapshotId: string, file: string | undefined, view: "flow" | "business") => Promise<string | undefined>;
+  /** The port to start from and the remote session, if any; see loopback.ts. */
+  readonly loopback?: LoopbackOptions;
 }
 
 const NO_ANALYSIS: ConnectedAnalysisView = {
@@ -91,13 +94,13 @@ async function readBody(req: IncomingMessage): Promise<string> {
 }
 
 /**
- * Loopback-only guard. The request must name this session's exact host, must
- * not carry a foreign `Origin`, and must not announce a cross-site fetch. A
+ * Loopback-only guard. The request must name one of this session's own hosts,
+ * must not carry a foreign `Origin`, and must not announce a cross-site fetch. A
  * browser page on another origin can produce none of these headers honestly.
  */
-function requestIsTrusted(req: IncomingMessage, origin: string): boolean {
-  if (req.headers.host !== new URL(origin).host) return false;
-  if (req.headers.origin !== undefined && req.headers.origin !== origin) return false;
+function requestIsTrusted(req: IncomingMessage, origins: readonly string[]): boolean {
+  if (!origins.some((origin) => new URL(origin).host === req.headers.host)) return false;
+  if (req.headers.origin !== undefined && !origins.includes(req.headers.origin)) return false;
   const site = req.headers["sec-fetch-site"];
   return !site || ["same-origin", "none"].includes(String(site));
 }
@@ -124,6 +127,7 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
   const secret = randomBytes(32).toString("hex");
   const base = `/${secret}/`;
   let origin = "";
+  let origins: string[] = [];
   const server = createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -133,7 +137,7 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
     const json = (code: number, value: ApiResponse) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(withDescription(value))); };
-    if (!requestIsTrusted(req, origin)) { json(403, { error: "Untrusted Host or Origin." }); return; }
+    if (!requestIsTrusted(req, origins)) { json(403, { error: "Untrusted Host or Origin." }); return; }
     const route = routeOf(req.url, secret);
     if (route === undefined) { json(404, { error: "Not found." }); return; }
     if (req.method === "GET" && route === "") {
@@ -175,7 +179,7 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
     const routes = ["api/load", "api/preview", "api/submit", "api/reconcile", "api/viewed"];
     if (req.method !== "POST" || !routes.includes(route)) { json(404, { error: "Not found." }); return; }
     const token = tokenSchema.safeParse(req.headers["x-diffninja-csrf"]);
-    if (req.headers.origin !== origin || !token.success || !timingSafeEqual(Buffer.from(token.data), Buffer.from(csrf))) {
+    if (req.headers.origin === undefined || !origins.includes(req.headers.origin) || !token.success || !timingSafeEqual(Buffer.from(token.data), Buffer.from(csrf))) {
       json(403, { error: "Invalid session or CSRF token." }); return;
     }
     try {
@@ -196,8 +200,8 @@ export async function serveConnected(review = new ConnectedReview(), options: Co
   });
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
-  const address = z.object({ port: z.number().int().positive() }).parse(server.address());
-  origin = `http://127.0.0.1:${address.port}`;
+  const port = await listenLoopback(server, options.loopback?.port);
+  origins = trustedOrigins(port, options.loopback?.remote);
+  origin = origins[0];
   return { server, url: origin + base };
 }

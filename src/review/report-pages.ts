@@ -6,18 +6,18 @@
  * read-only: there is no API, nothing is written to disk, and the only route is
  * `GET /report/<token>`, where the token is 256 random bits per report. Reports
  * embed source code, so the listener binds 127.0.0.1 only, rejects any request
- * whose Host is not this exact origin, and forbids caching, framing, and every
+ * whose Host is not one of this port's own names (see loopback.ts), and forbids caching, framing, and every
  * resource the page does not carry inline. The inline script and stylesheet are
  * allowed by their SHA-256 hashes, so the report HTML is served byte for byte.
  */
 
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { z } from "zod";
 import type { ReviewItem, ReviewReport, SuggestedComment } from "./types.js";
 import type { UpdateNotice } from "./update-check.js";
 import { checkExplanation, explanationCounts, normalizeExplanation, type ExplanationCounts, type ExplanationInput } from "./explanation.js";
 import { visibleControls } from "./hidden-characters.js";
+import { listenLoopback, trustedHosts, type LoopbackOptions } from "./loopback.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
 export const MAX_REPORT_PAGES = 20;
@@ -316,7 +316,7 @@ export class ReportPages {
 
   private updateNotice: UpdateNotice | undefined;
 
-  constructor(private readonly render: (report: ReviewReport) => string = () => "") {}
+  constructor(private readonly render: (report: ReviewReport) => string = () => "", private readonly loopback: LoopbackOptions = {}) {}
 
   /** Stamp every report served from now on, so its pages carry the update notice. */
   setUpdateNotice(notice: UpdateNotice | undefined): void {
@@ -508,7 +508,7 @@ export class ReportPages {
   }
 
   private async listen(): Promise<{ server: Server; origin: string }> {
-    let origin = "";
+    let hosts = new Set<string>();
     const server = createServer((req, res) => {
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Content-Type-Options", "nosniff");
@@ -519,7 +519,7 @@ export class ReportPages {
         res.writeHead(code, { "Content-Type": "text/plain; charset=utf-8" });
         res.end(message);
       };
-      if (req.headers.host !== new URL(origin).host) return refuse(403, "Untrusted Host.");
+      if (!hosts.has(req.headers.host ?? "")) return refuse(403, "Untrusted Host.");
       if (req.method !== "GET") return refuse(405, "Read-only report.");
       const token = /^\/report\/([a-f0-9]{64})$/.exec(req.url ?? "")?.[1];
       const page = token === undefined ? undefined : this.pages.get(token);
@@ -530,15 +530,9 @@ export class ReportPages {
     });
     server.requestTimeout = 15_000;
     server.headersTimeout = 10_000;
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.removeListener("error", reject);
-        resolve();
-      });
-    });
-    const address = z.object({ port: z.number().int().positive() }).parse(server.address());
-    origin = `http://127.0.0.1:${address.port}`;
+    const port = await listenLoopback(server, this.loopback.port);
+    hosts = trustedHosts(port, this.loopback.remote);
+    const origin = `http://127.0.0.1:${port}`;
     this.origin = origin;
     // A close that raced this listen still owns the teardown.
     if (this.closed) {
