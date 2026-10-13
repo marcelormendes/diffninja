@@ -321,6 +321,29 @@ describe("review_diff over the MCP protocol", () => {
     expect(textOf(result)).toMatch(/unrecognized key|invalid arguments/i);
   });
 
+  test("on a remote machine finish_review adds the note on opening the page, and the step to relay it", async () => {
+    blockNetwork();
+    const local = await connectReview();
+    const localReport = reportOf(await review(local, { diff: patch }));
+    // SAFETY: finish_review answers with the finished shape; its fields are asserted here.
+    const localDone = JSON.parse(textOf(await finishReview(local, staticFinish(localReport.reviewId, localReport)))) as Finished & { remoteAccess?: string };
+    expect(localDone.remoteAccess).toBeUndefined();
+    expect(localDone.next).toBe("Give the user the reportUrl.");
+    expect(localReport.nextSteps?.join(" ")).toContain("When the result has remoteAccess, give them that note");
+
+    const { client } = await openReview({ loopback: { remote: { kind: "ssh", host: "dev@10.0.0.5" } } });
+    const report = reportOf(await review(client, { diff: patch }));
+    const result = await finishReview(client, staticFinish(report.reviewId, report));
+    expect(result.isError, textOf(result)).toBeFalsy();
+    // SAFETY: finish_review answers with the finished shape; its fields are asserted here.
+    const done = JSON.parse(textOf(result)) as Finished & { remoteAccess?: string };
+    const port = new URL(done.reportUrl).port;
+    expect(done.remoteAccess).toContain(`\`ssh -N -L ${port}:127.0.0.1:${port} dev@10.0.0.5\``);
+    expect(done.next).toMatch(/^Give the user the reportUrl\. Give them the remoteAccess note with it/);
+    expect(result.structuredContent).toMatchObject({ remoteAccess: done.remoteAccess });
+    expect((await loopback(done.reportUrl))?.status).toBe(200);
+  });
+
   test("a static report's finish needs no goal summary and still serves its page", async () => {
     blockNetwork();
     const client = await connectReview();

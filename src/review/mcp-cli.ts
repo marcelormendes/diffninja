@@ -2,6 +2,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { fileURLToPath } from "node:url";
 import { updateLookupFromEnv } from "./update-check.js";
+import { loopbackFromEnv } from "./loopback.js";
 
 /**
  * What to say when the server cannot start because the native tree-sitter
@@ -21,9 +22,11 @@ try {
   if (process.argv.length > 2) throw new Error("diffninja-mcp accepts no arguments. Configure it as a stdio MCP server; pass inputs to review_diff.");
   // Update notices are off unless DIFFNINJA_UPDATE_CHECK=1; nothing else asks the network for anything.
   const latestVersion = updateLookupFromEnv();
+  // DIFFNINJA_PORT and the SSH, Codespaces or VS Code session decide where the pages listen and what the agent tells the person.
+  const loopback = loopbackFromEnv();
   // Imported here rather than at the top so that a parser that does not load is reported below with its fix.
   const { createReviewServer } = await import("./mcp.js");
-  const server = createReviewServer(latestVersion === undefined ? {} : { latestVersion });
+  const server = createReviewServer(latestVersion === undefined ? { loopback } : { latestVersion, loopback });
   // Closing the connection is what closes its connected review pages, and this
   // transport cannot tell that the client hung up its end of the pipe, so EOF
   // here is what ends the session. A signal still terminates the process the
