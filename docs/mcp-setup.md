@@ -243,6 +243,57 @@ your agent to say so, and the review pages show a line with the command,
 your agents. Restart the agent afterwards. It stays off in CI and whenever
 `NO_UPDATE_NOTIFIER` is set.
 
+## Using diffninja on a remote host
+
+The review pages listen on `127.0.0.1` of the machine the agent runs on, never
+on any other address. When that machine is not the one in front of you (an
+agent over SSH, in GitHub Codespaces, or in a VS Code remote window), the link
+does not open on your computer as it is. diffninja notices the session and
+`finish_review` adds a `remoteAccess` note next to the link, which your agent
+passes on:
+
+- **SSH** (`SSH_CONNECTION` or `SSH_TTY` set): the exact command to run on your
+  own computer, for example
+  `ssh -N -L 8765:127.0.0.1:8765 you@10.0.0.5`. Leave it running and open the
+  link as it is. The address is the one your SSH session came in on; use the
+  host name you normally connect to if that differs.
+- **GitHub Codespaces** (`CODESPACES`, `CODESPACE_NAME` and
+  `GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN` set): the forwarded address to open
+  instead, such as `https://<codespace>-8765.app.github.dev/report/...`. If it
+  does not open, add the port in the Ports panel. The port stays private to your
+  GitHub account unless you change its visibility. The pull request page's own link to the
+  read-only report still names `127.0.0.1`; use the report address from the
+  note instead.
+- **VS Code remote window** (`TERM_PROGRAM=vscode` over SSH or in a dev
+  container): VS Code forwards the port itself; open the link as it is. If the
+  Ports view shows another local port, set it to the same number, because the
+  page only answers on its own port.
+
+By default each page gets a new free port, so an SSH forward has to be redone
+each time. Set `DIFFNINJA_PORT` in the environment that launches
+`diffninja-mcp` to fix them: the report page and each pull request page take the
+first free port from that number up (up to 32 ports), for example `8765` and
+`8766`. Then one `ssh -L` line per port, or `LocalForward` lines in
+`~/.ssh/config`, keeps working across sessions:
+
+```text
+Host devbox
+  LocalForward 8765 127.0.0.1:8765
+  LocalForward 8766 127.0.0.1:8766
+```
+
+diffninja reads these variables from the environment its host starts it with.
+Some hosts pass only a few variables, Codex among them; if the note does not
+appear, list the ones diffninja reads:
+
+```toml
+[mcp_servers.diffninja]
+command = "node"
+args = ["/absolute/path/to/diffninja/dist/review/mcp-cli.js"]
+env = { DIFFNINJA_PORT = "8765" }
+env_vars = ["SSH_CONNECTION", "SSH_TTY", "USER", "CODESPACES", "CODESPACE_NAME", "GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN", "TERM_PROGRAM", "REMOTE_CONTAINERS"]
+```
+
 ## Call examples
 
 ```json

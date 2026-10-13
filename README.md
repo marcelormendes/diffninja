@@ -147,6 +147,10 @@ and gives you a link to read the same report in your browser.
 ## Good to know
 
 - The review page closes when you exit your agent CLI.
+- Running the agent on another machine (SSH, Codespaces, VS Code remote)? The
+  agent gives you the link with a note on how to open it from your computer, and
+  `DIFFNINJA_PORT` keeps the port the same. See
+  [Using diffninja on a remote host](docs/mcp-setup.md#using-diffninja-on-a-remote-host).
 - The page and the agent's session contain source code. Treat them like the
   code itself.
 - No diffninja tool approves, blocks, merges or posts anything. A review is

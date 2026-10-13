@@ -257,7 +257,10 @@ next.
 ## The review page on your machine
 
 The page is a small web server on `127.0.0.1` that lives as long as your agent's
-connection. Every URL of it contains a random 256-bit secret that only the
+connection. It listens on no other address, also when the agent runs on a remote
+machine: you reach it through your own forward (`ssh -L`, VS Code or Codespaces
+port forwarding), see
+[Using diffninja on a remote host](mcp-setup.md#using-diffninja-on-a-remote-host). Every URL of it contains a random 256-bit secret that only the
 page's link carries. `finish_review` returns that link to your agent, and your
 agent gives it to you. A program or another user on the same machine that finds
 the port but not the link gets a 404 for everything, so it cannot read the pull
@@ -282,7 +285,15 @@ stops every later mark from reaching GitHub until the pull request is loaded
 again. The page keeps its ticks in the tab and says the marks are not synced.
 
 The read-only report page (`reportUrl`) is served under its own 256-bit token
-in the path. It answers `GET` only and checks the Host header. At most 20 stay
+in the path. It answers `GET` only and checks the Host header.
+
+The Host and Origin checks accept the page's own port under the names
+`127.0.0.1` and `localhost`, which a forward keeps, and, in GitHub Codespaces,
+the one address GitHub forwards that port to
+(`https://<codespace>-<port>.<forwarding domain>`, built from the
+`CODESPACE_NAME` and `GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN` variables). A
+page on any other name, including a site that points its own name at
+`127.0.0.1`, is refused. At most 20 stay
 open per connection, and they close with it.
 
 Your agent is different. With the link it can load the page, and the page
@@ -364,6 +375,7 @@ as described above.
 | `DIFFNINJA_TRUST_PROJECT_COMPILER=1` | Let `referenceProject` run the repository's own TypeScript compiler. |
 | `DIFFNINJA_GRAMMAR_CACHE` | Where the grammars are installed and read. |
 | `DIFFNINJA_NPM_ENV=NPM_TOKEN,NODE_AUTH_TOKEN` | Names of environment variables that npm also gets when `setup` or `grammars install` runs it, for a private registry whose `.npmrc` reads its token from the environment. Names only; any other text is refused. The install scripts npm runs see them too (at `setup`, and with `grammars install --build`). |
+| `DIFFNINJA_PORT=8765` | The first port the review pages try; each takes the first free one from there up (32 at most). Unset, the system picks any free port. They listen on `127.0.0.1` either way. |
 | `CODEX_HOME` | Directory of the Codex `config.toml` that `setup` edits. |
 
 ## What is not covered, and what was not verified
