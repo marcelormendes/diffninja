@@ -147,6 +147,11 @@ and gives you a link to read the same report in your browser.
 ## Good to know
 
 - The review page closes when you exit your agent CLI.
+- If you talk to your agent from another device and the link does not open, ask
+  for the review inline: the agent shows you a short summary in the chat. To
+  also get the full report as a private file, set `DIFFNINJA_REPORT_FILES=1`
+  where diffninja is configured. See
+  [mcp-setup.md](docs/mcp-setup.md#when-you-cannot-open-the-review-page-delivery).
 - The page and the agent's session contain source code. Treat them like the
   code itself.
 - No diffninja tool approves, blocks, merges or posts anything. A review is
