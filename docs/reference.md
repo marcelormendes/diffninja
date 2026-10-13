@@ -75,6 +75,21 @@ answers only `GET /report/<token>`, rejects any other Host, forbids caching and
 framing, and allows the inline script and stylesheet only by their SHA-256
 hashes. The URL carries source code access: do not share it.
 
+For a pull request, the page also shows the agent's goal paragraph and each
+comment it says blocks the merge, with that comment's proof (why it blocks, how
+the agent knows, and what would make it fine). A static report shows the goal
+paragraph when the agent sent one, and no comments.
+
+When the human cannot reach `127.0.0.1` on the agent's machine, `finish_review`
+can also return a short Markdown summary (`delivery: "inline"`), or write the
+same page to a private file (`delivery: "file"`, off unless the person turns it
+on with `DIFFNINJA_REPORT_FILES`). See
+[mcp-setup.md](mcp-setup.md#when-you-cannot-open-the-review-page-delivery). The
+file is the page as served, with its content security policy inside it, so it
+still runs only its own script and style and loads nothing from the network. It
+is the report as `finish_review` left it; later `record_*` calls change the page,
+not the file.
+
 Source is embedded in the report when it is generated, including resolved
 definitions in files outside the diff. It comes from the immutable **to**
 commit, or **from** for removed calls, with a path, line range, and commit

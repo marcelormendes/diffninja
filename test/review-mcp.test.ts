@@ -2093,3 +2093,71 @@ describe("how many pages one connection keeps open", () => {
   }, 180_000);
 });
 
+
+describe("finish_review delivery for a person who cannot open this machine's pages", () => {
+  async function openWithFiles(dir: string): Promise<Client> {
+    return (await openReview({ reportFiles: { enabled: true, dir } })).client;
+  }
+
+  test("inline returns a Markdown summary to show, with the same links, and writes nothing", async () => {
+    blockNetwork();
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-delivery-"));
+    try {
+      const client = await openWithFiles(join(dir, "reports"));
+      const report = reportOf(await review(client, { diff: patch }));
+      const result = await finishReview(client, { ...staticFinish(report.reviewId, report), delivery: "inline" });
+      expect(result.isError, textOf(result)).toBeFalsy();
+      // SAFETY: finish_review answers with the finished shape plus markdown; its fields are asserted here.
+      const done = JSON.parse(textOf(result)) as Finished & { markdown: string };
+      expect(done.reportUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/report\/[a-f0-9]{64}$/);
+      expect(done.markdown).toMatch(/^## diffninja review: /);
+      expect(done.markdown).not.toContain(dir);
+      expect(done.next).toMatch(/Show the user the markdown field as it is.*Never run the command/);
+      expect(result.structuredContent).toEqual(done);
+      expect(existsSync(join(dir, "reports"))).toBe(false);
+      expect(fetchAttempts).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("file is refused, keeping nothing, until the person turns report files on", async () => {
+    blockNetwork();
+    const { client } = await openReview({ reportFiles: { enabled: false, reason: "Report files are off. Only the person who configures diffninja can turn them on, by setting DIFFNINJA_REPORT_FILES=1." } });
+    const report = reportOf(await review(client, { diff: patch }));
+    const refused = await finishReview(client, { ...staticFinish(report.reviewId, report), delivery: "file" });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/DIFFNINJA_REPORT_FILES=1/);
+    const order = CallToolResultSchema.parse(await client.callTool({ name: "record_order", arguments: { reviewId: report.reviewId, order: report.items.map(item => item.id) } }));
+    expect(textOf(order)).toMatch(/page link comes only from finish_review/);
+  });
+
+  test("file writes the private report and, for a pull request with a blocker, a draft review; nothing is sent to GitHub", async () => {
+    await withFakeGh(async ({ log }) => {
+      blockNetwork();
+      const dir = mkdtempSync(join(tmpdir(), "diffninja-delivery-"));
+      try {
+        const client = await openWithFiles(join(dir, "reports"));
+        const payload = connectedOf(await review(client, { pr: GH_URL }));
+        const comment = { path: "app.ts", line: 2, side: "RIGHT", body: "added() runs before the guard, so it can fire twice.", ...PROOF };
+        const result = await finishReview(client, { ...minimalFinish(payload.reviewId!, payload.report!), comments: [comment], delivery: "file" });
+        expect(result.isError, textOf(result)).toBeFalsy();
+        // SAFETY: finish_review answers with the finished shape plus markdown; its fields are asserted here.
+        const done = JSON.parse(textOf(result)) as Finished & { markdown: string };
+        expect(done.url).toMatch(/^http:\/\/127\.0\.0\.1:/);
+        const files = readdirSync(join(dir, "reports")).sort();
+        expect(files).toHaveLength(2);
+        const html = join(dir, "reports", files.find(file => file.endsWith(".html"))!);
+        const draft = html.replace(/\.html$/, ".draft-review.json");
+        expect(done.markdown).toContain(html);
+        expect(done.markdown).toContain(`gh api --hostname github.com --method POST repos/octocat/hello/pulls/7/reviews --input '${draft}'`);
+        expect(done.markdown).toContain("<https://github.com/octocat/hello/pull/7/files>");
+        expect(readFileSync(html, "utf8")).toContain("added() runs before the guard, so it can fire twice.");
+        expect(JSON.parse(readFileSync(draft, "utf8"))).toEqual({ commit_id: "2".repeat(40), comments: [{ path: "app.ts", line: 2, side: "RIGHT", body: comment.body }] });
+        expect(ghCalls(log).some(line => /reviews|comments|markFileAsViewed/.test(line))).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+});

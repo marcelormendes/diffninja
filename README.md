@@ -151,6 +151,11 @@ and gives you a link to read the same report in your browser.
   agent gives you the link with a note on how to open it from your computer, and
   `DIFFNINJA_PORT` keeps the port the same. See
   [Using diffninja on a remote host](docs/mcp-setup.md#using-diffninja-on-a-remote-host).
+- Talking to your agent from a device that cannot forward the port, such as a
+  web or phone client? Ask for the review inline: the agent shows you a short summary in the chat. To
+  also get the full report as a private file, set `DIFFNINJA_REPORT_FILES=1`
+  where diffninja is configured. See
+  [mcp-setup.md](docs/mcp-setup.md#when-you-cannot-open-the-review-page-delivery).
 - The page and the agent's session contain source code. Treat them like the
   code itself.
 - No diffninja tool approves, blocks, merges or posts anything. A review is

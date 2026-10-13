@@ -83,6 +83,12 @@ interface ReportPage {
   pinned?: boolean;
 }
 
+/** The report behind a review and its page as now served. */
+export interface ReviewSnapshot {
+  readonly report: ReviewReport;
+  readonly html: string;
+}
+
 /** A static review published on this connection. */
 export interface PublishedReview {
   readonly reviewId: string;
@@ -473,6 +479,12 @@ export class ReportPages {
     report.agentExplanation = normalizeExplanation(explanation, explainedBy);
     this.rerender(page, report);
     return { reviewId, explained: explanationCounts(explanation) };
+  }
+
+  /** The report behind a review and its page as now served, for a copy the human reads elsewhere. */
+  snapshot(reviewId: string): ReviewSnapshot {
+    const { page, report } = this.review(reviewId);
+    return { report, html: page.html };
   }
 
   private review(reviewId: string): ReviewedPage {

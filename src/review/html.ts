@@ -10,6 +10,7 @@ import { BRAND_MARK, BRAND_MARK_STYLES } from "./brand.js";
 import { PALETTE_STYLES } from "./palette.js";
 import { escapeHtml } from "./escape-html.js";
 import { testLikeFile } from "./file-role.js";
+import { pullRequestOf } from "./pull-request-ref.js";
 
 /**
  * Render a review report as one self-contained HTML document.
@@ -63,6 +64,7 @@ export function renderReview(report: ReviewReport): string {
     `<body data-default-view="${defaultView(report)}">`,
     '<div class="wrap">',
     renderHeader(report),
+    renderAgentReading(report),
     renderAgentOrder(report),
     '<nav class="view-switch" aria-label="Report view">',
     '<a href="#view-business" data-view="business">How it works</a>',
@@ -316,6 +318,47 @@ function renderBreadcrumb(): string {
     '<span class="crumb-path mono" id="focus-path"></span>',
     "</nav>",
   ].join("\n");
+}
+
+/**
+ * The reviewing agent's goal paragraph and, for a pull request, the comments it
+ * says block the merge, each with its proof. Both are the agent's reading, said
+ * so beside them; nothing here is posted, and the human decides what to keep.
+ * A static report shows no comments: it has nothing to post them to.
+ */
+function renderAgentReading(report: ReviewReport): string {
+  const summary = report.agentSummary;
+  const comments = pullRequestOf(report) === undefined ? undefined : report.agentComments;
+  if (summary === undefined && comments === undefined) return "";
+  const parts = ['<section class="agent-reading" aria-label="The reviewing agent\'s reading">'];
+  if (summary !== undefined) {
+    parts.push(
+      "<h2>Goal</h2>",
+      `<p class="agent-goal">${escapeHtml(summary.text)}</p>`,
+      `<p class="agent-reading-by">Written by ${escapeHtml(summary.summarizedBy)} from the pull request&#39;s own title and description. It is that agent&#39;s reading, not a verified claim.</p>`,
+    );
+  }
+  if (comments !== undefined) {
+    parts.push("<h2>Comments that block the merge</h2>");
+    if (comments.comments.length === 0) {
+      parts.push(`<p class="agent-reading-by">None, in the reading of ${escapeHtml(comments.suggestedBy)}.</p>`);
+    } else {
+      parts.push('<ol class="agent-comments">');
+      for (const comment of comments.comments) {
+        parts.push(
+          "<li>",
+          `<p class="agent-comment-where mono">${escapeHtml(`${comment.path}:${comment.line}`)} (${comment.side === "RIGHT" ? "new" : "old"} side)</p>`,
+          `<p class="agent-comment-body">${escapeHtml(comment.body)}</p>`,
+          `<p class="agent-comment-proof"><strong>Why it blocks</strong> (${comment.evidence === "ran" ? "reproduced" : "traced by reading"}): ${escapeHtml(comment.scenario)}</p>`,
+          `<p class="agent-comment-proof"><strong>Not a problem if</strong>: ${escapeHtml(comment.unlessTrue)}</p>`,
+          "</li>",
+        );
+      }
+      parts.push("</ol>", `<p class="agent-reading-by">Suggested by ${escapeHtml(comments.suggestedBy)}. None is posted; each is yours to add to your review, edit, or drop.</p>`);
+    }
+  }
+  parts.push("</section>");
+  return parts.join("\n");
 }
 
 /**
@@ -1088,6 +1131,14 @@ button:disabled { cursor: default; opacity: .65; }
 .toc { padding-top: 10px; }
 .toc-list { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; max-height: 22vh; overflow-y: auto; }
 .toc-list > li { min-width: 0; max-width: 100%; }
+.agent-reading { margin: 12px 0; padding: 4px 14px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.agent-reading h2 { margin: 10px 0 4px; font-size: 16px; }
+.agent-goal { max-width: 90ch; }
+.agent-reading-by { color: var(--ink-soft); font-size: 13px; }
+.agent-comments { margin: 4px 0; padding-left: 20px; }
+.agent-comments > li { margin: 8px 0; }
+.agent-comments p { margin: 2px 0; max-width: 90ch; overflow-wrap: anywhere; }
+.agent-comment-proof { color: var(--ink-soft); font-size: 13.5px; }
 .agent-order { margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; }
 .agent-order-by { margin: 10px 14px; font-weight: 600; }
 .agent-order summary { padding: 0 14px 10px; cursor: pointer; }

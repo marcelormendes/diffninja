@@ -37,6 +37,11 @@ Check what you run with `npm ls -g diffninja`, or read the version in the
   click, and only for a file of the loaded pull request.
 - Anyone holding the page's link can submit a review and toggle Viewed marks,
   and your agent holds it, because it receives the link to give it to you.
+- When you cannot open the page, the agent can show you a short Markdown
+  summary of the review instead. It has no link or image built from text
+  written by the pull request's author, and it posts nothing.
+- It writes the report to a file only if you turn report files on. The file is
+  readable by your user alone and holds source code.
 - `diffninja setup` and `diffninja grammars install` run npm, which downloads
   code from the npm registry. `setup` also runs install scripts. A review never
   downloads or builds code.
@@ -174,7 +179,9 @@ review's warnings, and call flows skip the files that need it.
   `diffninja.connected.viewed.v1`, one per version of the pull request. It holds
   change ids such as `hunk-3` and no source text. The layout choice (`guided` or
   `file`) goes in `localStorage`. diffninja writes nothing to disk for these.
-- No report files, logs or analytics.
+- Report files, only when you turn them on with `DIFFNINJA_REPORT_FILES` and
+  the agent asks for one. See [Report files](#report-files).
+- No logs or analytics.
 
 ### What setup does to your config files
 
@@ -309,6 +316,77 @@ tells the agent to give you the link and never to submit anything or open the
 page, but it cannot enforce that. If your agent can run shell commands, treat it
 as able to post a review and to toggle Viewed marks.
 
+## When you cannot open the review page
+
+The review pages exist only on `127.0.0.1` of the machine your agent runs on.
+A port forward reaches them (see the section above). If you talk to the agent
+from a device that cannot forward a port, for example a web or phone client of
+an agent that runs elsewhere, `finish_review` can hand you the review two other
+ways. Neither has a route to GitHub.
+
+### The Markdown summary
+
+With `delivery: "inline"` (or `"file"`), `finish_review` returns a short
+Markdown summary for the agent to show you. It holds nothing the agent did not
+already receive, so it sends nothing to a new place. Your chat client renders
+it, though, and Markdown can make a client load an image or show a link. So:
+
+- Text written by the pull request's author or taken from the diff (the title,
+  file paths) appears only inside code spans, where Markdown builds no link,
+  image or HTML. Each span is fenced longer than any run of backticks inside it.
+- The agent's own text (its goal paragraph, comments, rules) can be steered by
+  what it read, so every character that can start a link, image, tag, emphasis,
+  table, entity or formula is escaped, and every web address is put in a code
+  span, so no client turns it into a link.
+- The one link is the pull request's Files page on github.com, rebuilt from the
+  owner, repository and number after checking each against GitHub's name rules.
+- Hidden characters are shown as `⟦U+XXXX⟧` markers, as everywhere else.
+
+The agent can still rewrite or shorten the summary, or add its own links, in its
+reply. diffninja cannot prevent that.
+
+### Report files
+
+With `delivery: "file"`, diffninja also writes the full report page to a file.
+This is off unless the person who configures the server sets
+`DIFFNINJA_REPORT_FILES` (`1` for `~/.cache/diffninja/reports`, or an absolute
+folder). The agent cannot turn it on: without the variable the call is refused
+and nothing is kept.
+
+A report holds source code, including function bodies from files the change did
+not touch. diffninja protects the files this way:
+
+- The folder must belong to you and be closed to every other user (no group or
+  other permission bits). diffninja creates it with mode 0700. A folder that
+  belongs to someone else, or that others can open, is refused and nothing is
+  written. A symbolic link to such a folder is refused the same way.
+- Each file is created new, with mode 0600, refusing an existing name and a
+  symbolic link (`O_EXCL` and `O_NOFOLLOW`). Names carry a UTC time and 64
+  random bits, so they cannot be guessed.
+- Each new write deletes report files older than 24 hours and keeps at most 20
+  reports. Only regular files of yours whose names diffninja makes are deleted;
+  anything else in the folder is left alone. To delete them all, remove the
+  folder.
+- Nothing is written in the repository under review, unless you name a folder
+  inside it.
+- The HTML file is the read-only report page as served, with the page's content
+  security policy moved into the file. It runs only its own inline script and
+  style (allowed by their SHA-256 hashes) and loads nothing from the network.
+  It has no secret link and no route to GitHub, so neither you nor your agent
+  can post or mark Viewed from it.
+- For a pull request with comments that block the merge, a second file holds
+  a draft review in the shape GitHub's API takes: the commit that was reviewed
+  and each comment's path, line, side and text. It names no event, so if it is
+  sent, GitHub keeps it as a **draft** that only you see, and publishes nothing
+  until you submit it on GitHub. diffninja never sends it. The summary gives you
+  the `gh api` command to send it yourself and tells the agent never to run it.
+  An agent that can run commands could still run it, as it could post a review
+  with `gh` without diffninja. The result would be a draft only you can see.
+
+Once a file is copied off the machine, to a phone or another computer, the
+source in it goes with it. That is your choice, and these protections stay
+behind. On Windows, folder ownership and modes are not checked.
+
 ## Text written by the pull request's author
 
 A pull request's title, description, file names, diff and commit messages are
@@ -374,6 +452,7 @@ as described above.
 | `DIFFNINJA_UPDATE_CHECK=1` | Turn on the update notice (off by default; never in CI or with `NO_UPDATE_NOTIFIER`). |
 | `DIFFNINJA_TRUST_PROJECT_COMPILER=1` | Let `referenceProject` run the repository's own TypeScript compiler. |
 | `DIFFNINJA_GRAMMAR_CACHE` | Where the grammars are installed and read. |
+| `DIFFNINJA_REPORT_FILES` | Turn report files on: `1` writes them to `~/.cache/diffninja/reports`, an absolute folder writes them there. Off when unset. See [Report files](#report-files). |
 | `DIFFNINJA_NPM_ENV=NPM_TOKEN,NODE_AUTH_TOKEN` | Names of environment variables that npm also gets when `setup` or `grammars install` runs it, for a private registry whose `.npmrc` reads its token from the environment. Names only; any other text is refused. The install scripts npm runs see them too (at `setup`, and with `grammars install --build`). |
 | `DIFFNINJA_PORT=8765` | The first port the review pages try; each takes the first free one from there up (32 at most). Unset, the system picks any free port. They listen on `127.0.0.1` either way. |
 | `CODEX_HOME` | Directory of the Codex `config.toml` that `setup` edits. |
@@ -421,6 +500,13 @@ as described above.
   `gh` that refuses.
 - Browsers other than Chrome. The Viewed ticks were driven in headless Google
   Chrome 154 only, through playwright-core.
+- How each chat client renders the Markdown summary. Its safety was checked by
+  parsing it with `marked` (GitHub-flavored Markdown) and finding no link, image
+  or HTML but the pull request's own page. Other renderers were not tried.
+- Sending the draft review file. The shape follows GitHub's documented API for
+  a pending review; it was not sent to GitHub.
+- Opening the report file on a phone. It was checked in code and in a desktop
+  browser only.
 - File names that git quotes in a diff (non-ASCII characters, quotes, backslashes).
   The page cannot match such a file to the path GitHub lists, so its ticks stay in
   the tab and never reach GitHub.

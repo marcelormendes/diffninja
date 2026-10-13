@@ -119,7 +119,7 @@ itself. Pages live for the MCP connection and close on disconnect. Failures retu
 
 ## `finish_review`, ordering and comments
 
-`finish_review` takes `{ reviewId, answers, order, comments, summary?, explanation? }`.
+`finish_review` takes `{ reviewId, answers, order, comments, summary?, explanation?, delivery? }`.
 Answer every question with one listed choice; name every item id exactly once
 in `order`; use `comments: []` when nothing blocks the merge, which is the
 normal answer.
@@ -131,9 +131,49 @@ business view of the change (see
 Static reviews may omit both.
 
 The call validates everything before keeping anything. Success returns
-`{ reviewId, answered, ordered, suggested, summarized, explained?, reportUrl, url?, next }`;
+`{ reviewId, answered, ordered, suggested, summarized, explained?, reportUrl, url?, markdown?, next }`;
 `url` is the connected review page. These are the first page links an agent
 can give the user.
+
+### When you cannot open the review page (`delivery`)
+
+The pages live on `127.0.0.1` of the machine the agent runs on. Over SSH,
+Codespaces or a VS Code remote window you can still reach them by forwarding the
+port (see [Using diffninja on a remote host](#using-diffninja-on-a-remote-host)).
+When you cannot, for example from a web or phone client of an agent running on
+another machine, ask the agent for the review inline, and it passes `delivery`
+to `finish_review`:
+
+| `delivery` | What you get |
+| --- | --- |
+| `page` (default) | The links, as above. |
+| `inline` | The links, plus `markdown`: a short summary the agent shows you in its reply. It has the goal, the comments that block the merge with their proof, the first 10 hunks in reading order, the business rules, and how to finish the review on GitHub. |
+| `file` | The same `markdown`, plus the full report written as one HTML file, and, for a pull request with blocking comments, a draft review file. Off until you turn it on (below). Refused otherwise, keeping nothing, so the agent can call again with `inline`. |
+
+Without the page there are no **Viewed** ticks and no **Submit**. You finish
+the review on GitHub: open the pull request's Files tab, mark files Viewed
+there, add the comments you agree with, and submit. With `file`, the summary
+also gives one command you can run yourself:
+
+```bash
+gh api --hostname github.com --method POST repos/OWNER/REPO/pulls/N/reviews --input '<the draft review file>'
+```
+
+It creates a **draft** (pending) review holding the suggested comments on the
+commit that was reviewed. Only you see a draft, and nothing is published until
+you open the pull request on GitHub and submit it there. GitHub allows one
+draft review per person per pull request, so the command fails if you already
+have one. diffninja never runs this command, and tells the agent never to run
+it.
+
+To turn report files on, set `DIFFNINJA_REPORT_FILES` in the environment that
+launches `diffninja-mcp`, then restart the agent:
+
+- `DIFFNINJA_REPORT_FILES=1` writes to `~/.cache/diffninja/reports`.
+- `DIFFNINJA_REPORT_FILES=/absolute/folder` writes there.
+
+The agent cannot turn it on. See [security.md](security.md#report-files) for
+what the files hold and how they are protected.
 
 `record_order` replaces the order with `{ reviewId, order }`, naming all
 items exactly once. `suggest_comments` replaces the suggested comments with
