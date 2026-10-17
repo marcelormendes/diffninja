@@ -219,7 +219,10 @@ function checkChange(where: string, change: string, before: string | undefined):
   if (!EXPLANATION_CHANGES.some((known) => known === change)) {
     throw problem(`${where}.change must be one of ${EXPLANATION_CHANGES.join(", ")}.`);
   }
-  if (before !== undefined && change !== "changed") throw problem(`${where}.before is only for a changed ${where.includes("rules") ? "rule" : "step"}.`);
+  if (before !== undefined && change !== "changed") {
+    const kind = where.includes("rules") ? "rule" : "step";
+    throw problem(`${where}.before is only for a changed ${kind}, and this one is ${change}: leave before out, or mark the ${kind} changed if it existed before in another form.`);
+  }
 }
 
 function checkProcess(process: BusinessProcess, at: number, functions: ReadonlySet<string>, items: ReadonlySet<string>): void {

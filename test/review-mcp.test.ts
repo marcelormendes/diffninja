@@ -1062,6 +1062,17 @@ describe("suggest_comments", () => {
     for (const field of ["scenario", "evidence", "unlessTrue"]) expect(missing).toContain(`comments[0].${field}`);
   });
 
+  test("an explanation entry with a key it does not take names the keys it has", async () => {
+    const client = await connectReview();
+    const report = await reviewed(client);
+    const explanation = minimalExplanation(report);
+    // The functions list sends { id, line }, which is easy to echo back with the purpose.
+    const echoed = { ...explanation, functions: [{ id: "a.ts#f", line: 3, purpose: "Charges the card." }] };
+    const result = await finishReview(client, { ...staticFinish(report.reviewId, report), explanation: echoed });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Unrecognized key "line". An explanation.functions entry has only id and purpose (no line or hunks).');
+  });
+
   test("at most five comments, and a sixth is refused with why", async () => {
     const client = await connectReview();
     const report = await reviewed(client);
@@ -1115,7 +1126,8 @@ describe("suggest_comments", () => {
       { comments: [{ ...anchor, body: "## Summary" }], expected: /reads like a report/ },
       { comments: [{ ...anchor, body: "- missing test" }], expected: /reads like a report/ },
       { comments: [{ ...anchor, body: "Two lines\nof text" }], expected: /one line of text/ },
-      { comments: [{ ...anchor, body: "x".repeat(281) }], expected: /longer than 280 characters/ },
+      { comments: [{ ...anchor, body: "x".repeat(281) }], expected: /body is 281 characters; the limit is 280/ },
+      { comments: [{ ...anchor, body: "This is **really** wrong" }], expected: /reads like a report at "\*\*really\*\*"/ },
       { comments: [{ ...anchor, body: "   " }], expected: /is empty/ },
       { comments: [{ ...anchor, body: "Is this\u200Bright?" }], expected: /comments\[0\]\.body contains hidden characters a reader cannot see \(U\+200B\); remove them/ },
       { comments: [{ ...anchor, body: "Is this \u202Eright?" }], expected: /comments\[0\]\.body contains hidden characters a reader cannot see \(U\+202E\)/ },
@@ -1129,7 +1141,8 @@ describe("suggest_comments", () => {
     }
     // Plain reviewer phrasing, including a lowercase nit, is accepted, and so is
     // an emoji whose joiners sit between the characters they join.
-    for (const body of ["Error handling here swallows the cause; can we keep it?", "nit: rename to totalWithTax?", "Low risk, but is this covered by a test?", "Who owns this? \u{1F469}\u200D\u{1F4BB}"]) {
+    // Python's **kwargs is not bold, and nor is Markdown quoted inside a code span.
+    for (const body of ["Error handling here swallows the cause; can we keep it?", "nit: rename to totalWithTax?", "Low risk, but is this covered by a test?", "Who owns this? \u{1F469}\u200D\u{1F4BB}", "cls(app=app, *args, **kwargs) binds the first positional arg to app; pass it as cls(app, *args, **kwargs).", "f(**a) and g(**b) both drop the defaults.", "Input like `**bold** text` now throws here."]) {
       expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, body }] })).isError, body).toBeFalsy();
     }
   });
@@ -1162,7 +1175,7 @@ describe("finish_review comment text", () => {
     // Over the limit once trimmed is still refused.
     const long = await finishReview(client, { ...staticFinish(report.reviewId, report), comments: [{ ...comment, body: ` ${body}x ` }] });
     expect(long.isError).toBe(true);
-    expect(textOf(long)).toMatch(/comments\[0\]\.body is longer than 280 characters/);
+    expect(textOf(long)).toMatch(/comments\[0\]\.body is 281 characters; the limit is 280/);
   });
 
   test("a static report shows its comments read-only, on the page and in the Markdown", async () => {
@@ -1485,12 +1498,12 @@ describe("review_diff connected pull request mode", () => {
       };
       expect(substitute.answers.map(answer => answer.choice)).not.toContain("cannot-tell");
       const refused: Array<{ summary?: string; expected: RegExp }> = [
-        { expected: /must send summary: one short paragraph/ },
+        { expected: /must send summary: at most 80 words and 600 characters, counted before you send it: one short paragraph/ },
         { summary: "   ", expected: /summary is empty/ },
         { summary: "Two lines\nof text", expected: /one paragraph of plain text/ },
         { summary: "One line,\tthen a tab.", expected: /one paragraph of plain text/ },
-        { summary: "x".repeat(601), expected: /longer than 600 characters/ },
-        { summary: Array.from({ length: 81 }, () => "word").join(" "), expected: /longer than 80 words/ },
+        { summary: "x".repeat(601), expected: /summary is 601 characters and 1 words; the limits are 600 characters and 80 words/ },
+        { summary: Array.from({ length: 81 }, () => "word").join(" "), expected: /summary is 81 words; the limit is 80 words, so cut it/ },
         { summary: "# Goal: charge the right amount", expected: /Markdown or HTML formatting/ },
         { summary: "- charge the right amount", expected: /Markdown or HTML formatting/ },
         { summary: "**Goal:** charge the right amount", expected: /Markdown or HTML formatting/ },
@@ -2299,11 +2312,11 @@ describe("finish_review refusals", () => {
     const lines = textOf(refused).split("\n");
     expect(lines[0]).toBe("6 problems; nothing was kept. Fix them all and call again:");
     expect(lines.slice(1)).toEqual([
-      expect.stringMatching(/^1\. summary is longer than 80 words/),
+      expect.stringMatching(/^1\. summary is 81 words; the limit is 80 words/),
       "2. order[0] names a hunk this review does not have.",
       expect.stringMatching(/^3\. order leaves out \d+ of \d+ hunks/),
       "4. comments[0] names nowhere.ts:1 (RIGHT), which is not a line of this review's diff.",
-      expect.stringMatching(/^5\. comments\[0\]\.body reads like a report/),
+      "5. comments[0].body reads like a report at \"Issue:\" (a heading, list marker, bold, or a label such as \"Finding 1:\"); write it the way the reviewer would say it.",
       expect.stringMatching(/^6\. processes\[0\]\.title reads like code/),
     ]);
     expect(textOf(refused)).not.toMatch(/127\.0\.0\.1/);
