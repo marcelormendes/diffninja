@@ -67,6 +67,15 @@ function newest(dir, suffix) {
   return latest;
 }
 
+// The package check (scripts/verify-package.mjs) asserts the tool list in
+// order; read it from there so the two checks cannot drift apart.
+function expectedTools() {
+  const source = readFileSync(join(ROOT, "scripts/verify-package.mjs"), "utf8");
+  const list = /listTools\(\)\)\.tools\.map\(tool => tool\.name\), (\[[^\]]*\])/.exec(source);
+  if (!list) throw new Error("scripts/verify-package.mjs no longer asserts the tool list in the form drive.mjs reads");
+  return JSON.parse(list[1]);
+}
+
 async function doctor() {
   const [major, minor] = process.versions.node.split(".").map(Number);
   check("node >= 22.18", major > 22 || (major === 22 && minor >= 18), process.version);
@@ -76,8 +85,9 @@ async function doctor() {
   const bad = spawnSync(process.execPath, [SERVER, "unexpected-arg"], { encoding: "utf8", timeout: 20_000 });
   check("server refuses arguments", bad.status === 1 && bad.stderr.includes("accepts no arguments") && bad.stdout === "", `exit ${bad.status}`);
   const { client } = await connect();
-  const tools = (await client.listTools()).tools.map(tool => tool.name).sort();
-  check("tools are review_diff, finish_review, record_answers, record_order, suggest_comments, record_explanation", tools.join(",") === "finish_review,record_answers,record_explanation,record_order,review_diff,suggest_comments", tools.join(","));
+  const tools = (await client.listTools()).tools.map(tool => tool.name);
+  const expected = expectedTools();
+  check(`tools are ${expected.join(", ")}`, tools.join(",") === expected.join(","), tools.join(","));
   await client.close();
   let gh = "not installed";
   try { execFileSync("gh", ["auth", "status"], { stdio: "pipe", timeout: 20_000 }); gh = "authenticated"; } catch (error) { gh = error.code === "ENOENT" ? gh : "not authenticated"; }
