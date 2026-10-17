@@ -8,8 +8,11 @@ lists only `dist/`, one script and the shrinkwrap).
 - `manifest.json`: the labelled set and the prompt every run uses. A `problem`
   case is a merged pull request whose own diff introduced a bug that a later
   fix or revert names (`problems[]`: file and line at the PR head, what goes
-  wrong, the link that proves it). A `clean` case was merged with no later fix,
-  revert or bug report tied to it.
+  wrong, the link that proves it) and a `bugType` (crash, wrong-logic,
+  concurrency-state, api-break, typing, side-effect, resource, security). A
+  `clean` case was merged with no later fix, revert or bug report tied to it,
+  and `cleanCheck` says what was searched. Since v4 the set has 40 problem and
+  20 clean cases in nine languages.
 - `run.mjs`: prepares the clones, runs the reviews, and lists the results.
 - `fake-gh.mjs`: the `gh` the reviews see (below).
 - `results-v1.json`: the scored first run (each blocker judged real, false
@@ -25,6 +28,12 @@ lists only `dist/`, one script and the shrinkwrap).
   name each function it changes found 5 to 6 over three runs, with the same
   false alarm on a clean pull request, so it was not kept (the prototype is
   described in `prototype`).
+- `results-v4.json`: the baseline on the grown set (25 problem and 8 clean
+  cases added), Sonnet on main 2ef1ad8, three runs: 12 to 14 of the 40 known
+  problems per run, precision 0.84 to 0.94, 0 to 2 false alarms on the 20
+  clean cases, and which problems are found always, sometimes or never, by
+  bug type. With three runs per variant, a gain of about three known problems
+  is the smallest that stands out from the noise (`summary.smallestGain`).
 
 ## Run it
 
