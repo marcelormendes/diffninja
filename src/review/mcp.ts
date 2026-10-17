@@ -401,7 +401,7 @@ const SUMMARY_RULES = `at most ${MAX_SUMMARY_WORDS} words and ${MAX_SUMMARY_CHAR
  */
 const EXPLANATION_RULES = `Write it for an engineer who does not know this part of the product: say what things do for the business, its users, or its operators, in the product's own words (orders, payments, invoices, sign-ups, permissions), never the code's names; no function calls, snake_case names, file paths, backticks, or Markdown. functions: every entry of the review's functions list (ids like path/to/file.py#name), each sent as exactly { id, purpose } with no other key, one plain sentence of at most ${MAX_PURPOSE_CHARS} characters on what it does and why it matters, e.g. "Recomputes a draft order's totals when its prices have gone stale." processes: 1 to ${MAX_PROCESSES} business flows this change touches, each a title and ${MIN_PROCESS_STEPS} to ${MAX_PROCESS_STEPS} steps in the order they happen: start (what sets it off), action, decision (a yes/no or which-way question; give each exit a short when such as "yes", "no", "paid"), and end (the outcome). Each step: id (short, like s1), kind, text (at most ${MAX_STEP_CHARS} characters, what happens as a person would say it), change (added, changed, removed, or unchanged: mark what this change adds, alters, or takes away, and keep enough unchanged steps around it to show where it sits), optional detail (the rule or reason, at most ${MAX_DETAIL_CHARS} characters), optional before (only on a step whose change is changed: how it worked before; an added, removed, or unchanged step takes no before), optional functions (ids from the list that carry the step out), optional hunks (items ids that change it), and optional next (exits; an action or start without next continues to the next step listed). rules: at most ${MAX_RULES} business rules the change adds, changes, or removes, each one plain sentence such as "An order paid in full becomes fully charged even if its total later drops", with change and, only for a changed rule, before (an added, removed, or unchanged rule takes no before). The page draws the processes as diagrams with the changed steps highlighted, lists the rules as before and after, and puts each function's purpose above its name in the call flows, all attributed to you.`;
 
-/** The refusal of an unknown key in one explanation entry, naming the keys it has, since the functions list's own { id, line } is easy to echo back. */
+/** The refusal of an unknown key in one explanation entry, naming the keys it has. */
 function onlyKeys(entry: string, keys: string) {
   return {
     error: (issue: { code: string; keys?: string[] }) => {
@@ -430,7 +430,14 @@ const explanationSchema = z.object({
   functions: z.array(z.object({
     id: z.string().min(1).max(MAX_SHOWN_ID_CHARS).describe("A function id from the review's functions list, such as saleor/order/calculations.py#fetch_order_prices_if_expired."),
     purpose: z.string().max(1000).describe(`One plain sentence, at most ${MAX_PURPOSE_CHARS} characters: what the function does for the business or its users, without code names.`),
-  }, onlyKeys("An explanation.functions entry", "id and purpose (no line or hunks)")).strict()).max(MAX_EXPLAINED_FUNCTIONS).describe("A purpose for every function in the review's functions list, each once as { id, purpose } and nothing else; [] when the list is empty."),
+    // Echoes of the functions list (line, inTests) and empty step fields: they
+    // mean nothing on a function, so they are taken and then dropped, which
+    // spares a refused call; anything else is still refused.
+    line: z.number().int().positive().optional().describe("Not needed: copied from the functions list and ignored."),
+    inTests: z.boolean().optional().describe("Not needed: copied from the functions list and ignored."),
+    hunks: z.array(z.string()).max(0, { error: "A function entry names no hunks: a step or a rule names the hunks that change it." }).optional().describe("Not needed: ignored when empty."),
+    change: z.null({ error: "A function entry has no change: a step or a rule says what this change does to it." }).optional().describe("Not needed: ignored when null."),
+  }, onlyKeys("An explanation.functions entry", "id and purpose")).strict()).max(MAX_EXPLAINED_FUNCTIONS).describe("A purpose for every function in the review's functions list, each once as { id, purpose } and nothing else; [] when the list is empty."),
   processes: z.array(z.object({
     title: z.string().max(1000).describe(`The business process, at most ${MAX_TITLE_CHARS} characters, such as Completing a draft order.`),
     steps: z.array(stepSchema).max(MAX_PROCESS_STEPS),

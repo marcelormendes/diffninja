@@ -1062,15 +1062,51 @@ describe("suggest_comments", () => {
     for (const field of ["scenario", "evidence", "unlessTrue"]) expect(missing).toContain(`comments[0].${field}`);
   });
 
-  test("an explanation entry with a key it does not take names the keys it has", async () => {
+  const extraKeyRefusals: Array<[string, Record<string, string | number | string[]>, string]> = [
+    ["a key it does not take, naming the keys it has", { file: "a.ts" }, 'Unrecognized key "file". An explanation.functions entry has only id and purpose.'],
+    ["hunks that name a hunk", { hunks: ["hunk-1"] }, "A function entry names no hunks: a step or a rule names the hunks that change it."],
+    ["a change", { change: "added" }, "A function entry has no change: a step or a rule says what this change does to it."],
+    ["a line that is not a number", { line: "3" }, "explanation.functions[0].line"],
+  ];
+  test.each(extraKeyRefusals)("an explanation entry with %s is refused", async (_name, extra, expected) => {
     const client = await connectReview();
     const report = await reviewed(client);
-    const explanation = minimalExplanation(report);
-    // The functions list sends { id, line }, which is easy to echo back with the purpose.
-    const echoed = { ...explanation, functions: [{ id: "a.ts#f", line: 3, purpose: "Charges the card." }] };
-    const result = await finishReview(client, { ...staticFinish(report.reviewId, report), explanation: echoed });
+    const explanation = { ...minimalExplanation(report), functions: [{ id: "a.ts#f", purpose: "Charges the card.", ...extra }] };
+    const result = await finishReview(client, { ...staticFinish(report.reviewId, report), explanation });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain('Unrecognized key "line". An explanation.functions entry has only id and purpose (no line or hunks).');
+    expect(textOf(result)).toContain(expected);
+  });
+
+  test("an explanation entry that echoes the functions list, in the shapes models send, is taken as its id and purpose", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "diffninja-mcp-echo-"));
+    try {
+      const run = (args: string[]) => execFileSync("git", args, { cwd: dir });
+      run(["init", "-b", "main"]);
+      writeFileSync(join(dir, "app.ts"), "export function run(n: number) {\n  return n;\n}\n");
+      run(["add", "."]);
+      run([...GIT_ENV, "commit", "-m", "base"]);
+      writeFileSync(join(dir, "app.ts"), "export function run(n: number) {\n  return helper(n);\n}\nfunction helper(n: number) {\n  return n + 1;\n}\n");
+      run([...GIT_ENV, "commit", "-am", "head"]);
+      const client = await connectReview();
+      const range = reportOf(await review(client, { mode: "static", repo: dir, from: "HEAD~1", to: "HEAD" }));
+      const listed = range.functions ?? [];
+      expect(listed.length).toBeGreaterThanOrEqual(2);
+      // Seen in refused first calls of the v4 eval: { line } and { inTests: true }
+      // copied from the functions list, and an empty hunks or a null change.
+      const echoes = [{ line: listed[0].line, inTests: true }, { hunks: [] }, { change: null }];
+      const functions = listed.map((fn, at) => ({ id: fn.id, purpose: `Handles step ${at + 1} of the checkout.`, ...echoes[at % echoes.length] }));
+      const explanation = { ...minimalExplanation(range), functions };
+      const result = await finishReview(client, { ...staticFinish(range.reviewId, range), explanation });
+      expect(result.isError, textOf(result)).toBeFalsy();
+      // SAFETY: finish_review answers with the finished shape; the link asserted here is its own.
+      const finishedRange = JSON.parse(textOf(result)) as Finished & { explained?: { functions: number } };
+      expect(finishedRange.explained?.functions).toBe(listed.length);
+      expect((await loopback(finishedRange.reportUrl))?.body).toContain("Handles step 1 of the checkout.");
+      const again = await client.callTool({ name: "record_explanation", arguments: { reviewId: range.reviewId, explanation } });
+      expect(again.isError, JSON.stringify(again)).toBeFalsy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("at most five comments, and a sixth is refused with why", async () => {

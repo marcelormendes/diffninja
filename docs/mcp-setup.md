@@ -280,7 +280,7 @@ replaces it later. The object is strict:
 
 | Field | Meaning |
 | --- | --- |
-| `functions` | `{ id, purpose }` for **every** listed function, each once: one plain sentence (≤200 characters) on what it does for the business or its users. |
+| `functions` | `{ id, purpose }` for **every** listed function, each once: one plain sentence (≤200 characters) on what it does for the business or its users. A `line` or `inTests` copied from the functions list, an empty `hunks` and a null `change` are ignored; any other key is refused. |
 | `processes` | 1–4 business flows the change touches: `{ title, steps }`, 2–16 steps each. A step is `{ id, kind, text, change, detail?, before?, functions?, hunks?, next? }`: `kind` is `start`, `action`, `decision` (two or more exits, each with a short `when` such as `yes`), or `end`; `change` is `added`, `changed`, `removed`, or `unchanged`; `before` (changed steps only) says how it worked before; `functions` and `hunks` name listed function ids and `items[].id`s; an action without `next` continues to the step listed after it. |
 | `rules` | At most 12 business rules `{ text, change, before?, hunks? }`; a `changed` rule must say what it was `before`. |
 
