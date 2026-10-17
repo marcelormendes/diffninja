@@ -1,0 +1,1630 @@
+{
+  "version": 2,
+  "date": "2026-10-17",
+  "diffninja": "main 5698f3b, plus the rule variants below (not merged)",
+  "claudeCode": "2.1.301",
+  "prompt": "Review {url} with diffninja. My clone is at {clone}. Answer its questions, then give me the page.",
+  "runner": "eval/run.mjs review, same as v1 (--jobs 3; opus --budget 8)",
+  "v1": {
+    "sonnet": {
+      "real": 7,
+      "falseAlarms": 0,
+      "knownFound": 4,
+      "cleanWithBlockers": 0,
+      "totalCost": 5.95
+    },
+    "opus": {
+      "real": 10,
+      "falseAlarms": 0,
+      "knownFound": 7,
+      "cleanWithBlockers": 0,
+      "totalCost": 16.34
+    },
+    "diffninja": "0.4.2 (d8286ee)"
+  },
+  "rules": {
+    "A": {
+      "nextStep": "Before you decide on comments, look for what could break. For each hunk that changes behavior, ask which inputs or states the new code does not control and check the awkward ones: null against undefined, empty or one-element values, a generator or stream read twice, a buffer or object the caller reuses or changes after the call, input shorter or longer than a fixed size, a list entry that is also a real key or header name, a call that can block, two callers at once, a slot or count released twice, server rendering against the browser, an older client or protocol. Use read_items with context true to read the callers and callees of a risky hunk. When the change undoes an earlier fix or a deliberate limit (the history or a commit message says why it was there), assume that reason still holds until you have shown it does not. When you suspect a defect, check it rather than dropping it: run the smallest test you can (call the changed code with the suspect input from a scratch file outside the clone, or run the project's existing tests), and when the runtime or dependencies are missing, copy the function into a scratch file or trace it line by line with concrete values. Do not install dependencies or change the clone unless the user allowed it. If the check shows the wrong result, that is a blocker: send it with what you ran or traced. If it shows the code is right, drop it.",
+      "commentRules": "A suspected defect is not one of them until you have tried to check it: run the code with the input you suspect, or trace it line by line with concrete values. A wrong result is a crash, a hang, lost or wrong data for an input the code accepts, or a check that no longer stops what it was there to stop, not a change of behavior the pull request sets out to make. Once you have shown one, it blocks the merge, and it still does when a test in the pull request expects it or when it looks rare."
+    },
+    "B": {
+      "nextStep": "Before you decide on comments, try to break the change. For each hunk that changes behavior, list what could go wrong with the inputs and states it does not control: null against undefined, empty or one-element values, a generator or stream read twice, a buffer the caller reuses after the call, input shorter or longer than a fixed size, a list entry that is also a real key or header name, a call that can block, two callers at once, a slot or count released twice, server rendering against the browser, an older client or protocol, an earlier fix or limit this change undoes. read_items with context true shows a hunk's callers and callees. Then check each item by running it: a scratch script outside the clone that calls the changed code with that input, or the project's own tests. When the runtime or dependencies are missing, copy the function into the scratch script, or trace it line by line with concrete values. Reasoning that settles a doubt without running or tracing the changed code (other code does the same, callers never pass that, the author meant it) is not a check. Do not install dependencies or change the clone unless the user allowed it. If the check shows the wrong result, that is a blocker: send it with what you ran or traced. If it shows the code is right, drop it.",
+      "commentRules": "A suspected defect is not one of them until you have tried to check it: run the code with the input you suspect, or trace it line by line with concrete values. A wrong result is a crash, a hang, lost or wrong data for an input the code accepts, or a check that no longer stops what it was there to stop. A change of behavior the pull request sets out to make is not one, unless it reopens what an earlier fix closed. Once you have shown a wrong result, it blocks the merge, and it still does when a test in the pull request expects it or when it looks rare."
+    },
+    "both": "Also in both variants, the list of what is not a blocker changed 'a risk you could not demonstrate, and a doubt about an external system you did not test' to 'a risk you tried and could not demonstrate, and a doubt about an external system you could not test'. The step went into nextSteps of every review_diff result (after the read step); the sentence went into COMMENT_RULES (finish_review and suggest_comments descriptions)."
+  },
+  "verdict": "Not merged. Sonnet found no more known problems with either variant (A 5/15, B 6/15) than main without them (7/15). Opus with B found 7/15, as in v1, and raised 2 false alarms on clean pull requests (v1: 0).",
+  "runs": {
+    "sonnet-main": {
+      "model": "sonnet",
+      "note": "No rule change: main at 5698f3b (PR #44, #45, #46).",
+      "totalCost": 6.25,
+      "score": {
+        "blockers": 9,
+        "real": 9,
+        "falseAlarms": 0,
+        "knownFound": 7,
+        "knownTotal": 15,
+        "cleanWithBlockers": 0
+      },
+      "cases": [
+        {
+          "id": "prettier-20143",
+          "label": "problem",
+          "cost": 0.3046,
+          "turns": 8,
+          "finishRefusals": 1,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/language-markdown/print/whitespace.js",
+              "line": 306,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "If previous is undefined and next.isCJ is true, previous.kind throws. That's a sentence starting with a line break, like \"*a*\\n日本語\". Please use previous?.kind and next?.kind here, and add a test for it.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #20257: previous.kind / next.kind read without a guard."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "hono-5205",
+          "label": "problem",
+          "cost": 0.1713,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "axios-11096",
+          "label": "problem",
+          "cost": 0.2545,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "fastify-6613",
+          "label": "problem",
+          "cost": 0.2148,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "lib/request.js",
+              "line": 121,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "With trustProxy: 1 an undefined remoteAddress still passes (i < tp), so x-forwarded-host/proto get trusted again; that reopens GHSA-444r-cwp2-x5xf for unix sockets or destroyed sockets. Is that intended? If so, document it.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #6673: an undefined remoteAddress passes !== null, so forwarded host/proto are trusted."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "undici-5811",
+          "label": "problem",
+          "cost": 0.1761,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "hono-4267",
+          "label": "problem",
+          "cost": 0.1467,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/client/client.ts",
+              "line": 169,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "The query string is appended before this runs, so client.index.$url({ query: { a: '1' } }) gives http://fake/index?a=1 and the /index$ regex never matches. Strip index from the path before adding the query, and add a test for it.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #4352: /index stays when a query is appended."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "tanstack-router-8643",
+          "label": "problem",
+          "cost": 0.2698,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "starlette-2381",
+          "label": "problem",
+          "cost": 0.3767,
+          "turns": 10,
+          "finishRefusals": 2,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "starlette/applications.py",
+              "line": 105,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Passing app by keyword together with star args means the first positional arg also binds to app, so any middleware given a positional arg fails with multiple values for argument app. Routes and mounts do the same. Pass app positionally instead.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #2752: app= keyword collides with *args."
+            },
+            {
+              "path": "starlette/applications.py",
+              "line": 6,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "typing_extensions is only declared as a dependency for python below 3.10, but it is imported unconditionally here and in the middleware package. On 3.12 without it installed, importing starlette fails. Import ParamSpec from typing on newer Pythons.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "why": "typing_extensions imported unconditionally but only required below 3.10; fixed upstream in #2409."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "chi-919",
+          "label": "problem",
+          "cost": 0.2182,
+          "turns": 8,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "middleware/compress.go",
+              "line": 374,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "Closing cw.w unconditionally also closes pooled gzip/deflate encoders on non-compressible responses; a never-written gzip.Writer emits header+trailer on Close, so a png gets ~23 stray bytes appended. Only close when cw.compressible, or close non-pooled encoders only.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as the revert #924: Close writes gzip bytes after an uncompressed body."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "click-2151",
+          "label": "problem",
+          "cost": 0.2725,
+          "turns": 9,
+          "finishRefusals": 1,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/click/core.py",
+              "line": 1305,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "make_default_short_help now gets the raw help, so text after the \\f leaks into the short help (command list). Before, init cut it. Truncate at \\f before calling it, and add a test that the hidden text is absent.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "why": "Short help now includes text after \\f; judged real in v1. Not the known blank-line bug."
+            }
+          ],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1401",
+          "label": "problem",
+          "cost": 0.2199,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "go-redis-3842",
+          "label": "problem",
+          "cost": 0.2914,
+          "turns": 8,
+          "finishRefusals": 1,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "internal/proto/reader.go",
+              "line": 133,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "bufio Peek(36) blocks until 36 bytes arrive, so a complete push frame shorter than 36 bytes (e.g. a ~30-byte subscribe confirmation) stalls here until the read deadline; the old code returned at once. Could we peek only what the parser still needs?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #3936: blocking Peek(36) on a frame shorter than 36 bytes."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "go-redis-3518",
+          "label": "problem",
+          "cost": 0.3626,
+          "turns": 9,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 1,
+          "blockers": [
+            {
+              "path": "internal/pool/pool.go",
+              "line": 569,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "If this waiter already got a shared conn via putIdleConn's dequeue, its own turn is released by the user's Put, so this freeTurn releases it a second time. That frees someone else's slot, or blocks on an empty queue and leaks the goroutine.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #3626: turn freed twice."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "gorm-7610",
+          "label": "problem",
+          "cost": 0.1753,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "pino-2105",
+          "label": "clean",
+          "cost": 0.1677,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2350",
+          "label": "clean",
+          "cost": 0.1376,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2140",
+          "label": "clean",
+          "cost": 0.1447,
+          "turns": 4,
+          "finishRefusals": 0,
+          "bashCalls": 0,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2299",
+          "label": "clean",
+          "cost": 0.2597,
+          "turns": 5,
+          "finishRefusals": 1,
+          "bashCalls": 0,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "date-fns-2752",
+          "label": "clean",
+          "cost": 0.2049,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2541",
+          "label": "clean",
+          "cost": 0.4469,
+          "turns": 8,
+          "finishRefusals": 1,
+          "bashCalls": 2,
+          "readItemsCalls": 1,
+          "blockers": []
+        },
+        {
+          "id": "attrs-1365",
+          "label": "clean",
+          "cost": 0.1579,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "rich-3518",
+          "label": "clean",
+          "cost": 0.1558,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "marshmallow-2792",
+          "label": "problem",
+          "cost": 0.2233,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1454",
+          "label": "clean",
+          "cost": 0.411,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 0,
+          "readItemsCalls": 1,
+          "blockers": []
+        },
+        {
+          "id": "chi-954",
+          "label": "clean",
+          "cost": 0.1755,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "zap-1460",
+          "label": "clean",
+          "cost": 0.157,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "cobra-2238",
+          "label": "clean",
+          "cost": 0.1585,
+          "turns": 4,
+          "finishRefusals": 0,
+          "bashCalls": 0,
+          "readItemsCalls": 0,
+          "blockers": []
+        }
+      ]
+    },
+    "sonnet-rulesA": {
+      "model": "sonnet",
+      "note": "Rules A (below) on main 5698f3b.",
+      "totalCost": 7.1,
+      "score": {
+        "blockers": 8,
+        "real": 8,
+        "falseAlarms": 0,
+        "knownFound": 5,
+        "knownTotal": 15,
+        "cleanWithBlockers": 0
+      },
+      "cases": [
+        {
+          "id": "prettier-20143",
+          "label": "problem",
+          "cost": 0.2552,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "hono-5205",
+          "label": "problem",
+          "cost": 0.1734,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "axios-11096",
+          "label": "problem",
+          "cost": 0.2526,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "fastify-6613",
+          "label": "problem",
+          "cost": 0.2104,
+          "turns": 8,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "undici-5811",
+          "label": "problem",
+          "cost": 0.1791,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "hono-4267",
+          "label": "problem",
+          "cost": 0.1977,
+          "turns": 8,
+          "finishRefusals": 1,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/client/client.ts",
+              "line": 169,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "removeIndexString only strips a trailing /index, but the query string is already appended here, so client.index.$url({ query: { a: '1' } }) still returns http://fake/index?a=1. Strip the index from the path before adding the query.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #4352: /index stays when a query is appended."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "tanstack-router-8643",
+          "label": "problem",
+          "cost": 0.2611,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 0,
+          "readItemsCalls": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "starlette-2381",
+          "label": "problem",
+          "cost": 0.2583,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "starlette/applications.py",
+              "line": 105,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "With any positional args this call fails, because they fill the app slot first and then app= is passed again, so Python raises a TypeError about multiple values for app. Passing app positionally fixes it, and the same goes for the three calls in routing.py.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #2752: app= keyword collides with *args."
+            },
+            {
+              "path": "starlette/routing.py",
+              "line": 242,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Same problem here, since app= is passed by keyword together with star-args, a middleware given positional args raises a TypeError about multiple values for app. Pass self.app positionally instead.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #2752, in routing.py (the known problem names it)."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "chi-919",
+          "label": "problem",
+          "cost": 0.2207,
+          "turns": 8,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "middleware/compress.go",
+              "line": 374,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "Closing cw.w when the response wasn't compressed makes gzip/deflate write their header and trailer into the plain response, so a PNG would get ~23 junk bytes appended. Needs the encoder to write to a discard writer or a guard so Close only flushes when compressible.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as the revert #924: Close writes gzip bytes after an uncompressed body."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "click-2151",
+          "label": "problem",
+          "cost": 0.2167,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/click/core.py",
+              "line": 1305,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "make_default_short_help now gets the raw help, so text after \\f leaks into the command list. A docstring \"Does a thing\\n\\f\\nHidden tail\" lists as \"Does a thing Hidden tail\". Please cut at \\f (and cleandoc) before building the short help, and add a test.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "why": "Short help now includes text after \\f; judged real in v1. Not the known blank-line bug."
+            }
+          ],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1401",
+          "label": "problem",
+          "cost": 0.201,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "go-redis-3842",
+          "label": "problem",
+          "cost": 0.3601,
+          "turns": 12,
+          "finishRefusals": 2,
+          "bashCalls": 6,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "internal/proto/reader.go",
+              "line": 133,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "bufio.Peek(36) blocks until 36 bytes arrive, so a complete push frame under 36 bytes (e.g. a RESP3 subscribe confirmation, ~30 bytes) hangs here until the read deadline, or forever with no timeout. Peek what is buffered first and block only if the parse is incomplete.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #3936: blocking Peek(36) on a frame shorter than 36 bytes."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "go-redis-3518",
+          "label": "problem",
+          "cost": 0.3285,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 1,
+          "blockers": [
+            {
+              "path": "internal/pool/pool.go",
+              "line": 568,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "If B gets a conn handed over from A's dial (via putIdleConn), B's own goroutine later sees delivered=false and calls freeTurn here, while B's caller still holds its turn until Put. That's a double release; the extra <-p.queue steals a slot or blocks.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #3626: turn freed twice (anchored one line up)."
+            },
+            {
+              "path": "internal/pool/pool.go",
+              "line": 562,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "getCtxForDial returns nil once cancel() has run. If the caller's ctx is already done by the time this goroutine starts, newConn gets a nil ctx and context.WithTimeout panics. The recover hides it, but it logs a panic.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "why": "nil dial ctx after cancel panics in newConn; fixed upstream in #3649 (issue #3630). Not the known double freeTurn."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "gorm-7610",
+          "label": "problem",
+          "cost": 0.1511,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "pino-2105",
+          "label": "clean",
+          "cost": 0.1717,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2350",
+          "label": "clean",
+          "cost": 0.124,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2140",
+          "label": "clean",
+          "cost": 0.1316,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2299",
+          "label": "clean",
+          "cost": 0.2754,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "date-fns-2752",
+          "label": "clean",
+          "cost": 0.1806,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2541",
+          "label": "clean",
+          "cost": 0.3749,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 0,
+          "readItemsCalls": 1,
+          "blockers": []
+        },
+        {
+          "id": "attrs-1365",
+          "label": "clean",
+          "cost": 0.1398,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "rich-3518",
+          "label": "clean",
+          "cost": 0.1464,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "marshmallow-2792",
+          "label": "problem",
+          "cost": 0.1986,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1454",
+          "label": "clean",
+          "cost": 1.6135,
+          "turns": 10,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 1,
+          "blockers": []
+        },
+        {
+          "id": "chi-954",
+          "label": "clean",
+          "cost": 0.1554,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "zap-1460",
+          "label": "clean",
+          "cost": 0.1374,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "cobra-2238",
+          "label": "clean",
+          "cost": 0.1868,
+          "turns": 5,
+          "finishRefusals": 1,
+          "bashCalls": 0,
+          "readItemsCalls": 0,
+          "blockers": []
+        }
+      ]
+    },
+    "sonnet-rulesB": {
+      "model": "sonnet",
+      "note": "Rules B (below) on main 5698f3b.",
+      "totalCost": 5.82,
+      "score": {
+        "blockers": 7,
+        "real": 7,
+        "falseAlarms": 0,
+        "knownFound": 6,
+        "knownTotal": 15,
+        "cleanWithBlockers": 0
+      },
+      "cases": [
+        {
+          "id": "prettier-20143",
+          "label": "problem",
+          "cost": 0.3131,
+          "turns": 9,
+          "finishRefusals": 2,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/language-markdown/print/whitespace.js",
+              "line": 306,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "previous can be undefined here (e.g. text starting with a newline right after inline code, then CJK). The first clause passes via next.isCJ, then previous.kind throws a TypeError. Use previous?.kind and next?.kind.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #20257: previous.kind / next.kind read without a guard."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "hono-5205",
+          "label": "problem",
+          "cost": 0.2018,
+          "turns": 8,
+          "finishRefusals": 1,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "axios-11096",
+          "label": "problem",
+          "cost": 0.265,
+          "turns": 7,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "fastify-6613",
+          "label": "problem",
+          "cost": 0.1624,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "undici-5811",
+          "label": "problem",
+          "cost": 0.1554,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "hono-4267",
+          "label": "problem",
+          "cost": 0.1307,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/client/client.ts",
+              "line": 169,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "removeIndexString runs after the query is appended, so its /index$ check never matches. client.index.$url({ query: { a: '1' } }) still gives http://fake/index?a=1. Strip index before adding the query.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #4352: /index stays when a query is appended."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "tanstack-router-8643",
+          "label": "problem",
+          "cost": 0.2555,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "starlette-2381",
+          "label": "problem",
+          "cost": 0.3169,
+          "turns": 7,
+          "finishRefusals": 2,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "starlette/applications.py",
+              "line": 105,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Passing app by keyword and also unpacking positional args breaks once args is non-empty, because the first positional binds to app and you get a TypeError for multiple values for app. Pass app positionally instead, and the same goes for the routing.py loops.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #2752: app= keyword collides with *args."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "chi-919",
+          "label": "problem",
+          "cost": 0.222,
+          "turns": 9,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "middleware/compress.go",
+              "line": 374,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "Closing cw.w unconditionally breaks non-compressible responses: gzip/deflate encoders are Reset onto the real ResponseWriter, so Close appends a gzip header/trailer (~23 bytes) after the raw png body. Only close when compressible, or Reset the encoder to Discard first.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as the revert #924: Close writes gzip bytes after an uncompressed body."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "click-2151",
+          "label": "problem",
+          "cost": 0.2535,
+          "turns": 10,
+          "finishRefusals": 1,
+          "bashCalls": 5,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/click/core.py",
+              "line": 1305,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "The next line passes the raw help to make_default_short_help, so text after \\f leaks into short help. A docstring 'Short no period\\f secret internals' now lists as 'Short no period secret internals'. Cut at \\f before that call.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "why": "Short help now includes text after \\f; judged real in v1. Not the known blank-line bug."
+            }
+          ],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1401",
+          "label": "problem",
+          "cost": 0.2172,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "go-redis-3842",
+          "label": "problem",
+          "cost": 0.2429,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "internal/proto/reader.go",
+              "line": 133,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "bufio's Peek(36) blocks until 36 bytes are buffered, so a complete push frame shorter than 36 bytes (e.g. a small RESP3 message or subscribe reply) stalls here until more data or the read deadline. Previously this was capped at Buffered().",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #3936: blocking Peek(36) on a frame shorter than 36 bytes."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "go-redis-3518",
+          "label": "problem",
+          "cost": 0.3359,
+          "turns": 9,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "internal/pool/pool.go",
+              "line": 569,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "If this waiter was already handed a conn via putIdleConn (from another waiter's dial), its caller still owns its turn and will freeTurn in Put/Remove. Freeing here too releases the same turn twice, so the pool can exceed PoolSize or Put can block.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #3626: turn freed twice."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "gorm-7610",
+          "label": "problem",
+          "cost": 0.1825,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "pino-2105",
+          "label": "clean",
+          "cost": 0.1741,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2350",
+          "label": "clean",
+          "cost": 0.1417,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2140",
+          "label": "clean",
+          "cost": 0.1327,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2299",
+          "label": "clean",
+          "cost": 0.2464,
+          "turns": 6,
+          "finishRefusals": 1,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "date-fns-2752",
+          "label": "clean",
+          "cost": 0.1819,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2541",
+          "label": "clean",
+          "cost": 0.3228,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 1,
+          "blockers": []
+        },
+        {
+          "id": "attrs-1365",
+          "label": "clean",
+          "cost": 0.1434,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "rich-3518",
+          "label": "clean",
+          "cost": 0.1421,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "marshmallow-2792",
+          "label": "problem",
+          "cost": 0.2294,
+          "turns": 7,
+          "finishRefusals": 1,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1454",
+          "label": "clean",
+          "cost": 0.415,
+          "turns": 9,
+          "finishRefusals": 1,
+          "bashCalls": 3,
+          "readItemsCalls": 1,
+          "blockers": []
+        },
+        {
+          "id": "chi-954",
+          "label": "clean",
+          "cost": 0.1522,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "zap-1460",
+          "label": "clean",
+          "cost": 0.1354,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "cobra-2238",
+          "label": "clean",
+          "cost": 0.1435,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        }
+      ]
+    },
+    "opus-rulesB": {
+      "model": "opus",
+      "note": "Rules B on main 5698f3b, --budget 8 as in v1.",
+      "totalCost": 15.95,
+      "score": {
+        "blockers": 12,
+        "real": 10,
+        "falseAlarms": 2,
+        "knownFound": 7,
+        "knownTotal": 15,
+        "cleanWithBlockers": 2
+      },
+      "cases": [
+        {
+          "id": "prettier-20143",
+          "label": "problem",
+          "cost": 0.8699,
+          "turns": 16,
+          "finishRefusals": 1,
+          "bashCalls": 10,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/language-markdown/print/whitespace.js",
+              "line": 306,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "previous/next are only optional-chained on the line above; when a sentence starts or ends with a newline (e.g. \"`code`\\n中文\" or \"中文\\n`code`\") one of them is undefined and previous.kind / next.kind throws. Needs a !previous || !next guard like lineBreakCanBeConvertedToSpace has.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #20257: previous.kind / next.kind read without a guard."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "hono-5205",
+          "label": "problem",
+          "cost": 0.4983,
+          "turns": 8,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "axios-11096",
+          "label": "problem",
+          "cost": 0.8587,
+          "turns": 13,
+          "finishRefusals": 1,
+          "bashCalls": 7,
+          "readItemsCalls": 1,
+          "blockers": [
+            {
+              "path": "lib/core/Axios.js",
+              "line": 158,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "This also strips real lowercase request headers named link or options: axios.get(url, { headers: { link: '</a.css>; rel=preload' } }) now sends no Link header, but it did before. Could we only delete a key when its value is a plain-object bucket?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #11156: a real Link header is deleted with the method buckets."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "fastify-6613",
+          "label": "problem",
+          "cost": 0.5914,
+          "turns": 10,
+          "finishRefusals": 1,
+          "bashCalls": 5,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "undici-5811",
+          "label": "problem",
+          "cost": 0.4581,
+          "turns": 8,
+          "finishRefusals": 0,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "hono-4267",
+          "label": "problem",
+          "cost": 0.4333,
+          "turns": 8,
+          "finishRefusals": 1,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/client/client.ts",
+              "line": 169,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "This runs after the query is appended, so `client.index.$url({ query: { page: '1' } })` still gives `http://fake/index?page=1`. fetch strips index before adding the query; can we do the same here?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #4352: /index stays when a query is appended."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "tanstack-router-8643",
+          "label": "problem",
+          "cost": 0.7976,
+          "turns": 9,
+          "finishRefusals": 1,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "starlette-2381",
+          "label": "problem",
+          "cost": 0.9829,
+          "turns": 13,
+          "finishRefusals": 3,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "starlette/applications.py",
+              "line": 105,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Passing app by keyword here clashes with the new positional args. With Middleware(M, \"foo\", bar=1) the \"foo\" lands in app, so building the stack blows up with multiple values for 'app'. Passing app as the first positional argument instead avoids it.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #2752: app= keyword collides with *args."
+            },
+            {
+              "path": "starlette/routing.py",
+              "line": 242,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Same collision here and in WebSocketRoute and Mount, since app is passed by keyword ahead of the positional args; only Router passes it positionally. Could we add a test that actually builds an app with a positional middleware arg?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #2752, in routing.py (the known problem names it)."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "chi-919",
+          "label": "problem",
+          "cost": 0.563,
+          "turns": 9,
+          "finishRefusals": 1,
+          "bashCalls": 4,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "middleware/compress.go",
+              "line": 374,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "When the response isn't compressible, cw.w is still the gzip/deflate encoder wrapping the raw ResponseWriter, so Close() now appends gzip header+trailer bytes to e.g. an image/png body. Maybe Reset(io.Discard) before closing when !compressible?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as the revert #924: Close writes gzip bytes after an uncompressed body."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "click-2151",
+          "label": "problem",
+          "cost": 0.607,
+          "turns": 8,
+          "finishRefusals": 1,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/click/core.py",
+              "line": 1305,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Derived short help now uses the raw help with no \\f truncation, so a docstring like \"Do the thing\\n\\f\\nInternal docs\" lists as \"Do the thing Internal docs\" in group help and completion. Cut at \\f before make_default_short_help?",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "why": "Short help now includes text after \\f; judged real in v1. Not the known blank-line bug."
+            }
+          ],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1401",
+          "label": "problem",
+          "cost": 0.6944,
+          "turns": 11,
+          "finishRefusals": 1,
+          "bashCalls": 6,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "go-redis-3842",
+          "label": "problem",
+          "cost": 0.7933,
+          "turns": 12,
+          "finishRefusals": 1,
+          "bashCalls": 7,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "internal/proto/reader.go",
+              "line": 133,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "Peek(36) blocks until 36 bytes arrive, so a short frame (a message on \"ch\" with payload \"hi\" is 33 bytes) stalls Receive when nothing follows it. Could we start from Buffered() and only grow while the header is incomplete?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #3936: blocking Peek(36) on a frame shorter than 36 bytes."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "go-redis-3518",
+          "label": "problem",
+          "cost": 0.8664,
+          "turns": 13,
+          "finishRefusals": 0,
+          "bashCalls": 9,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "internal/pool/pool.go",
+              "line": 569,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "When A's dial result gets handed to waiter B via putIdleConn, B keeps its turn. Then B's own dial finishes, tryDeliver(B) fails, and this freeTurn() releases B's token while B still holds a conn. B's later Put/Remove does <-p.queue on an empty queue and blocks.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "why": "Same defect as #3626: turn freed twice."
+            },
+            {
+              "path": "internal/pool/pool.go",
+              "line": 546,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "Every pool miss enqueues w here, but only putIdleConn ever dequeues, and that only runs on cancel/undelivered paths. On a normal successful dial the entry stays in dialsQueue.items forever, so the slice grows by one per new connection for the client's lifetime.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "why": "dialsQueue keeps done entries; fixed upstream in #3680 (issue #3678)."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "gorm-7610",
+          "label": "problem",
+          "cost": 0.5538,
+          "turns": 7,
+          "finishRefusals": 1,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "pino-2105",
+          "label": "clean",
+          "cost": 0.3702,
+          "turns": 5,
+          "finishRefusals": 0,
+          "bashCalls": 1,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2350",
+          "label": "clean",
+          "cost": 0.3731,
+          "turns": 9,
+          "finishRefusals": 0,
+          "bashCalls": 5,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2140",
+          "label": "clean",
+          "cost": 0.3483,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2299",
+          "label": "clean",
+          "cost": 0.614,
+          "turns": 7,
+          "finishRefusals": 1,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "date-fns-2752",
+          "label": "clean",
+          "cost": 0.4767,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2541",
+          "label": "clean",
+          "cost": 0.8439,
+          "turns": 12,
+          "finishRefusals": 0,
+          "bashCalls": 8,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/core/handlers/HttpHandler.ts",
+              "line": 142,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "The custom predicate runs in parse(), before matchMethod(), so http.post(async ({ request }) => (await request.clone().json()).x) gets called for every GET too. json() rejects on the empty body and that request becomes a 500. Can we check the method first?",
+              "verdict": "false-alarm",
+              "matchesKnownProblem": false,
+              "why": "Custom predicate runs before the method check, so a predicate that throws on GET bodies errors. Same code in msw 3.0.3 a year later: a design choice upstream kept, and the failure needs user code that throws. Not a merge blocker."
+            }
+          ]
+        },
+        {
+          "id": "attrs-1365",
+          "label": "clean",
+          "cost": 0.378,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "rich-3518",
+          "label": "clean",
+          "cost": 0.3666,
+          "turns": 7,
+          "finishRefusals": 0,
+          "bashCalls": 3,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "marshmallow-2792",
+          "label": "problem",
+          "cost": 0.459,
+          "turns": 9,
+          "finishRefusals": 0,
+          "bashCalls": 5,
+          "readItemsCalls": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1454",
+          "label": "clean",
+          "cost": 0.9255,
+          "turns": 11,
+          "finishRefusals": 1,
+          "bashCalls": 6,
+          "readItemsCalls": 0,
+          "blockers": [
+            {
+              "path": "src/attr/_make.py",
+              "line": 1453,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Checking is_exc first means a bad hash value is no longer rejected for exception classes: @attr.s(auto_exc=True, hash=\"yes\") on an Exception subclass used to raise TypeError and now goes through quietly. Could the invalid-value check run before this branch?",
+              "verdict": "false-alarm",
+              "matchesKnownProblem": false,
+              "why": "is_exc is checked before the invalid-hash check, so hash=\"yes\" on an auto_exc class is accepted. attrs main still has this order; a nonsense argument on an exception class is not a merge blocker."
+            }
+          ]
+        },
+        {
+          "id": "chi-954",
+          "label": "clean",
+          "cost": 0.4989,
+          "turns": 9,
+          "finishRefusals": 0,
+          "bashCalls": 5,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "zap-1460",
+          "label": "clean",
+          "cost": 0.3486,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        },
+        {
+          "id": "cobra-2238",
+          "label": "clean",
+          "cost": 0.3804,
+          "turns": 6,
+          "finishRefusals": 0,
+          "bashCalls": 2,
+          "readItemsCalls": 0,
+          "blockers": []
+        }
+      ]
+    }
+  }
+}
