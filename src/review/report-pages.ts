@@ -45,8 +45,14 @@ const CONTROL_CHARACTERS = /[^\P{Cc}]/u;
  * 10.") or a hyphen inside a phrase is not scaffolding.
  */
 const SUMMARY_SCAFFOLDING = /^\s*(?:#{1,6}\s|>|```|~~~|[-*+]\s|\d+[.)]\s|\|)|(?:\*\*|__|\||```|~~~|`|<\/?[a-z][^>]*>|!?\[[^\]]*\]\()/i;
-/** Report scaffolding a person would not write in a review comment: "Finding 1:", "Attention -", "**Error**", "## Bug". */
-const REPORT_LABEL = /^\s*(?:#|>|[-*+]\s|\d+[.)]\s|\*\*|\[)|^\s*(?:findings?|issues?|attention|errors?|warnings?|bugs?|problems?|severity|critical|major|minor|high|medium|low|concerns?|risks?|suggestions?|observations?|summary)\b\s*#?\d*\s*[:\-\u2013\u2014.]|\*\*/i;
+/**
+ * Report scaffolding a person would not write in a review comment: "Finding 1:",
+ * "Attention -", "**Error**", "## Bug". Bold is a closed `**text**`, outside code
+ * spans, so Python's `**kwargs` in a comment is not taken for it.
+ */
+const REPORT_LABEL = /^\s*(?:#|>|[-*+]\s|\d+[.)]\s|\*\*|\[)|^\s*(?:findings?|issues?|attention|errors?|warnings?|bugs?|problems?|severity|critical|major|minor|high|medium|low|concerns?|risks?|suggestions?|observations?|summary)\b\s*#?\d*\s*[:\-\u2013\u2014.]|\*\*[^\s*][^*]*?(?<=[^\s*(])\*\*(?![\w(])/i;
+/** Inline code spans, which GitHub shows as code, so nothing inside them is formatting. */
+const CODE_SPAN = /`[^`\n]*`/g;
 
 const INLINE_BLOCK = /<(script|style)>([\s\S]*?)<\/\1>/g;
 
@@ -281,8 +287,9 @@ function checkSummary(summary: string | undefined, problems: string[]): string |
   if (CONTROL_CHARACTERS.test(text)) problems.push("summary must be one paragraph of plain text: no line breaks, tabs, or other control characters.");
   const hidden = hiddenCharacterProblem(text);
   if (hidden !== undefined) problems.push(`summary ${hidden}.`);
-  if (text.length > MAX_SUMMARY_CHARS) problems.push(`summary is longer than ${MAX_SUMMARY_CHARS} characters; write one short paragraph.`);
-  else if (text.split(/\s+/).length > MAX_SUMMARY_WORDS) problems.push(`summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph.`);
+  const words = text.split(/\s+/).length;
+  if (text.length > MAX_SUMMARY_CHARS) problems.push(`summary is ${text.length} characters and ${words} words; the limits are ${MAX_SUMMARY_CHARS} characters and ${MAX_SUMMARY_WORDS} words, so cut it to two or three short sentences.`);
+  else if (words > MAX_SUMMARY_WORDS) problems.push(`summary is ${words} words; the limit is ${MAX_SUMMARY_WORDS} words, so cut it to two or three short sentences.`);
   if (SUMMARY_SCAFFOLDING.test(text)) problems.push("summary uses Markdown or HTML formatting (a heading, list, bold, code, quote, link, table, or tag); write plain prose.");
   return text;
 }
@@ -316,8 +323,9 @@ function commentProblem(body: string): string | undefined {
   if (CONTROL_CHARACTERS.test(body)) return "contains control characters";
   const hidden = hiddenCharacterProblem(body);
   if (hidden !== undefined) return hidden;
-  if (body.length > MAX_SUGGESTED_CHARS) return `is longer than ${MAX_SUGGESTED_CHARS} characters; say it the way a reviewer would, in a sentence or two`;
-  if (REPORT_LABEL.test(body)) return "reads like a report (a heading, list marker, bold, or a label such as \"Finding 1:\"); write it the way the reviewer would say it";
+  if (body.length > MAX_SUGGESTED_CHARS) return `is ${body.length} characters; the limit is ${MAX_SUGGESTED_CHARS}, so say it the way a reviewer would, in a sentence or two`;
+  const label = REPORT_LABEL.exec(body.replace(CODE_SPAN, (span) => "`".repeat(span.length)));
+  if (label !== null) return `reads like a report at ${JSON.stringify(label[0].trim())} (a heading, list marker, bold, or a label such as "Finding 1:"); write it the way the reviewer would say it`;
   return undefined;
 }
 

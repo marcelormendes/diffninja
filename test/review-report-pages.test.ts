@@ -348,10 +348,10 @@ describe("finish_review lists every problem in one refusal", () => {
       };
       expect(() => pages.finish(reviewId, reading, "agent 1.0")).toThrow([
         "5 problems; nothing was kept. Fix them all and call again:",
-        `1. summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph.`,
+        `1. summary is ${MAX_SUMMARY_WORDS + 1} words; the limit is ${MAX_SUMMARY_WORDS} words, so cut it to two or three short sentences.`,
         "2. answers leave out 1 of 1 questions, starting with q1; answer every question, cannot-tell when the code does not settle it.",
         "3. order[1] repeats a hunk; name each hunk once.",
-        "4. comments[0].body reads like a report (a heading, list marker, bold, or a label such as \"Finding 1:\"); write it the way the reviewer would say it.",
+        "4. comments[0].body reads like a report at \"Finding 1:\" (a heading, list marker, bold, or a label such as \"Finding 1:\"); write it the way the reviewer would say it.",
         "5. comments[1] names src/a.ts:9 (RIGHT), which is not a line of this review's diff.",
       ].join("\n"));
       expect(review.questions[0].answer).toBeUndefined();
@@ -370,7 +370,7 @@ describe("finish_review lists every problem in one refusal", () => {
       const { reviewId } = await pages.publish(report());
       const reading = { answers: [{ questionId: "q1", choice: "no-behavior-change" }], order: ["hunk-1"], comments: [] };
       expect(() => pages.finish(reviewId, { ...reading, summary: longSummary }, "agent 1.0"))
-        .toThrow(new RegExp(`^summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph\\.$`));
+        .toThrow(new RegExp(`^summary is ${MAX_SUMMARY_WORDS + 1} words; the limit is ${MAX_SUMMARY_WORDS} words, so cut it to two or three short sentences\\.$`));
     } finally {
       await pages.close();
     }
