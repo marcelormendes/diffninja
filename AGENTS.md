@@ -133,7 +133,9 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   - `finish_review`: strict `{ reviewId, answers, order, comments, summary?, explanation? }`, the source
     of page links (`analysisUnavailable` below is the one exception). Connected reviews require `summary` and `explanation`.
     `explanation` is `{ functions, processes, rules }`: a one-sentence purpose
-    for every listed function exactly once; 1–4 processes of 2–16 steps
+    for every listed function exactly once (an entry is `{ id, purpose }`; a
+    `line` or `inTests` echoed from the functions list, an empty `hunks` and a
+    null `change` are taken and dropped, any other key is refused); 1–4 processes of 2–16 steps
     (`start`/`action`/`decision`/`end`, `change` added/changed/removed/unchanged,
     optional `detail`, `before` only on a changed step, `functions`/`hunks`
     references that must resolve, `next` exits that must resolve; a decision

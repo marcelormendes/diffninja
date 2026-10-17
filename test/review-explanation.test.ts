@@ -163,6 +163,15 @@ describe("checkExplanation", () => {
     expect(() => checkExplanation(target, padded)).not.toThrow();
   });
 
+  test("keeps only id and purpose of a function entry that echoes the functions list", () => {
+    const target = withFunctions();
+    const [first, second, third, ...rest] = explanation(target).functions;
+    // The shapes the finish_review schema takes and drops (seen in the v4 eval).
+    const echoed = { ...explanation(target), functions: [{ ...first, line: 12, inTests: true }, { ...second, hunks: [] }, { ...third, change: null }, ...rest] };
+    expect(() => checkExplanation(target, echoed)).not.toThrow();
+    expect(normalizeExplanation(echoed, "test-agent 1.0").functions).toEqual(explanation(target).functions);
+  });
+
   test("allows ordinary prose that only looks near code", () => {
     const target = withFunctions();
     const prose = explanation(target, {
