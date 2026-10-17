@@ -1,0 +1,687 @@
+{
+  "version": 1,
+  "date": "2026-10-17",
+  "diffninja": "0.4.2 (this checkout, d8286ee)",
+  "claudeCode": "2.1.301",
+  "prompt": "Review {url} with diffninja. My clone is at {clone}. Answer its questions, then give me the page.",
+  "runs": {
+    "sonnet": {
+      "model": "sonnet",
+      "totalCost": 5.95,
+      "cases": [
+        {
+          "id": "prettier-20143",
+          "label": "problem",
+          "cost": 0.243,
+          "turns": 9,
+          "finishRefusals": 1,
+          "blockers": [],
+          "knownProblemFound": false,
+          "seenButNotBlocked": "Named the possible crash (previous.kind without a null check) under \"things to check yourself\"; did not run it."
+        },
+        {
+          "id": "hono-5205",
+          "label": "problem",
+          "cost": 0.2083,
+          "turns": 8,
+          "finishRefusals": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "axios-11096",
+          "label": "problem",
+          "cost": 0.246,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "fastify-6613",
+          "label": "problem",
+          "cost": 0.1766,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false,
+          "seenButNotBlocked": "Named the undefined-passes-!==null gap in its reply as non-blocking."
+        },
+        {
+          "id": "undici-5811",
+          "label": "problem",
+          "cost": 0.1781,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "hono-4267",
+          "label": "problem",
+          "cost": 0.1465,
+          "turns": 6,
+          "finishRefusals": 0,
+          "blockers": [
+            {
+              "path": "src/client/client.ts",
+              "line": 169,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "removeIndexString runs after the query string is appended, so its `/index$` regex won't match; client.index.$url({ query }) still gives http://fake/index?x=1. Strip the index before adding the query.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "traced: correct",
+              "why": "Same defect as #4352: /index stays when a query is appended."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "tanstack-router-8643",
+          "label": "problem",
+          "cost": 0.2604,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "starlette-2381",
+          "label": "problem",
+          "cost": 0.2871,
+          "turns": 8,
+          "finishRefusals": 1,
+          "blockers": [
+            {
+              "path": "starlette/applications.py",
+              "line": 105,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Calling cls with app as a keyword plus star-args means the first positional arg binds to app and then collides with it, so any middleware given positional args raises a TypeError. Pass app positionally here and in the routing loops.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "ran: true (ran a minimal copy of the call form, not starlette)",
+              "why": "Same defect as #2752: app= keyword collides with *args."
+            },
+            {
+              "path": "starlette/middleware/__init__.py",
+              "line": 3,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "typing_extensions is imported unconditionally, but pyproject only requires it for python below 3.10. On 3.10+ without it, importing starlette.middleware fails. Guard the import by version or make the dependency unconditional.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "evidenceCheck": "ran: true (import failed with ModuleNotFoundError on Python 3.12)",
+              "why": "typing_extensions imported unconditionally but only required below 3.10; fixed upstream in #2409."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "chi-919",
+          "label": "problem",
+          "cost": 0.2231,
+          "turns": 11,
+          "finishRefusals": 1,
+          "blockers": [
+            {
+              "path": "middleware/compress.go",
+              "line": 374,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "Closing cw.w for non-compressible responses flushes into the real ResponseWriter: pooled gzip/deflate Close writes header/trailer bytes after an image body. Also cw.w is the raw ResponseWriter when no encoder matched, so this may Close it. Free the encoder without writing to w.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "traced: correct",
+              "why": "Same defect as the revert #924: Close writes gzip bytes after an uncompressed body."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "click-2151",
+          "label": "problem",
+          "cost": 0.2877,
+          "turns": 11,
+          "finishRefusals": 2,
+          "blockers": [
+            {
+              "path": "src/click/core.py",
+              "line": 1305,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "The next line passes raw self.help to make_default_short_help, so text after a form feed leaks into the command list. 'No period here\\f hidden text' lists as 'No period here hidden text'. Cut at the form feed first.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "evidenceCheck": "ran: true (CliRunner shows the text after \\f in the command list)",
+              "why": "Short help now includes text after \\f; verified base vs head and still on main. Not the known blank-line bug."
+            }
+          ],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1401",
+          "label": "problem",
+          "cost": 0.219,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "go-redis-3842",
+          "label": "problem",
+          "cost": 0.2678,
+          "turns": 12,
+          "finishRefusals": 1,
+          "blockers": [
+            {
+              "path": "internal/proto/reader.go",
+              "line": 133,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "bufio.Peek(36) blocks until 36 bytes are buffered or the read errors. A complete push frame shorter than 36 bytes (e.g. a 31-byte pub/sub message) with nothing behind it will stall here until the read deadline. Should we Peek only what's needed, or grow from a smaller window?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "traced: correct (said it could not run Go)",
+              "why": "Same defect as #3936: Peek(36) blocks on short frames."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "go-redis-3518",
+          "label": "problem",
+          "cost": 0.337,
+          "turns": 11,
+          "finishRefusals": 0,
+          "blockers": [
+            {
+              "path": "internal/pool/pool.go",
+              "line": 562,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "getCtxForDial returns nil once the wantConn is cancelled or delivered, so if the caller's ctx is cancelled (or putIdleConn hands this waiter a conn) before this goroutine runs, newConn gets a nil ctx and panics in WithTimeout. Please skip the dial when it is nil.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "evidenceCheck": "traced: correct",
+              "why": "nil dial ctx after cancel panics in newConn; fixed upstream in #3649 (issue #3630). Not the known double freeTurn."
+            }
+          ],
+          "knownProblemFound": false
+        },
+        {
+          "id": "gorm-7610",
+          "label": "problem",
+          "cost": 0.18,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "pino-2105",
+          "label": "clean",
+          "cost": 0.1714,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2350",
+          "label": "clean",
+          "cost": 0.1529,
+          "turns": 5,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2140",
+          "label": "clean",
+          "cost": 0.1561,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2299",
+          "label": "clean",
+          "cost": 0.2615,
+          "turns": 7,
+          "finishRefusals": 1,
+          "blockers": []
+        },
+        {
+          "id": "date-fns-2752",
+          "label": "clean",
+          "cost": 0.1782,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2541",
+          "label": "clean",
+          "cost": 0.3096,
+          "turns": 9,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "attrs-1365",
+          "label": "clean",
+          "cost": 0.177,
+          "turns": 9,
+          "finishRefusals": 1,
+          "blockers": []
+        },
+        {
+          "id": "rich-3518",
+          "label": "clean",
+          "cost": 0.1664,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "marshmallow-2792",
+          "label": "problem",
+          "cost": 0.2336,
+          "turns": 9,
+          "finishRefusals": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1454",
+          "label": "clean",
+          "cost": 0.382,
+          "turns": 10,
+          "finishRefusals": 1,
+          "blockers": []
+        },
+        {
+          "id": "chi-954",
+          "label": "clean",
+          "cost": 0.1645,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "zap-1460",
+          "label": "clean",
+          "cost": 0.1548,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "cobra-2238",
+          "label": "clean",
+          "cost": 0.1767,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": []
+        }
+      ]
+    },
+    "opus": {
+      "model": "opus",
+      "totalCost": 16.34,
+      "cases": [
+        {
+          "id": "prettier-20143",
+          "label": "problem",
+          "cost": 0.9165,
+          "turns": 19,
+          "finishRefusals": 1,
+          "blockers": [
+            {
+              "path": "src/language-markdown/print/whitespace.js",
+              "line": 306,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "This crashes when the whitespace starts or ends a sentence next to a CJ character, e.g. emphasis, a space, then 中文 with prose-wrap always: Cannot read properties of undefined (reading 'kind'). Could it return early when previous or next is missing?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "ran: true (installed deps, reproduced the TypeError at line 306, base formats fine)",
+              "why": "Same defect as #20257."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "hono-5205",
+          "label": "problem",
+          "cost": 0.6218,
+          "turns": 12,
+          "finishRefusals": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "axios-11096",
+          "label": "problem",
+          "cost": 0.6376,
+          "turns": 13,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "fastify-6613",
+          "label": "problem",
+          "cost": 0.4706,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false,
+          "seenButNotBlocked": "Named the undefined-passes-!==null gap in its reply as non-blocking."
+        },
+        {
+          "id": "undici-5811",
+          "label": "problem",
+          "cost": 0.5346,
+          "turns": 11,
+          "finishRefusals": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "hono-4267",
+          "label": "problem",
+          "cost": 0.379,
+          "turns": 9,
+          "finishRefusals": 0,
+          "blockers": [
+            {
+              "path": "src/client/client.ts",
+              "line": 169,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "removeIndexString only matches /index at the end of the string, but here it runs after the query is appended, so client.index.$url({ query: { a: '1' } }) still gives http://fake/index?a=1. Could we strip before adding the query, like the fetch path does at line 102?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "ran: partly (the real test run crashed out of memory; it then ran a copy of the regex in node)",
+              "why": "Same defect as #4352."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "tanstack-router-8643",
+          "label": "problem",
+          "cost": 0.8443,
+          "turns": 12,
+          "finishRefusals": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "starlette-2381",
+          "label": "problem",
+          "cost": 0.8225,
+          "turns": 13,
+          "finishRefusals": 2,
+          "blockers": [
+            {
+              "path": "starlette/applications.py",
+              "line": 105,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Passing app by keyword here while also spreading args means the first positional arg binds to app, so Middleware(M, 'foo', bar=1) blows up with a multiple values for argument app TypeError. Passing app positionally, like Router does, avoids it.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "ran: true (ran the call form in plain Python, said so)",
+              "why": "Same defect as #2752."
+            },
+            {
+              "path": "starlette/routing.py",
+              "line": 242,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "Same collision here and in WebSocketRoute (line 339) and Mount (line 408): app is passed by keyword, so any positional middleware arg clashes with it. Router at line 676 passes it positionally and works. Could we also add a test that builds a stack with a positional arg?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "traced: correct",
+              "why": "Same defect, second location named in the known problem (routing.py)."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "chi-919",
+          "label": "problem",
+          "cost": 0.5453,
+          "turns": 12,
+          "finishRefusals": 2,
+          "blockers": [
+            {
+              "path": "middleware/compress.go",
+              "line": 374,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "When the response isn't compressible, cw.w is still the gzip/deflate encoder pointed at the ResponseWriter, so Close() now writes a gzip header and trailer into the plain body. A PNG with Accept-Encoding: gzip gets junk bytes appended. Create the encoder lazily instead?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "traced: correct",
+              "why": "Same defect as the revert #924."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "click-2151",
+          "label": "problem",
+          "cost": 0.57,
+          "turns": 11,
+          "finishRefusals": 0,
+          "blockers": [
+            {
+              "path": "src/click/core.py",
+              "line": 1305,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Since help is now stored raw, this fallback passes text after \\f into make_default_short_help. With help=\"Run things\\fInternal notes\" the group listing and shell completion now show \"Run things Internal notes\" instead of \"Run things\". Partition on \\f here too?",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "evidenceCheck": "ran: true (compared base and head output)",
+              "why": "Same extra regression as Sonnet found; not the known blank-line bug."
+            }
+          ],
+          "knownProblemFound": false
+        },
+        {
+          "id": "attrs-1401",
+          "label": "problem",
+          "cost": 0.6186,
+          "turns": 11,
+          "finishRefusals": 1,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "go-redis-3842",
+          "label": "problem",
+          "cost": 0.549,
+          "turns": 9,
+          "finishRefusals": 0,
+          "blockers": [],
+          "knownProblemFound": false
+        },
+        {
+          "id": "go-redis-3518",
+          "label": "problem",
+          "cost": 1.2334,
+          "turns": 17,
+          "finishRefusals": 2,
+          "blockers": [
+            {
+              "path": "internal/pool/pool.go",
+              "line": 569,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "When B is served A's conn via putIdleConn, B's own dial later lands here and frees the turn B's caller still holds. B's Put then frees it again and blocks on an empty queue (or steals a slot). Only free here if the waiter was cancelled.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "traced: correct",
+              "why": "Same defect as #3626: turn freed twice."
+            },
+            {
+              "path": "internal/pool/pool.go",
+              "line": 546,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "Every miss enqueues a wantConn, but the queue is only drained in putIdleConn. When the caller takes its own conn, which is the normal path, the entry is never removed, so dialsQueue grows with every dial the pool ever makes.",
+              "verdict": "real",
+              "matchesKnownProblem": false,
+              "evidenceCheck": "traced: correct",
+              "why": "dialsQueue keeps done entries; fixed upstream in #3680 (issue #3678, memory leak in production)."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "gorm-7610",
+          "label": "problem",
+          "cost": 0.5971,
+          "turns": 10,
+          "finishRefusals": 1,
+          "blockers": [
+            {
+              "path": "utils/utils.go",
+              "line": 57,
+              "side": "RIGHT",
+              "evidence": "traced",
+              "body": "CallerFrame still does runtime.Callers(3), so going through it skips one fewer frame. A custom logger outside gorm calling utils.FileWithLineNum() in its Trace now gets its own file:line back. Maybe pass the skip count in?",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "traced: correct (said Go was not installed)",
+              "why": "Same defect as #7717: one extra stack frame shifts FileWithLineNum."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "pino-2105",
+          "label": "clean",
+          "cost": 0.4065,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2350",
+          "label": "clean",
+          "cost": 0.4318,
+          "turns": 9,
+          "finishRefusals": 1,
+          "blockers": []
+        },
+        {
+          "id": "msw-2140",
+          "label": "clean",
+          "cost": 0.3885,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "commander-2299",
+          "label": "clean",
+          "cost": 0.6332,
+          "turns": 10,
+          "finishRefusals": 1,
+          "blockers": []
+        },
+        {
+          "id": "date-fns-2752",
+          "label": "clean",
+          "cost": 0.4337,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "msw-2541",
+          "label": "clean",
+          "cost": 0.9283,
+          "turns": 18,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "attrs-1365",
+          "label": "clean",
+          "cost": 0.3584,
+          "turns": 8,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "rich-3518",
+          "label": "clean",
+          "cost": 0.4093,
+          "turns": 10,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "marshmallow-2792",
+          "label": "problem",
+          "cost": 0.7843,
+          "turns": 14,
+          "finishRefusals": 2,
+          "blockers": [
+            {
+              "path": "src/marshmallow/decorators.py",
+              "line": 98,
+              "side": "RIGHT",
+              "evidence": "ran",
+              "body": "Typing fn as SchemaValidator breaks the documented bare @validates_schema usage under mypy: a method like def validate(self, data, kwargs-splat) doesn't match the protocol, which takes only output positionally. It type-checks on main but errors here, even without strict.",
+              "verdict": "real",
+              "matchesKnownProblem": true,
+              "evidenceCheck": "ran: true (mypy on head errors, on base passes)",
+              "why": "Same defect as #2793, fixed the same day."
+            }
+          ],
+          "knownProblemFound": true
+        },
+        {
+          "id": "attrs-1454",
+          "label": "clean",
+          "cost": 0.7935,
+          "turns": 12,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "chi-954",
+          "label": "clean",
+          "cost": 0.6389,
+          "turns": 14,
+          "finishRefusals": 1,
+          "blockers": []
+        },
+        {
+          "id": "zap-1460",
+          "label": "clean",
+          "cost": 0.3424,
+          "turns": 7,
+          "finishRefusals": 0,
+          "blockers": []
+        },
+        {
+          "id": "cobra-2238",
+          "label": "clean",
+          "cost": 0.4531,
+          "turns": 8,
+          "finishRefusals": 1,
+          "blockers": []
+        }
+      ]
+    }
+  }
+}

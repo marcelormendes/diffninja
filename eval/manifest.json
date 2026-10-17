@@ -1,0 +1,448 @@
+{
+  "version": 1,
+  "prompt": "Review {url} with diffninja. My clone is at {clone}. Answer its questions, then give me the page.",
+  "cases": [
+    {
+      "id": "prettier-20143",
+      "repo": "prettier/prettier",
+      "pr": 20143,
+      "language": "javascript",
+      "size": "medium",
+      "changedLines": 194,
+      "label": "problem",
+      "base": "de9ec361d3e2bb8fbc30da34ceaf402d351b5918",
+      "head": "7df4b86d05f221f530cf28f810abba8e34085a53",
+      "problems": [
+        {
+          "file": "src/language-markdown/print/whitespace.js",
+          "line": 306,
+          "description": "isLineBreakAmbiguous checks previous?.isCJ / next?.isCJ but then reads previous.kind / next.kind without ?.; a newline next to a non-text node (e.g. '**プリティア**\\nで\\n**フォーマット**') throws a TypeError.",
+          "evidence": "https://github.com/prettier/prettier/pull/20257"
+        }
+      ]
+    },
+    {
+      "id": "hono-5205",
+      "repo": "honojs/hono",
+      "pr": 5205,
+      "language": "typescript",
+      "size": "medium",
+      "changedLines": 85,
+      "label": "problem",
+      "base": "f2a72d333aed37b1bf2c18540a0a1df9fdb5c58c",
+      "head": "15eb50bf39e4e93ae13514f735353140f257f911",
+      "problems": [
+        {
+          "file": "src/middleware/etag/digest.ts",
+          "line": 54,
+          "description": "chunk = value.subarray(offset) keeps a view on the producer's buffer across reader.read() calls; a stream that reuses one buffer is hashed as [B, B], so the ETag is wrong.",
+          "evidence": "https://github.com/honojs/hono/pull/5239"
+        }
+      ]
+    },
+    {
+      "id": "axios-11096",
+      "repo": "axios/axios",
+      "pr": 11096,
+      "language": "javascript",
+      "size": "medium",
+      "changedLines": 212,
+      "label": "problem",
+      "base": "2d2a21af8a433089474a2149781799c93acbcf3c",
+      "head": "615ae66922da73999c3cc35aeab491ec83af44ba",
+      "problems": [
+        {
+          "file": "lib/core/Axios.js",
+          "line": 158,
+          "description": "Header flattening now deletes headers[method] for every entry of the new methodList, which includes 'link', 'unlink', 'purge'; a request with a real Link header loses it.",
+          "evidence": "https://github.com/axios/axios/pull/11156"
+        }
+      ]
+    },
+    {
+      "id": "fastify-6613",
+      "repo": "fastify/fastify",
+      "pr": 6613,
+      "language": "javascript",
+      "size": "small",
+      "changedLines": 67,
+      "label": "problem",
+      "base": "d457aeda8611777389c7e4713a288eb7ddb9a389",
+      "head": "70062f1af25feab3d16697b1824e923f80d8514c",
+      "problems": [
+        {
+          "file": "lib/request.js",
+          "line": 121,
+          "description": "socketAddr = this.raw.socket?.remoteAddress then socketAddr !== null: with no socket the value is undefined, which passes the check, so x-forwarded-host (and x-forwarded-proto at line 136) is trusted anyway.",
+          "evidence": "https://github.com/fastify/fastify/issues/6673"
+        }
+      ]
+    },
+    {
+      "id": "undici-5811",
+      "repo": "nodejs/undici",
+      "pr": 5811,
+      "language": "javascript",
+      "size": "medium",
+      "changedLines": 108,
+      "label": "problem",
+      "base": "1801a3d270027f8f8ffdc5bbe79b5741ed1d11b6",
+      "head": "584ca8b5a63abc71652298681d1e88cebd80c67f",
+      "problems": [
+        {
+          "file": "lib/dispatcher/dispatcher1-wrapper.js",
+          "line": 95,
+          "description": "Condition changed so legacy (v1) dispatch consumers such as Node's bundled fetch get HTTP/2; the H2 path hands object-form headers to legacy callbacks that expect raw arrays, so fetch loses response headers and stops following redirects.",
+          "evidence": "https://github.com/nodejs/undici/pull/5860"
+        }
+      ]
+    },
+    {
+      "id": "hono-4267",
+      "repo": "honojs/hono",
+      "pr": 4267,
+      "language": "typescript",
+      "size": "small",
+      "changedLines": 37,
+      "label": "problem",
+      "base": "407d1bdf64048c4876b883bc1b5cf270e12791e7",
+      "head": "bb16241b3c97120c979f6371c4d93e20e17b5852",
+      "problems": [
+        {
+          "file": "src/client/client.ts",
+          "line": 169,
+          "description": "removeIndexString runs after the query string is appended and params substituted: client.index.$url({query}) keeps '/index?page=1', and a param whose value is 'index' is wrongly stripped.",
+          "evidence": "https://github.com/honojs/hono/pull/4352"
+        }
+      ]
+    },
+    {
+      "id": "tanstack-router-8643",
+      "repo": "TanStack/router",
+      "pr": 8643,
+      "language": "typescript",
+      "size": "large",
+      "changedLines": 1096,
+      "label": "problem",
+      "base": "17a3121ff494a481518d54732cdb939c7f61eb2c",
+      "head": "f5023f7af54d6de0a0d24b335b75d70adab999ce",
+      "problems": [
+        {
+          "file": "packages/react-router/src/Match.tsx",
+          "line": 213,
+          "description": "Removing the ClientOnly fallback for ssr:false / 'data-only' matches makes a route with no pendingComponent server-render pending UI but hydrate the real component: React hydration mismatch.",
+          "evidence": "https://github.com/TanStack/router/pull/8646"
+        }
+      ]
+    },
+    {
+      "id": "starlette-2381",
+      "repo": "Kludex/starlette",
+      "pr": 2381,
+      "language": "python",
+      "size": "medium",
+      "changedLines": 113,
+      "label": "problem",
+      "base": "23c81da94b57701eabd43f582093442e6811f81d",
+      "head": "2d7eb8c00816fad84b217d76c154696a6b5098a3",
+      "problems": [
+        {
+          "file": "starlette/applications.py",
+          "line": 105,
+          "description": "cls(app=app, *args, **kwargs): positional args bind to the first parameter (app), so add_middleware(M, 'foo') raises TypeError 'multiple values for argument app'; same in routing.py.",
+          "evidence": "https://github.com/Kludex/starlette/pull/2752"
+        }
+      ]
+    },
+    {
+      "id": "chi-919",
+      "repo": "go-chi/chi",
+      "pr": 919,
+      "language": "go",
+      "size": "small",
+      "changedLines": 48,
+      "label": "problem",
+      "base": "ef31c0bff3f8061e6fba7085691e4970a3d1b7da",
+      "head": "0dcd6b855fcba743123d6350b3b1c4826d7de905",
+      "problems": [
+        {
+          "file": "middleware/compress.go",
+          "line": 374,
+          "description": "Close() always closes the encoder created up front instead of cw.writer(); for an uncompressed response the deferred Close appends an empty gzip stream (1f 8b 08 ...) to the body.",
+          "evidence": "https://github.com/go-chi/chi/pull/924"
+        }
+      ]
+    },
+    {
+      "id": "click-2151",
+      "repo": "pallets/click",
+      "pr": 2151,
+      "language": "python",
+      "size": "small",
+      "changedLines": 58,
+      "label": "problem",
+      "base": "4262661a0fffabe3803f1bd876b19244f587dafa",
+      "head": "92b30e47cb013433190f40d75239c98c77aa9d2d",
+      "problems": [
+        {
+          "file": "src/click/core.py",
+          "line": 1339,
+          "description": "format_help_text checks `if text:` before the text is cut at \\f; a docstring with nothing before \\f is non-empty but empty after the cut, so --help prints spurious blank lines.",
+          "evidence": "https://github.com/pallets/click/pull/2369"
+        }
+      ]
+    },
+    {
+      "id": "attrs-1401",
+      "repo": "python-attrs/attrs",
+      "pr": 1401,
+      "language": "python",
+      "size": "medium",
+      "changedLines": 95,
+      "label": "problem",
+      "base": "75723b7720952ac0a4c7d3e277b6714ba55ded18",
+      "head": "63ab6c3bc98c636c994a1472bfa4bf18b520e001",
+      "problems": [
+        {
+          "file": "src/attr/_make.py",
+          "line": 453,
+          "description": "field_transformer result is now iterated by the order-check loop before being used; a generator transformer is used up there, so the class ends up with no fields.",
+          "evidence": "https://github.com/python-attrs/attrs/pull/1417"
+        }
+      ]
+    },
+    {
+      "id": "go-redis-3842",
+      "repo": "redis/go-redis",
+      "pr": 3842,
+      "language": "go",
+      "size": "medium",
+      "changedLines": 437,
+      "label": "problem",
+      "base": "65d6abde0d812234d26763930b5e84ff05963c96",
+      "head": "1329d105f0dcffaaa3d418faad6a9c68f5db27dd",
+      "problems": [
+        {
+          "file": "internal/proto/reader.go",
+          "line": 133,
+          "description": "PeekPushNotificationName now calls blocking bufio Peek(36) without the old 'only what is buffered' limit; a complete push frame shorter than 36 bytes never fills it, so PubSub.Receive hangs.",
+          "evidence": "https://github.com/redis/go-redis/pull/3936"
+        }
+      ]
+    },
+    {
+      "id": "go-redis-3518",
+      "repo": "redis/go-redis",
+      "pr": 3518,
+      "language": "go",
+      "size": "large",
+      "changedLines": 1458,
+      "label": "problem",
+      "base": "7f48276660e1df02cee1b8a038fcbcef2ef87ca1",
+      "head": "9ebe29add34b92610ca0cfc3eade33c383ae2a2b",
+      "problems": [
+        {
+          "file": "internal/pool/pool.go",
+          "line": 569,
+          "description": "queuedNewConn frees the turn after putIdleConn hands the connection to another waiter (also lines 540-541); the turn is freed twice, so more than PoolSize connections can be in use.",
+          "evidence": "https://github.com/redis/go-redis/pull/3626"
+        }
+      ]
+    },
+    {
+      "id": "gorm-7610",
+      "repo": "go-gorm/gorm",
+      "pr": 7610,
+      "language": "go",
+      "size": "small",
+      "changedLines": 78,
+      "label": "problem",
+      "base": "b88148363a954f69fa680b152dfd96a94ffea1e1",
+      "head": "0f6d61a85d68e0a3ce35cf57117fbca290f11ac9",
+      "problems": [
+        {
+          "file": "utils/utils.go",
+          "line": 41,
+          "description": "Moving runtime.Callers into the new CallerFrame helper adds a stack frame, so FileWithLineNum reports the wrapper's file and line instead of the caller's.",
+          "evidence": "https://github.com/go-gorm/gorm/pull/7717"
+        }
+      ]
+    },
+    {
+      "id": "pino-2105",
+      "repo": "pinojs/pino",
+      "pr": 2105,
+      "language": "javascript",
+      "size": "small",
+      "changedLines": 57,
+      "label": "clean",
+      "base": "1bff08ae863e9bfcb4ef3605178dc232f6971d7f",
+      "head": "827fd22fb84fbbb8be43f1baf9ed40785b35b740",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#2105' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "commander-2350",
+      "repo": "tj/commander.js",
+      "pr": 2350,
+      "language": "javascript",
+      "size": "small",
+      "changedLines": 17,
+      "label": "clean",
+      "base": "672e3806c68421f91b3a1f628f6207b8b26d1a2c",
+      "head": "8223871d7c6878d34999ab55d88226a107a52ac5",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#2350' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "msw-2140",
+      "repo": "mswjs/msw",
+      "pr": 2140,
+      "language": "typescript",
+      "size": "medium",
+      "changedLines": 113,
+      "label": "clean",
+      "base": "40b17fdf655e597b352094527f558f6d839f2970",
+      "head": "75449ce235ccdcb9441381adb78ce12c57c5e929",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#2140' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "commander-2299",
+      "repo": "tj/commander.js",
+      "pr": 2299,
+      "language": "javascript",
+      "size": "medium",
+      "changedLines": 297,
+      "label": "clean",
+      "base": "497c11d83065567a3b2840bc0800d30e6ab4ed33",
+      "head": "5058a072c6d6f4001ff1c9a5ec4cc9e0f53fc01b",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#2299' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "date-fns-2752",
+      "repo": "date-fns/date-fns",
+      "pr": 2752,
+      "language": "typescript",
+      "size": "medium",
+      "changedLines": 415,
+      "label": "clean",
+      "base": "6f44a167e71053999c10aa9462d7f0c52fec0faa",
+      "head": "e02e07854e97634a6316a24402441708384458a3",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#2752' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "msw-2541",
+      "repo": "mswjs/msw",
+      "pr": 2541,
+      "language": "typescript",
+      "size": "large",
+      "changedLines": 997,
+      "label": "clean",
+      "base": "dafc616505fa0bb7ceb1248a8fb39276a184b723",
+      "head": "af5b4d6cf51ce47b470f465109df678e9403b837",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#2541' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "attrs-1365",
+      "repo": "python-attrs/attrs",
+      "pr": 1365,
+      "language": "python",
+      "size": "small",
+      "changedLines": 21,
+      "label": "clean",
+      "base": "58cd3ae112abf36fcd8c1cdf2a55e21b3a5734d3",
+      "head": "01fd10c1f976f2075035e0e184ef5e973c22ed60",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#1365' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "rich-3518",
+      "repo": "Textualize/rich",
+      "pr": 3518,
+      "language": "python",
+      "size": "small",
+      "changedLines": 27,
+      "label": "clean",
+      "base": "5ba9cb56e68dcdf2db50c214d8f1412c8a50761b",
+      "head": "16b3830408df98db41967774e59175a1f919ce25",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#3518' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "marshmallow-2792",
+      "repo": "marshmallow-code/marshmallow",
+      "pr": 2792,
+      "language": "python",
+      "size": "medium",
+      "changedLines": 86,
+      "label": "problem",
+      "base": "a578ed23092bd558acfbd9cd09a164108689326d",
+      "head": "d90b41ec004a7e7fc870e3df11c4a0ae2f3468ff",
+      "problems": [
+        {
+          "file": "src/marshmallow/decorators.py",
+          "line": 98,
+          "description": "validates_schema's fn is now typed as the new SchemaValidator protocol, so the documented bare @validates_schema on a method def v(self, data, **kwargs) fails mypy with an arg-type error.",
+          "evidence": "https://github.com/marshmallow-code/marshmallow/pull/2793"
+        }
+      ],
+      "note": "First labelled clean; relabelled after the v1 run: #2793 (merged the same day) fixes the typing regression this PR added."
+    },
+    {
+      "id": "attrs-1454",
+      "repo": "python-attrs/attrs",
+      "pr": 1454,
+      "language": "python",
+      "size": "large",
+      "changedLines": 804,
+      "label": "clean",
+      "base": "4737f0e6c77f2bd4501322b1b5d1e265181849b9",
+      "head": "5ff58070fb599a352dc67da62cea8935540033d0",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#1454' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "chi-954",
+      "repo": "go-chi/chi",
+      "pr": 954,
+      "language": "go",
+      "size": "small",
+      "changedLines": 71,
+      "label": "clean",
+      "base": "882c15e6462ce0630529d04c330e84942ebd059d",
+      "head": "5a7133e0acbf79366deb520ee9556404940b09d1",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#954' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "zap-1460",
+      "repo": "uber-go/zap",
+      "pr": 1460,
+      "language": "go",
+      "size": "medium",
+      "changedLines": 104,
+      "label": "clean",
+      "base": "3f27eb9c787ea9b2ddfc1f707ef291c9070655fe",
+      "head": "9bd3a78faf2e2d574a730a3709a751e3e8b097aa",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#1460' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "cobra-2238",
+      "repo": "spf13/cobra",
+      "pr": 2238,
+      "language": "go",
+      "size": "medium",
+      "changedLines": 102,
+      "label": "clean",
+      "base": "f98cf4216d3cb5235e6e0cd00ee00959deb1dc65",
+      "head": "6ad4cd6904cb4ea79cced0ae5a6298721258a73d",
+      "problems": [],
+      "cleanCheck": "Later commits on the changed product files and a '#2238' search show no fix, revert or bug report tied to it."
+    }
+  ]
+}
