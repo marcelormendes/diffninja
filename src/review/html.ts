@@ -321,14 +321,16 @@ function renderBreadcrumb(): string {
 }
 
 /**
- * The reviewing agent's goal paragraph and, for a pull request, the comments it
- * says block the merge, each with its proof. Both are the agent's reading, said
- * so beside them; nothing here is posted, and the human decides what to keep.
- * A static report shows no comments: it has nothing to post them to.
+ * The reviewing agent's goal paragraph and the comments it says block the
+ * merge, each with its proof. Both are the agent's reading, said so beside
+ * them; nothing here is posted, and the human decides what to keep. A static
+ * report shows its comments as read-only notes, since it has nothing to post
+ * them to, and says nothing when there are none.
  */
 function renderAgentReading(report: ReviewReport): string {
   const summary = report.agentSummary;
-  const comments = pullRequestOf(report) === undefined ? undefined : report.agentComments;
+  const pr = pullRequestOf(report);
+  const comments = pr === undefined && (report.agentComments?.comments.length ?? 0) === 0 ? undefined : report.agentComments;
   if (summary === undefined && comments === undefined) return "";
   const parts = ['<section class="agent-reading" aria-label="The reviewing agent\'s reading">'];
   if (summary !== undefined) {
@@ -354,7 +356,10 @@ function renderAgentReading(report: ReviewReport): string {
           "</li>",
         );
       }
-      parts.push("</ol>", `<p class="agent-reading-by">Suggested by ${escapeHtml(comments.suggestedBy)}. None is posted; each is yours to add to your review, edit, or drop.</p>`);
+      const yours = pr === undefined
+        ? "There is no pull request to post them to; they are notes for you."
+        : "None is posted; each is yours to add to your review, edit, or drop.";
+      parts.push("</ol>", `<p class="agent-reading-by">Suggested by ${escapeHtml(comments.suggestedBy)}. ${yours}</p>`);
     }
   }
   parts.push("</section>");

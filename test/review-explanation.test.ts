@@ -148,11 +148,19 @@ describe("checkExplanation", () => {
     ["a step naming an unknown function", (t) => explanation(t, { processes: [{ ...PROCESS, steps: PROCESS.steps.map((s) => (s.id === "s4" ? { ...s, functions: ["shop/x.py#y"] } : s)) }] }), /not a function this review lists/],
     ["before on an added step", (t) => explanation(t, { processes: [{ ...PROCESS, steps: PROCESS.steps.map((s) => (s.id === "s3" ? { ...s, before: "It was not asked." } : s)) }] }), /before is only for a changed step/],
     ["a changed rule without before", (t) => explanation(t, { rules: [{ text: "A card is charged first.", change: "changed" }] }), /rules\[0\]\.before is missing/],
+    ["a purpose with a zero-width space", (t) => explanation(t, { functions: explanation(t).functions.map((f, at) => (at === 0 ? { ...f, purpose: "Charges the\u200Bcard." } : f)) }), /purpose contains hidden characters a reader cannot see \(U\+200B\)/],
+    ["a rule with a right-to-left override", (t) => explanation(t, { rules: [{ text: "A card is \u202Echarged first.", change: "added" }] }), /rules\[0\]\.text contains hidden characters a reader cannot see \(U\+202E\)/],
     ["too long a step", (t) => explanation(t, { processes: [{ ...PROCESS, steps: PROCESS.steps.map((s) => (s.id === "s1" ? { ...s, text: "word ".repeat(30) } : s)) }] }), /longer than 90 characters/],
   ];
   test.each(refusals)("refuses %s", (_name, build, expected) => {
     const target = withFunctions();
     expect(() => checkExplanation(target, build(target))).toThrow(expected);
+  });
+
+  test("measures a text as it is kept, with its ends trimmed", () => {
+    const target = withFunctions();
+    const padded = explanation(target, { processes: [{ ...PROCESS, steps: PROCESS.steps.map((s) => (s.id === "s1" ? { ...s, text: `   ${"x".repeat(90)}\t ` } : s)) }] });
+    expect(() => checkExplanation(target, padded)).not.toThrow();
   });
 
   test("allows ordinary prose that only looks near code", () => {

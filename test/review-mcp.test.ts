@@ -1074,16 +1074,85 @@ describe("suggest_comments", () => {
       { comments: [{ ...anchor, body: "Two lines\nof text" }], expected: /one line of text/ },
       { comments: [{ ...anchor, body: "x".repeat(281) }], expected: /longer than 280 characters/ },
       { comments: [{ ...anchor, body: "   " }], expected: /is empty/ },
+      { comments: [{ ...anchor, body: "Is this\u200Bright?" }], expected: /comments\[0\]\.body contains hidden characters a reader cannot see \(U\+200B\); remove them/ },
+      { comments: [{ ...anchor, body: "Is this \u202Eright?" }], expected: /comments\[0\]\.body contains hidden characters a reader cannot see \(U\+202E\)/ },
+      { comments: [{ ...anchor, body: "Is this right?", scenario: `${PROOF.scenario}\u2060` }], expected: /comments\[0\]\.scenario contains hidden characters a reader cannot see \(U\+2060\)/ },
+      { comments: [{ ...anchor, body: "Is this right?", unlessTrue: PROOF.unlessTrue.replace(" ", "\uFEFF ") }], expected: /comments\[0\]\.unlessTrue contains hidden characters a reader cannot see \(U\+FEFF\)/ },
     ];
     for (const { comments, expected } of cases) {
       const result = await suggest(client, { reviewId: report.reviewId, comments });
       expect(result.isError, JSON.stringify(comments)).toBe(true);
       expect(textOf(result)).toMatch(expected);
     }
-    // Plain reviewer phrasing, including a lowercase nit, is accepted.
-    for (const body of ["Error handling here swallows the cause; can we keep it?", "nit: rename to totalWithTax?", "Low risk, but is this covered by a test?"]) {
+    // Plain reviewer phrasing, including a lowercase nit, is accepted, and so is
+    // an emoji whose joiners sit between the characters they join.
+    for (const body of ["Error handling here swallows the cause; can we keep it?", "nit: rename to totalWithTax?", "Low risk, but is this covered by a test?", "Who owns this? \u{1F469}\u200D\u{1F4BB}"]) {
       expect((await suggest(client, { reviewId: report.reviewId, comments: [{ ...anchor, body }] })).isError, body).toBeFalsy();
     }
+  });
+});
+
+describe("finish_review comment text", () => {
+  /** The first line the diff adds, where a comment may go. */
+  function firstAdded(report: ReturnType<typeof reportOf>) {
+    const item = report.items.find(candidate => candidate.diff.split("\n").slice(1).some(text => text.startsWith("+")))!;
+    const body = item.diff.split("\n").slice(1);
+    const added = body.findIndex(text => text.startsWith("+"));
+    return { path: item.file, line: item.newStart + body.slice(0, added).filter(text => !text.startsWith("-")).length };
+  }
+
+  test("a body of exactly 280 characters is measured after trimming, and kept trimmed", async () => {
+    const client = await connectReview();
+    const report = reportOf(await review(client, { diff: patch }));
+    const { path, line } = firstAdded(report);
+    const body = `${"Is this right? ".repeat(18)}Thanks a lot.`.slice(0, 280);
+    expect(body).toHaveLength(280);
+    const comment = { path, line, side: "RIGHT", body: `  ${body}  `, scenario: `  ${PROOF.scenario}  `, evidence: "traced", unlessTrue: `  ${PROOF.unlessTrue}  ` };
+    const result = await finishReview(client, { ...staticFinish(report.reviewId, report), comments: [comment], delivery: "inline" });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    // SAFETY: finish_review answers with the finished shape plus markdown; its fields are asserted here.
+    const done = JSON.parse(textOf(result)) as Finished & { markdown: string };
+    expect(done.suggested).toBe(1);
+    const page = (await loopback(done.reportUrl))!.body;
+    expect(page).toContain(`<p class="agent-comment-body">${body}</p>`);
+    expect(page).toContain(`(traced by reading): ${PROOF.scenario}</p>`);
+    // Over the limit once trimmed is still refused.
+    const long = await finishReview(client, { ...staticFinish(report.reviewId, report), comments: [{ ...comment, body: ` ${body}x ` }] });
+    expect(long.isError).toBe(true);
+    expect(textOf(long)).toMatch(/comments\[0\]\.body is longer than 280 characters/);
+  });
+
+  test("a static report shows its comments read-only, on the page and in the Markdown", async () => {
+    const client = await connectReview();
+    const report = reportOf(await review(client, { diff: patch }));
+    const { path, line } = firstAdded(report);
+    const comment = { path, line, side: "RIGHT", body: "This lets an expired token in.", ...PROOF };
+    const result = await finishReview(client, { ...staticFinish(report.reviewId, report), comments: [comment], delivery: "inline" });
+    expect(result.isError, textOf(result)).toBeFalsy();
+    // SAFETY: finish_review answers with the finished shape plus markdown; its fields are asserted here.
+    const done = JSON.parse(textOf(result)) as Finished & { markdown: string };
+    expect(done.markdown).toContain("**Comments that block the merge** (1)");
+    expect(done.markdown).toContain("There is no pull request to post them to; they are notes for you:");
+    expect(done.markdown).toContain(`line ${line} (new side): This lets an expired token in`);
+    expect(done.markdown).not.toContain("To finish your review without the review page");
+    const page = (await loopback(done.reportUrl))!.body;
+    expect(page).toContain("<h2>Comments that block the merge</h2>");
+    expect(page).toContain('<p class="agent-comment-body">This lets an expired token in.</p>');
+    expect(page).toContain("There is no pull request to post them to; they are notes for you.");
+    // With none, a static report says nothing about comments.
+    const none = await finishReview(client, { ...staticFinish(report.reviewId, report), delivery: "inline" });
+    // SAFETY: as above.
+    const empty = JSON.parse(textOf(none)) as Finished & { markdown: string };
+    expect(empty.markdown).not.toContain("Comments that block the merge");
+    expect((await loopback(empty.reportUrl))!.body).not.toContain("Comments that block the merge");
+  });
+
+  test("a summary with a hidden character is refused, and nothing is kept", async () => {
+    const client = await connectReview();
+    const report = reportOf(await review(client, { diff: patch }));
+    const result = await finishReview(client, { ...staticFinish(report.reviewId, report), summary: "Adds a\u200B login check." });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe("summary contains hidden characters a reader cannot see (U+200B); remove them.");
   });
 });
 

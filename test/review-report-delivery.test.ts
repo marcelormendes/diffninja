@@ -155,14 +155,21 @@ describe("Markdown summary", () => {
 });
 
 describe("report page", () => {
-  test("a pull request's report shows the goal and each blocker with its proof; a static one shows no comments", async () => {
+  test("a pull request's report shows the goal and each blocker with its proof; a static one shows them as notes", async () => {
     const report = await connectedReport({ comment: "<b>not bold</b>" });
     const html = renderReview(report);
     expect(html).toContain('class="agent-reading"');
     expect(html).toContain("&lt;b&gt;not bold&lt;/b&gt;");
     expect(html).not.toContain("<b>not bold</b>");
     expect(html).toContain("Why it blocks</strong> (traced by reading)");
+    expect(html).toContain("None is posted; each is yours to add to your review, edit, or drop.");
     report.pr = { ...report.pr!, url: undefined };
+    const notes = renderReview(report);
+    expect(notes).toContain("Comments that block the merge");
+    expect(notes).toContain("Why it blocks</strong> (traced by reading)");
+    expect(notes).toContain("There is no pull request to post them to; they are notes for you.");
+    expect(notes).not.toContain("None is posted");
+    report.agentComments = { ...report.agentComments!, comments: [] };
     expect(renderReview(report)).not.toContain("Comments that block the merge");
   });
 });

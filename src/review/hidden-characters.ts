@@ -61,6 +61,16 @@ export function hiddenControlsIn(text: string): string[] {
   return [...points].sort();
 }
 
+/**
+ * Why text the reviewing agent wrote cannot be kept as written, or undefined
+ * when it can: it holds a character the pages would mark. The agent's text
+ * reaches the human's draft and GitHub as is, so it is refused, not marked.
+ */
+export function hiddenCharacterProblem(text: string): string | undefined {
+  const points = hiddenControlsIn(text);
+  return points.length === 0 ? undefined : `contains hidden characters a reader cannot see (${points.join(", ")}); remove them`;
+}
+
 /** Whether the quote at `index` of a JSON text is escaped: an odd run of backslashes precedes it. */
 function escapedAt(json: string, index: number): boolean {
   let backslashes = 0;

@@ -124,13 +124,16 @@ export function renderReportMarkdown(report: ReviewReport, options: MarkdownOpti
     lines.push(`**Goal**, as ${mdProse(summary.summarizedBy)} read the pull request's own title and description (a reading, not a verified claim): ${mdProse(summary.text)}`, "");
   }
 
-  if (pr !== undefined) {
-    const comments = report.agentComments?.comments ?? [];
+  // A static report has nothing to post its comments to, so they are notes, and
+  // it says nothing when there are none.
+  const comments = report.agentComments?.comments ?? [];
+  if (pr !== undefined || comments.length > 0) {
     const by = report.agentComments === undefined ? "the reviewing agent" : mdProse(report.agentComments.suggestedBy);
+    const yours = pr === undefined ? "There is no pull request to post them to; they are notes for you" : "None is posted; each is yours to add, edit, or drop";
     if (comments.length === 0) {
       lines.push(`**Comments that block the merge:** none, in ${by}'s reading.`, "");
     } else {
-      lines.push(`**Comments that block the merge** (${comments.length}), suggested by ${by}. None is posted; each is yours to add, edit, or drop:`, "");
+      lines.push(`**Comments that block the merge** (${comments.length}), suggested by ${by}. ${yours}:`, "");
       comments.forEach((comment, index) => {
         lines.push(`${index + 1}. ${mdCode(comment.path)} line ${comment.line} (${sideWord(comment)} side): ${mdProse(comment.body)}`);
         lines.push(`   - Why it blocks (${comment.evidence === "ran" ? "reproduced" : "traced by reading"}): ${mdProse(comment.scenario)}`);

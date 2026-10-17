@@ -78,7 +78,8 @@ hashes. The URL carries source code access: do not share it.
 For a pull request, the page also shows the agent's goal paragraph and each
 comment it says blocks the merge, with that comment's proof (why it blocks, how
 the agent knows, and what would make it fine). A static report shows the goal
-paragraph when the agent sent one, and no comments.
+paragraph when the agent sent one, and its comments as read-only notes with
+their proof: there is no pull request to post them to.
 
 When the human cannot reach `127.0.0.1` on the agent's machine, `finish_review`
 can also return a short Markdown summary (`delivery: "inline"`), or write the
