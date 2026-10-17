@@ -467,7 +467,8 @@ const GH_METADATA = {
   baseRefOid: "1".repeat(40),
   headRefOid: "2".repeat(40),
   isCrossRepository: false,
-  headRepository: { id: "R_1", name: "hello", nameWithOwner: "octocat/hello" },
+  // gh 2.87 and later leave nameWithOwner empty; diffninja builds it from the owner and name.
+  headRepository: { id: "R_1", name: "hello", nameWithOwner: "" },
   headRepositoryOwner: { id: "O_1", login: "octocat" },
   baseRefName: "main",
   headRefName: "feature",
