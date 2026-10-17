@@ -76,6 +76,8 @@ class FakeGh implements GhRunner {
   headSha = "2".repeat(40);
   cross = false;
   headRepository = "octocat/hello";
+  /** How `pr view` reports the head repository: older gh, gh 2.87 (empty `nameWithOwner`), or a deleted fork. */
+  headReport: "filled" | "gh287" | "deleted" = "filled";
   urlOverride: string | null = null;
   diff = DIFF;
   files = JSON.stringify([listedFile("app.ts", APP_PATCH)]);
@@ -151,7 +153,11 @@ class FakeGh implements GhRunner {
       baseRefOid: mutation.baseSha ?? this.baseSha,
       headRefOid: mutation.headSha ?? this.headSha,
       isCrossRepository: this.cross,
-      headRepository: { id: "R_1", name: "hello", nameWithOwner: this.headRepository },
+      headRepository: this.headReport === "deleted" ? null : {
+        id: "R_1",
+        name: this.headRepository.split("/")[1],
+        nameWithOwner: this.headReport === "gh287" ? "" : this.headRepository,
+      },
       headRepositoryOwner: { id: "O_1", login: this.headRepository.split("/")[0] },
       baseRefName: "main",
       headRefName: "feature",
@@ -316,6 +322,32 @@ describe("connected review load", () => {
     expect(forked.state.status).toBe("ready");
     expect(forked.state.message).toMatch(/lives in contributor\/hello, a fork/);
     expect((await forked.review.preview(reviewInput(forked.state))).comments).toHaveLength(2);
+  });
+
+  it("reads the head repository when gh 2.87 leaves nameWithOwner empty", async () => {
+    const same = new FakeGh();
+    same.headReport = "gh287";
+    const sameRepo = await loadedSession(same);
+    expect(sameRepo.state.status).toBe("ready");
+    expect(sameRepo.state.snapshot?.unavailableReason).toBeUndefined();
+
+    const fork = new FakeGh();
+    fork.headReport = "gh287";
+    fork.cross = true;
+    fork.headRepository = "contributor/hello-fork";
+    const forked = await loadedSession(fork);
+    expect(forked.state.status).toBe("ready");
+    expect(forked.state.message).toMatch(/lives in contributor\/hello-fork, a fork/);
+  });
+
+  it("reports a deleted head fork as unavailable", async () => {
+    const gh = new FakeGh();
+    gh.headReport = "deleted";
+    gh.cross = true;
+    gh.headRepository = "contributor/hello";
+    const { state } = await loadedSession(gh);
+    expect(state.status).toBe("empty");
+    expect(state.snapshot?.unavailableReason).toMatch(/head repository of this pull request is unavailable/);
   });
 });
 

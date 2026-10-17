@@ -415,6 +415,21 @@ function objectField(object: GhObject | null, key: string): GhObject | null {
   return isGhObject(value) ? value : null;
 }
 
+/**
+ * The head repository as `owner/name`, or "" when GitHub has none (a deleted
+ * fork comes back as null). gh 2.87 leaves `nameWithOwner` empty, so the name is
+ * then built from the owner's login and the repository's name.
+ */
+function headRepositoryName(payload: GhObject, owner: string | null): string | null {
+  if (payload.headRepository === null) return "";
+  const repository = objectField(payload, "headRepository");
+  const nameWithOwner = textField(repository, "nameWithOwner");
+  if (nameWithOwner !== null && nameWithOwner !== "") return nameWithOwner;
+  const name = textField(repository, "name");
+  if (name === null || owner === null) return null;
+  return name === "" || owner === "" ? "" : `${owner}/${name}`;
+}
+
 /** Decode a `gh` stdout body into the JSON data model. */
 function parseJson(text: string, what: string): GhJson {
   try {
@@ -1089,8 +1104,9 @@ export class ConnectedReview {
     const baseRefName = textField(payload, "baseRefName");
     const headRefName = textField(payload, "headRefName");
     const crossRepository = booleanField(payload, "isCrossRepository");
-    const headRepository = textField(objectField(payload, "headRepository"), "nameWithOwner");
-    const headRepositoryOwner = textField(objectField(payload, "headRepositoryOwner"), "login");
+    // A deleted account or fork comes back as null; "" makes it unavailable below.
+    const headRepositoryOwner = payload.headRepositoryOwner === null ? "" : textField(objectField(payload, "headRepositoryOwner"), "login");
+    const headRepository = headRepositoryName(payload, headRepositoryOwner);
     if (url === null || state === null || number === null || baseSha === null || headSha === null
       || baseRefName === null || headRefName === null || crossRepository === null
       || headRepository === null || headRepositoryOwner === null) {
