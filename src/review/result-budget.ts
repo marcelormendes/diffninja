@@ -18,8 +18,10 @@ import type { ReviewReport } from "./types.js";
  */
 export const MAX_RESULT_BYTES = 4 * 1024 * 1024;
 
-/** Room left under {@link AGENT_RESULT_CHARS} for what a result adds around the report: ids, the analysis scope, next steps. */
+/** Room left under {@link AGENT_RESULT_CHARS} for what a result adds around the report (ids, the analysis scope, next steps) when the caller does not measure it. */
 const RESERVED_CHARS = 3_500;
+/** What joining the report to the fields around it adds: their keys and the comma between. */
+const JOIN_CHARS = 32;
 
 /** Bytes of the value as the text copy carries it. */
 const bytesOf = (value: AgentView): number => Buffer.byteLength(JSON.stringify(JSON.stringify(value)), "utf8");
@@ -29,13 +31,14 @@ const bytesOf = (value: AgentView): number => Buffer.byteLength(JSON.stringify(J
  * it: hidden characters shown as markers, then the agent's view of it, fitted
  * under what an agent reads in one tool result. The markers come first because
  * they are what is sent: a 3-byte zero-width space becomes a 12-byte marker, so
- * a budget taken before them undercounts. A view that lists so many hunks that
+ * a budget taken before them undercounts. `around` is the length of what the
+ * result adds around the view, as sent. A view that lists so many hunks that
  * it is over `budget` bytes even with every hunk left out is refused.
  */
-export function boundedForAgent(snapshot: ConnectedSnapshot | undefined, report: ReviewReport, budget: number = MAX_RESULT_BYTES): AgentView {
+export function boundedForAgent(snapshot: ConnectedSnapshot | undefined, report: ReviewReport, budget: number = MAX_RESULT_BYTES, around: number = RESERVED_CHARS): AgentView {
   const shown = withVisibleControls({ snapshot, report });
   const lines = shown.snapshot === undefined ? undefined : (({ lines: _lines, ...rest }) => rest)(shown.snapshot);
-  const view = fitAgentView({ snapshot: lines, report: agentReport(shown.report, shown.snapshot !== undefined) }, AGENT_RESULT_CHARS - RESERVED_CHARS);
+  const view = fitAgentView({ snapshot: lines, report: agentReport(shown.report, shown.snapshot !== undefined) }, AGENT_RESULT_CHARS - around - JOIN_CHARS);
   const size = bytesOf(view);
   // Every hunk must stay listed for the agent to order it, so past this point a
   // result only shrinks by losing hunks; saying so beats a dropped connection.

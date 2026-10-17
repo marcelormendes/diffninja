@@ -100,6 +100,8 @@ const KEPT_AGENDA = 20;
  * page, see connected-analysis.ts).
  */
 const FILE_AGENDA = "agenda:hunks:";
+/** Room a fitted view keeps for the warning and the paging note it gains: fixed sentences and a few counts. */
+const FITTING_NOTES_CHARS = 800;
 /** A shared tail shorter than this is left in every question: hoisting it would not pay for its key. */
 const MIN_GUIDE_CHARS = 80;
 
@@ -223,7 +225,7 @@ export interface AgentView {
 }
 
 /**
- * Fit the view under `limit` characters, cheapest first: the author's claims
+ * Fit the view under `budget` characters, the notes it gains included, cheapest first: the author's claims
  * past the first few, the agenda past the first few, then whole hunks from the
  * lowest-ranked up, each kept as an entry the order can still name and marked
  * leftOut, with `paging` saying how to read them; a hunk left out on the way
@@ -231,10 +233,11 @@ export interface AgentView {
  * change of thousands of hunks can stay over the limit; the caller's hard
  * limit decides whether it is sent at all.
  */
-export function fitAgentView(view: AgentView, limit: number): AgentView {
+export function fitAgentView(view: AgentView, budget: number): AgentView {
   let current = view;
   let size = charsOf(current);
-  if (size <= limit) return current;
+  if (size <= budget) return current;
+  const limit = budget - FITTING_NOTES_CHARS;
   const notes: string[] = [];
   const evidence = current.report.evidence;
   if (evidence !== undefined && evidence.intent.claims.length > KEPT_CLAIMS) {

@@ -7,7 +7,7 @@ import { serveConnected, type ConnectedSession } from "./connected.js";
 import { callFlowFilesOf, connectedAnalysisOf, type ConnectedAnalysisView } from "./connected-analysis.js";
 import { ConnectedReview } from "./github.js";
 import { detectPullRequest, looksLikeUnifiedDiff } from "./pr-input.js";
-import { boundedForAgent } from "./result-budget.js";
+import { MAX_RESULT_BYTES, boundedForAgent } from "./result-budget.js";
 import { AGENT_RESULT_CHARS, MAX_READ_ITEMS, readItems, type FullItem } from "./agent-view.js";
 import { withVisibleControls } from "./hidden-characters.js";
 import { renderBusinessPage, renderCallFlowPage, renderReview } from "./html.js";
@@ -522,8 +522,10 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
             return { content: [{ type: "text", text: JSON.stringify(safe) }], structuredContent: { ...safe } };
           }
           connectedUrls.set(analysis.reviewId, binding.url);
-          // The agent's copy stays under what a client accepts in one message; the page has it all.
-          const agent = boundedForAgent(loaded, analysis.report);
+          const next = reports.isFinished(analysis.reviewId) ? { url: binding.url, reportUrl: analysis.reportUrl, ...remoteAccess(binding.url, analysis.reportUrl) } : { nextSteps: steps(CONNECTED_NEXT_STEPS) };
+          // The agent's copy fits what an agent reads in one result, measured with what the result adds around it; the page has it all.
+          const around = withVisibleControls({ mode: "connected", pr: target, reviewId: analysis.reviewId, analysisScope: analysis.scope, ...next });
+          const agent = boundedForAgent(loaded, analysis.report, MAX_RESULT_BYTES, JSON.stringify(around).length);
           const payload = {
             mode: "connected",
             pr: target,
@@ -531,7 +533,7 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
             report: agent.report,
             reviewId: analysis.reviewId,
             analysisScope: analysis.scope,
-            ...(reports.isFinished(analysis.reviewId) ? { url: binding.url, reportUrl: analysis.reportUrl, ...remoteAccess(binding.url, analysis.reportUrl) } : { nextSteps: steps(CONNECTED_NEXT_STEPS) }),
+            ...next,
           };
           const safe = withVisibleControls(payload);
           return { content: [{ type: "text", text: JSON.stringify(safe) }], structuredContent: { ...safe } };
@@ -552,7 +554,8 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
           pr: expectedOutcome === undefined ? undefined : { title: expectedOutcome.title, body: expectedOutcome.description } });
       // The agent reads the report as data; the human reads the same report as a page.
       const published = await reports.publish(report);
-      const payload = { ...boundedForAgent(undefined, report).report, reviewId: published.reviewId, nextSteps: steps(STATIC_NEXT_STEPS) };
+      const around = { reviewId: published.reviewId, nextSteps: steps(STATIC_NEXT_STEPS) };
+      const payload = { ...boundedForAgent(undefined, report, MAX_RESULT_BYTES, JSON.stringify(withVisibleControls(around)).length).report, ...around };
       const safe = withVisibleControls(payload);
       return { content: [{ type: "text", text: JSON.stringify(safe) }], structuredContent: { ...safe } };
     } catch (error) {
