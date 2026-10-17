@@ -7,7 +7,7 @@ description: Drive the real diffninja MCP server (dist/review/mcp-cli.js over st
 
 diffninja has no UI of its own. Its users touch four surfaces:
 
-- **Primary:** the stdio MCP server `diffninja-mcp` (`dist/review/mcp-cli.js`). An agent host calls `review_diff`, then `finish_review` for the page links; `record_answers`, `record_order`, `suggest_comments`, and `record_explanation` update a review afterwards.
+- **Primary:** the stdio MCP server `diffninja-mcp` (`dist/review/mcp-cli.js`). An agent host calls `review_diff`, then `finish_review` for the page links; `record_answers`, `record_order`, `suggest_comments`, and `record_explanation` update a review afterwards, and `read_items` returns named hunks in full.
 - **Report pages:** loopback HTTP pages the server returns as `reportUrl` (static reviews) or `url` (connected PR reviews). Humans read them in a browser. They live in server memory and close when the MCP connection closes.
 - **Setup CLI:** `node dist/review/cli.js setup` registers the server with Claude Code, Codex, OMP, or pi. It has no other command.
 - **Library:** `dist/index.js`, the calldiff engine. It is not user-facing here.
@@ -42,7 +42,7 @@ It checks:
 - Node is at least 22.18.
 - The build exists and is newer than every file in `src/`.
 - The server refuses arguments, exiting 1 with an error on stderr and nothing on stdout. stdout is reserved for the protocol.
-- `tools/list` returns exactly `finish_review`, `record_answers`, `record_explanation`, `record_order`, `review_diff`, and `suggest_comments`.
+- `tools/list` returns exactly the tools, in the order, that `scripts/verify-package.mjs` asserts (today `review_diff`, `finish_review`, `record_answers`, `record_order`, `suggest_comments`, `record_explanation`, `read_items`).
 - `gh auth status`. This is reported as INFO only, because only connected PR review needs `gh`.
 
 Any `FAIL` makes the exit code 1. On "build is newer than src/", run `npm run build`.
