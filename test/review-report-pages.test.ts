@@ -330,3 +330,73 @@ describe("suggested comments are blockers, each with its proof", () => {
     }
   });
 });
+
+describe("finish_review lists every problem in one refusal", () => {
+  const longSummary = Array.from({ length: MAX_SUMMARY_WORDS + 1 }, () => "word").join(" ");
+  const comment = (line: number, body = "This drops the old value.") => ({ path: "src/a.ts", line, side: "RIGHT" as const, body, ...PROOF });
+
+  test("names each problem with its field, numbered, and keeps nothing", async () => {
+    const pages = new ReportPages();
+    try {
+      const review = report();
+      const { reviewId } = await pages.publish(review);
+      const reading = {
+        summary: longSummary,
+        answers: [],
+        order: ["hunk-1", "hunk-1"],
+        comments: [comment(1, "Finding 1: this drops the old value."), comment(9)],
+      };
+      expect(() => pages.finish(reviewId, reading, "agent 1.0")).toThrow([
+        "5 problems; nothing was kept. Fix them all and call again:",
+        `1. summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph.`,
+        "2. answers leave out 1 of 1 questions, starting with q1; answer every question, cannot-tell when the code does not settle it.",
+        "3. order[1] repeats a hunk; name each hunk once.",
+        "4. comments[0].body reads like a report (a heading, list marker, bold, or a label such as \"Finding 1:\"); write it the way the reviewer would say it.",
+        "5. comments[1] names src/a.ts:9 (RIGHT), which is not a line of this review's diff.",
+      ].join("\n"));
+      expect(review.questions[0].answer).toBeUndefined();
+      expect(review.agentOrder).toBeUndefined();
+      expect(review.agentComments).toBeUndefined();
+      expect(review.agentSummary).toBeUndefined();
+      expect(pages.isFinished(reviewId)).toBe(false);
+    } finally {
+      await pages.close();
+    }
+  });
+
+  test("a single problem reads exactly as before, with no list around it", async () => {
+    const pages = new ReportPages();
+    try {
+      const { reviewId } = await pages.publish(report());
+      const reading = { answers: [{ questionId: "q1", choice: "no-behavior-change" }], order: ["hunk-1"], comments: [] };
+      expect(() => pages.finish(reviewId, { ...reading, summary: longSummary }, "agent 1.0"))
+        .toThrow(new RegExp(`^summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph\\.$`));
+    } finally {
+      await pages.close();
+    }
+  });
+
+  test("lists the first ten and counts the rest", async () => {
+    const pages = new ReportPages();
+    try {
+      const { reviewId } = await pages.publish(report());
+      // Seven comments off the diff (the limit, then one each), an unanswered
+      // question, a repeated hunk, and a long summary: eleven problems.
+      const reading = { summary: longSummary, answers: [], order: ["hunk-1", "hunk-1"], comments: Array.from({ length: 7 }, (_, index) => comment(10 + index)) };
+      let message = "";
+      try {
+        pages.finish(reviewId, reading, "agent 1.0");
+      } catch (error) {
+        if (error instanceof Error) message = error.message;
+      }
+      const lines = message.split("\n");
+      expect(lines[0]).toBe("11 problems; nothing was kept. Fix them all and call again:");
+      expect(lines.slice(1, 11).map((line) => line.slice(0, line.indexOf(" ")))).toEqual(["1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.", "10."]);
+      expect(lines[4]).toMatch(/^4\. comments has 7 entries and at most 5 are allowed\./);
+      expect(lines[11]).toBe("… and 1 more; fix these and call again to see them.");
+      expect(lines).toHaveLength(12);
+    } finally {
+      await pages.close();
+    }
+  });
+});

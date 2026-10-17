@@ -157,7 +157,9 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `answers` must answer every question (as `record_answers`), `order` must
     name every item once (as `record_order`), and `comments` follows
     `suggest_comments`, which is blockers only, and may be `[]`. Everything is checked before anything
-    is kept; any gap refuses the whole call and hands out no link. Success
+    is kept; any gap refuses the whole call and hands out no link. The refusal
+    names every problem found, numbered, the first 10 with a count of the rest
+    (`problems.ts`); a single problem reads as its own message. Success
     marks the review finished and returns `{ reviewId, answered, ordered,
     suggested, summarized, reportUrl, url? (connected), next }`; `summarized`
     counts characters sent. Connected pages lead with the agent's goal and

@@ -33,6 +33,7 @@ import {
 import { packageVersion } from "./version.js";
 import { UpdateNotifier, updateStep, type LatestVersion } from "./update-check.js";
 import { remoteHint, type LoopbackOptions } from "./loopback.js";
+import { MAX_LISTED_PROBLEMS } from "./problems.js";
 
 const PR_LINK_ERROR = "A pull request review needs exactly one full github.com pull request URL, for example https://github.com/OWNER/REPO/pull/123. Ask the user for their link; do not guess, search, or invent one.";
 const STATIC_MODE_ERROR = "mode static reviews a diff or git range and accepts no pr or input. Use mode connected to review a pull request link.";
@@ -564,7 +565,7 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
   });
   server.registerTool("finish_review", {
     title: "Finish your reading of a review and get its page",
-    description: "Call once you have read a review_diff result's hunks. Send everything together: summary (what the pull request does and why, in your own plain English), answers (one per question in its questions, each one of that question's listed options; cannot-tell when the code you can read does not settle it), order (every hunk id exactly once, the hunks where an experienced maintainer is most likely to ask the author for a change first: wrong or risky logic, bugs, changed public behavior or API, missing handling; mechanical, boilerplate, generated, or trivially correct hunks later), and comments (only what blocks the merge; [] when nothing does; a static report shows them read-only), and explanation (the business view of the change: what each listed function does, the business processes it touches, and the rules it adds, changes, or removes). summary and explanation are required for a pull request review and optional for a static report, whose page opens on the explanation when you send one. summary: " + SUMMARY_RULES + " explanation: " + EXPLANATION_RULES + " " + COMMENT_RULES + " Everything is checked before anything is kept: a missing or malformed summary or explanation, a missing answer, an order that leaves out or repeats a hunk, or a comment that breaks the rules refuses the whole call and says what to fix; fix it and call again. On success it returns the page links: url for a pull request review (the page the human reviews and submits from) and reportUrl (the read-only report), plus remoteAccess when this runs on a remote machine (how the human opens them from their own computer). Give the link, and any remoteAccess note, to the user. Answers, order, comments, summary, and explanation appear attributed to this MCP client; statuses and priorities stay diffninja's; nothing is posted to GitHub.",
+    description: "Call once you have read a review_diff result's hunks. Send everything together: summary (what the pull request does and why, in your own plain English), answers (one per question in its questions, each one of that question's listed options; cannot-tell when the code you can read does not settle it), order (every hunk id exactly once, the hunks where an experienced maintainer is most likely to ask the author for a change first: wrong or risky logic, bugs, changed public behavior or API, missing handling; mechanical, boilerplate, generated, or trivially correct hunks later), and comments (only what blocks the merge; [] when nothing does; a static report shows them read-only), and explanation (the business view of the change: what each listed function does, the business processes it touches, and the rules it adds, changes, or removes). summary and explanation are required for a pull request review and optional for a static report, whose page opens on the explanation when you send one. summary: " + SUMMARY_RULES + " explanation: " + EXPLANATION_RULES + " " + COMMENT_RULES + " Everything is checked before anything is kept: a missing or malformed summary or explanation, a missing answer, an order that leaves out or repeats a hunk, or a comment that breaks the rules refuses the whole call, and the refusal lists every problem found (the first " + MAX_LISTED_PROBLEMS + ", with a count of the rest); fix them all and call again. On success it returns the page links: url for a pull request review (the page the human reviews and submits from) and reportUrl (the read-only report), plus remoteAccess when this runs on a remote machine (how the human opens them from their own computer). Give the link, and any remoteAccess note, to the user. Answers, order, comments, summary, and explanation appear attributed to this MCP client; statuses and priorities stay diffninja's; nothing is posted to GitHub.",
     inputSchema: z.object({
       reviewId: reviewIdSchema,
       summary: z.string().describe("For a pull request review this is required, and for a static report optional: " + SUMMARY_RULES).optional(),
@@ -582,14 +583,16 @@ export function createReviewServer(options: ReviewServerOptions = {}): McpServer
       const url = connectedUrls.get(reviewId);
       if (url !== undefined && sessions.isClosed(url)) throw new Error(CLOSED_PAGE_ERROR);
       // A pull request review owes the human the paragraph on what it is for:
-      // without it the page would show a diff with no stated purpose. Checked
-      // here, before ReportPages sees the call, so a missing summary refuses
-      // the whole finish and nothing — answers, order, or comments — is kept.
-      if (url !== undefined && summary === undefined) throw new Error(CONNECTED_SUMMARY_ERROR);
+      // without it the page would show a diff with no stated purpose. Only
+      // this handler knows which reviews are pull request reviews, so it hands
+      // what is missing to ReportPages, which refuses the whole finish with it
+      // and every other problem, keeping nothing.
+      const owed: string[] = [];
+      if (url !== undefined && summary === undefined) owed.push(CONNECTED_SUMMARY_ERROR);
       // The same for the business view: a pull request page without it would
       // show call flows as bare function names, which is what it exists to fix.
-      if (url !== undefined && explanation === undefined) throw new Error(CONNECTED_EXPLANATION_ERROR);
-      const finished = reports.finish(reviewId, { answers, order, comments, summary, explanation }, clientName(server));
+      if (url !== undefined && explanation === undefined) owed.push(CONNECTED_EXPLANATION_ERROR);
+      const finished = reports.finish(reviewId, { answers, order, comments, summary, explanation }, clientName(server), owed);
       const linked = url === undefined
         ? { ...finished, ...remoteAccess(finished.reportUrl), next: "Give the user the reportUrl." }
         : { ...finished, url, ...remoteAccess(url, finished.reportUrl), next: "Give the user the url: it is their review page. Do not open, fetch, or submit anything on it." };

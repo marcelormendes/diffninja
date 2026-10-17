@@ -2281,3 +2281,33 @@ describe("finish_review delivery for a person who cannot open this machine's pag
     });
   });
 });
+
+describe("finish_review refusals", () => {
+  test("one refusal lists every problem of the reading, and nothing is kept", async () => {
+    blockNetwork();
+    const client = await connectReview();
+    const report = reportOf(await review(client, { diff: patch }));
+    const explanation = minimalExplanation(report);
+    const refused = await finishReview(client, {
+      ...staticFinish(report.reviewId, report),
+      summary: Array.from({ length: 81 }, () => "word").join(" "),
+      order: ["no-such-hunk"],
+      comments: [{ path: "nowhere.ts", line: 1, side: "RIGHT", body: "Issue: the token is never checked.", ...PROOF }],
+      explanation: { ...explanation, processes: [{ ...explanation.processes[0], title: "Calls checkout_order() first" }] },
+    });
+    expect(refused.isError).toBe(true);
+    const lines = textOf(refused).split("\n");
+    expect(lines[0]).toBe("6 problems; nothing was kept. Fix them all and call again:");
+    expect(lines.slice(1)).toEqual([
+      expect.stringMatching(/^1\. summary is longer than 80 words/),
+      "2. order[0] names a hunk this review does not have.",
+      expect.stringMatching(/^3\. order leaves out \d+ of \d+ hunks/),
+      "4. comments[0] names nowhere.ts:1 (RIGHT), which is not a line of this review's diff.",
+      expect.stringMatching(/^5\. comments\[0\]\.body reads like a report/),
+      expect.stringMatching(/^6\. processes\[0\]\.title reads like code/),
+    ]);
+    expect(textOf(refused)).not.toMatch(/127\.0\.0\.1/);
+    // Fixing them all in one more call finishes the review.
+    await finished(client, report.reviewId, report);
+  });
+});

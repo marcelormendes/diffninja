@@ -15,9 +15,10 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { ReviewItem, ReviewReport, SuggestedComment } from "./types.js";
 import type { UpdateNotice } from "./update-check.js";
-import { checkExplanation, explanationCounts, normalizeExplanation, type ExplanationCounts, type ExplanationInput } from "./explanation.js";
+import { checkExplanation, explanationCounts, explanationProblems, normalizeExplanation, type ExplanationCounts, type ExplanationInput } from "./explanation.js";
 import { hiddenCharacterProblem, visibleControls } from "./hidden-characters.js";
 import { listenLoopback, trustedHosts, type LoopbackOptions } from "./loopback.js";
+import { refuseProblems } from "./problems.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
 export const MAX_REPORT_PAGES = 20;
@@ -156,16 +157,16 @@ export interface FinishedReview {
   readonly reportUrl: string;
 }
 
-/** Every answer names a question this review asked, once, with one of its options. */
-function checkAnswers(report: ReviewReport, answers: readonly AnswerInput[]): void {
+/** Every answer names a question this review asked, once, with one of its options; each one that does not adds a problem. */
+function answerProblems(report: ReviewReport, answers: readonly AnswerInput[], problems: string[]): void {
   const questions = new Map(report.questions.map((question) => [question.id, question]));
   const seen = new Set<string>();
   answers.forEach((answer, index) => {
     const question = questions.get(answer.questionId);
-    if (question === undefined) throw new Error(`answers[${index}] names a question this review did not ask.`);
-    if (seen.has(answer.questionId)) throw new Error(`answers[${index}] answers the same question twice in one call.`);
-    if (!question.options.includes(answer.choice)) {
-      throw new Error(`answers[${index}] is not one of that question's options: ${question.options.join(", ")}.`);
+    if (question === undefined) problems.push(`answers[${index}] names a question this review did not ask.`);
+    else if (seen.has(answer.questionId)) problems.push(`answers[${index}] answers the same question twice in one call.`);
+    else if (!question.options.includes(answer.choice)) {
+      problems.push(`answers[${index}] is not one of that question's options: ${question.options.join(", ")}.`);
     }
     seen.add(answer.questionId);
   });
@@ -177,17 +178,17 @@ function applyAnswers(report: ReviewReport, answers: readonly AnswerInput[], ans
   for (const answer of answers) questions.get(answer.questionId)!.answer = { choice: answer.choice, answeredBy, answeredAt };
 }
 
-/** The order names every hunk of the review exactly once. */
-function checkOrder(report: ReviewReport, itemIds: readonly string[]): void {
+/** The order names every hunk of the review exactly once; each way it does not adds a problem. */
+function orderProblems(report: ReviewReport, itemIds: readonly string[], problems: string[]): void {
   const known = new Set(report.items.map((item) => item.id));
   const seen = new Set<string>();
   itemIds.forEach((id, index) => {
-    if (!known.has(id)) throw new Error(`order[${index}] names a hunk this review does not have.`);
-    if (seen.has(id)) throw new Error(`order[${index}] repeats a hunk; name each hunk once.`);
+    if (!known.has(id)) problems.push(`order[${index}] names a hunk this review does not have.`);
+    else if (seen.has(id)) problems.push(`order[${index}] repeats a hunk; name each hunk once.`);
     seen.add(id);
   });
   const missing = report.items.filter((item) => !seen.has(item.id)).map((item) => item.id);
-  if (missing.length > 0) throw new Error(`order leaves out ${missing.length} of ${known.size} hunks, starting with ${missing[0]}; name every hunk once.`);
+  if (missing.length > 0) problems.push(`order leaves out ${missing.length} of ${known.size} hunks, starting with ${missing[0]}; name every hunk once.`);
 }
 
 function applyOrder(report: ReviewReport, itemIds: readonly string[], orderedBy: string): void {
@@ -215,27 +216,29 @@ function commentPaths(report: ReviewReport): Map<string, string | undefined> {
  * adds or removes, one per line, reads like the reviewer's own words, and
  * carries its proof for the human's triage. The comments come back with each
  * file's own path and their text trimmed, so they anchor to the lines the
- * human reviews and read exactly as checked.
+ * human reviews and read exactly as checked. Each comment adds a problem for
+ * its line and for each field that breaks the rules.
  */
-function checkComments(report: ReviewReport, comments: readonly SuggestedComment[]): SuggestedComment[] {
+function checkComments(report: ReviewReport, comments: readonly SuggestedComment[], problems: string[]): SuggestedComment[] {
   if (comments.length > MAX_SUGGESTED_COMMENTS) {
-    throw new Error(`comments has ${comments.length} entries and at most ${MAX_SUGGESTED_COMMENTS} are allowed. A review rarely has more than ${MAX_SUGGESTED_COMMENTS} real blockers. Check each one again and drop every one you cannot show fails.`);
+    problems.push(`comments has ${comments.length} entries and at most ${MAX_SUGGESTED_COMMENTS} are allowed. A review rarely has more than ${MAX_SUGGESTED_COMMENTS} real blockers. Check each one again and drop every one you cannot show fails.`);
   }
   const anchors = new Map<string, LineKind>();
   for (const item of report.items) anchorsOf(item, anchors);
   const paths = commentPaths(report);
   const seen = new Set<string>();
   return comments.map((comment, index) => {
-    if (paths.has(comment.path) && paths.get(comment.path) === undefined) throw new Error(`comments[${index}] names ${comment.path}, which more than one file of this diff is shown as; this review cannot tell which one it means.`);
     const path = paths.get(comment.path) ?? comment.path;
     const key = anchorKey(path, comment.side, comment.line);
     const kind = anchors.get(key);
-    if (kind === undefined) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
-    if (kind === "context") throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), an unchanged line. Unchanged code cannot block this merge. Anchor the comment on the nearest line this pull request adds or removes and say the rest in the body, or leave it out.`);
-    if (seen.has(key)) throw new Error(`comments[${index}] is a second comment on the same line; combine them into one.`);
+    if (paths.has(comment.path) && paths.get(comment.path) === undefined) problems.push(`comments[${index}] names ${comment.path}, which more than one file of this diff is shown as; this review cannot tell which one it means.`);
+    else if (kind === undefined) problems.push(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
+    else if (kind === "context") problems.push(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), an unchanged line. Unchanged code cannot block this merge. Anchor the comment on the nearest line this pull request adds or removes and say the rest in the body, or leave it out.`);
+    else if (seen.has(key)) problems.push(`comments[${index}] is a second comment on the same line; combine them into one.`);
+    seen.add(key);
     const body = comment.body.trim();
     const problem = commentProblem(body);
-    if (problem !== undefined) throw new Error(`comments[${index}].body ${problem}.`);
+    if (problem !== undefined) problems.push(`comments[${index}].body ${problem}.`);
     const scenario = comment.scenario.trim();
     const unlessTrue = comment.unlessTrue.trim();
     for (const [field, text, min, max] of [
@@ -243,9 +246,8 @@ function checkComments(report: ReviewReport, comments: readonly SuggestedComment
       ["unlessTrue", unlessTrue, MIN_UNLESS_TRUE_CHARS, MAX_UNLESS_TRUE_CHARS],
     ] as const) {
       const flaw = proofProblem(text, min, max);
-      if (flaw !== undefined) throw new Error(`comments[${index}].${field} ${flaw}.`);
+      if (flaw !== undefined) problems.push(`comments[${index}].${field} ${flaw}.`);
     }
-    seen.add(key);
     return { ...comment, path, body, scenario, unlessTrue };
   });
 }
@@ -265,18 +267,23 @@ function applyComments(report: ReviewReport, comments: readonly SuggestedComment
  * sent none. The bounds are mechanical — one non-empty paragraph of plain prose
  * within {@link MAX_SUMMARY_CHARS} characters and {@link MAX_SUMMARY_WORDS}
  * words, with no control characters and no Markdown scaffolding. Nothing here
- * judges the writing itself, and a bad paragraph refuses the whole call.
+ * judges the writing itself, and a bad paragraph refuses the whole call. Each
+ * kind of flaw adds its own problem: a summary too long and in Markdown is told
+ * both at once.
  */
-function checkSummary(summary: string | undefined): string | undefined {
+function checkSummary(summary: string | undefined, problems: string[]): string | undefined {
   if (summary === undefined) return undefined;
   const text = summary.trim();
-  if (text === "") throw new Error("summary is empty; write one short paragraph on what the pull request does and why, from its own title and description.");
-  if (CONTROL_CHARACTERS.test(text)) throw new Error("summary must be one paragraph of plain text: no line breaks, tabs, or other control characters.");
+  if (text === "") {
+    problems.push("summary is empty; write one short paragraph on what the pull request does and why, from its own title and description.");
+    return text;
+  }
+  if (CONTROL_CHARACTERS.test(text)) problems.push("summary must be one paragraph of plain text: no line breaks, tabs, or other control characters.");
   const hidden = hiddenCharacterProblem(text);
-  if (hidden !== undefined) throw new Error(`summary ${hidden}.`);
-  if (text.length > MAX_SUMMARY_CHARS) throw new Error(`summary is longer than ${MAX_SUMMARY_CHARS} characters; write one short paragraph.`);
-  if (text.split(/\s+/).length > MAX_SUMMARY_WORDS) throw new Error(`summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph.`);
-  if (SUMMARY_SCAFFOLDING.test(text)) throw new Error("summary uses Markdown or HTML formatting (a heading, list, bold, code, quote, link, table, or tag); write plain prose.");
+  if (hidden !== undefined) problems.push(`summary ${hidden}.`);
+  if (text.length > MAX_SUMMARY_CHARS) problems.push(`summary is longer than ${MAX_SUMMARY_CHARS} characters; write one short paragraph.`);
+  else if (text.split(/\s+/).length > MAX_SUMMARY_WORDS) problems.push(`summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph.`);
+  if (SUMMARY_SCAFFOLDING.test(text)) problems.push("summary uses Markdown or HTML formatting (a heading, list, bold, code, quote, link, table, or tag); write plain prose.");
   return text;
 }
 
@@ -389,26 +396,30 @@ export class ReportPages {
    * block the merge (an empty list says none does), and, for a connected pull
    * request, one short paragraph on the goal. Everything is checked before
    * anything is kept, so one gap or bad entry refuses the call and changes
-   * nothing. Only a finished review's page addresses are handed out: an agent
+   * nothing, and the refusal names every problem found, so one more call can
+   * fix them all. Only a finished review's page addresses are handed out: an agent
    * cannot give the human a page it has not finished reading.
    *
    * `summary` is checked here like any other field, so a bad paragraph refuses
    * the answers and the order with it; whether a connected review *owes* one is
    * the caller's decision (see mcp.ts), because only it knows which reviews are
-   * pull request reviews.
+   * pull request reviews. What the caller found missing comes in as `owed`
+   * and is listed with the rest.
    */
-  finish(reviewId: string, input: FinishInput, by: string): FinishedReview {
+  finish(reviewId: string, input: FinishInput, by: string, owed: readonly string[] = []): FinishedReview {
     const { token, page, report } = this.review(reviewId);
-    checkAnswers(report, input.answers);
+    const problems = [...owed];
+    const summary = checkSummary(input.summary, problems);
+    answerProblems(report, input.answers, problems);
     const answeredIds = new Set(input.answers.map((answer) => answer.questionId));
     const unanswered = report.questions.filter((question) => !answeredIds.has(question.id));
     if (unanswered.length > 0) {
-      throw new Error(`answers leave out ${unanswered.length} of ${report.questions.length} questions, starting with ${unanswered[0].id}; answer every question, cannot-tell when the code does not settle it.`);
+      problems.push(`answers leave out ${unanswered.length} of ${report.questions.length} questions, starting with ${unanswered[0].id}; answer every question, cannot-tell when the code does not settle it.`);
     }
-    checkOrder(report, input.order);
-    const comments = checkComments(report, input.comments);
-    const summary = checkSummary(input.summary);
-    if (input.explanation !== undefined) checkExplanation(report, input.explanation);
+    orderProblems(report, input.order, problems);
+    const comments = checkComments(report, input.comments, problems);
+    if (input.explanation !== undefined) problems.push(...explanationProblems(report, input.explanation));
+    refuseProblems(problems);
     applyAnswers(report, input.answers, by);
     applyOrder(report, input.order, by);
     applyComments(report, comments, by);
@@ -441,7 +452,9 @@ export class ReportPages {
    */
   record(reviewId: string, answers: readonly AnswerInput[], answeredBy: string): RecordedAnswers {
     const { page, report } = this.review(reviewId);
-    checkAnswers(report, answers);
+    const problems: string[] = [];
+    answerProblems(report, answers, problems);
+    refuseProblems(problems);
     applyAnswers(report, answers, answeredBy);
     this.rerender(page, report);
     const answered = report.questions.filter((question) => question.answer !== undefined).length;
@@ -457,7 +470,9 @@ export class ReportPages {
    */
   recordOrder(reviewId: string, itemIds: readonly string[], orderedBy: string): RecordedOrder {
     const { page, report } = this.review(reviewId);
-    checkOrder(report, itemIds);
+    const problems: string[] = [];
+    orderProblems(report, itemIds, problems);
+    refuseProblems(problems);
     applyOrder(report, itemIds, orderedBy);
     this.rerender(page, report);
     return { reviewId, ordered: itemIds.length };
@@ -471,7 +486,10 @@ export class ReportPages {
    */
   suggestComments(reviewId: string, comments: readonly SuggestedComment[], suggestedBy: string): RecordedComments {
     const { page, report } = this.review(reviewId);
-    applyComments(report, checkComments(report, comments), suggestedBy);
+    const problems: string[] = [];
+    const checked = checkComments(report, comments, problems);
+    refuseProblems(problems);
+    applyComments(report, checked, suggestedBy);
     this.rerender(page, report);
     return { reviewId, suggested: comments.length };
   }
