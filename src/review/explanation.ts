@@ -16,6 +16,7 @@
 
 import { testLikeFile } from "./file-role.js";
 import { hiddenCharacterProblem, visibleControls } from "./hidden-characters.js";
+import { collectProblem, problem, refuseProblems } from "./problems.js";
 import type { CallFlowNode, ReviewReport } from "./types.js";
 
 /** Most functions one review asks the agent to explain; changed code first. */
@@ -201,24 +202,24 @@ function proseProblem(field: string, max: number): string | undefined {
 
 function checkProse(where: string, text: string | undefined, max: number, required: boolean): void {
   if (text === undefined) {
-    if (required) throw new Error(`${where} is missing.`);
+    if (required) throw problem(`${where} is missing.`);
     return;
   }
-  const problem = proseProblem(text, max);
-  if (problem !== undefined) throw new Error(`${where} ${problem}.`);
+  const flaw = proseProblem(text, max);
+  if (flaw !== undefined) throw problem(`${where} ${flaw}.`);
 }
 
 function checkHunks(where: string, hunks: readonly string[] | undefined, items: ReadonlySet<string>): void {
   hunks?.forEach((id, index) => {
-    if (!items.has(id)) throw new Error(`${where}.hunks[${index}] names a hunk this review does not have; use an items[].id.`);
+    if (!items.has(id)) throw problem(`${where}.hunks[${index}] names a hunk this review does not have; use an items[].id.`);
   });
 }
 
 function checkChange(where: string, change: string, before: string | undefined): void {
   if (!EXPLANATION_CHANGES.some((known) => known === change)) {
-    throw new Error(`${where}.change must be one of ${EXPLANATION_CHANGES.join(", ")}.`);
+    throw problem(`${where}.change must be one of ${EXPLANATION_CHANGES.join(", ")}.`);
   }
-  if (before !== undefined && change !== "changed") throw new Error(`${where}.before is only for a changed ${where.includes("rules") ? "rule" : "step"}.`);
+  if (before !== undefined && change !== "changed") throw problem(`${where}.before is only for a changed ${where.includes("rules") ? "rule" : "step"}.`);
 }
 
 function checkProcess(process: BusinessProcess, at: number, functions: ReadonlySet<string>, items: ReadonlySet<string>): void {
@@ -226,35 +227,35 @@ function checkProcess(process: BusinessProcess, at: number, functions: ReadonlyS
   checkProse(`${where}.title`, process.title, MAX_TITLE_CHARS, true);
   const steps = process.steps;
   if (steps.length < MIN_PROCESS_STEPS || steps.length > MAX_PROCESS_STEPS) {
-    throw new Error(`${where} has ${steps.length} steps; draw ${MIN_PROCESS_STEPS} to ${MAX_PROCESS_STEPS}.`);
+    throw problem(`${where} has ${steps.length} steps; draw ${MIN_PROCESS_STEPS} to ${MAX_PROCESS_STEPS}.`);
   }
   const ids = new Set<string>();
   steps.forEach((step, index) => {
-    if (ids.has(step.id)) throw new Error(`${where}.steps[${index}] repeats the step id ${step.id}.`);
+    if (ids.has(step.id)) throw problem(`${where}.steps[${index}] repeats the step id ${step.id}.`);
     ids.add(step.id);
   });
   steps.forEach((step, index) => {
     const at = `${where}.steps[${index}]`;
-    if (!STEP_KINDS.includes(step.kind)) throw new Error(`${at}.kind must be one of ${STEP_KINDS.join(", ")}.`);
+    if (!STEP_KINDS.includes(step.kind)) throw problem(`${at}.kind must be one of ${STEP_KINDS.join(", ")}.`);
     checkProse(`${at}.text`, step.text, MAX_STEP_CHARS, true);
     checkProse(`${at}.detail`, step.detail, MAX_DETAIL_CHARS, false);
     checkChange(at, step.change, step.before);
     checkProse(`${at}.before`, step.before, MAX_DETAIL_CHARS, false);
     step.functions?.forEach((id, fn) => {
-      if (!functions.has(id)) throw new Error(`${at}.functions[${fn}] is not a function this review lists; use an id from functions.`);
+      if (!functions.has(id)) throw problem(`${at}.functions[${fn}] is not a function this review lists; use an id from functions.`);
     });
     checkHunks(at, step.hunks, items);
     const exits = step.next ?? [];
-    if (exits.length > MAX_STEP_EXITS) throw new Error(`${at} has ${exits.length} exits; a step has at most ${MAX_STEP_EXITS}.`);
+    if (exits.length > MAX_STEP_EXITS) throw problem(`${at} has ${exits.length} exits; a step has at most ${MAX_STEP_EXITS}.`);
     const targets = new Set<string>();
     exits.forEach((exit, index) => {
-      if (!ids.has(exit.to)) throw new Error(`${at}.next[${index}] goes to ${exit.to}, which is not a step of this process.`);
-      if (targets.has(exit.to)) throw new Error(`${at}.next[${index}] repeats an exit to ${exit.to}.`);
+      if (!ids.has(exit.to)) throw problem(`${at}.next[${index}] goes to ${exit.to}, which is not a step of this process.`);
+      if (targets.has(exit.to)) throw problem(`${at}.next[${index}] repeats an exit to ${exit.to}.`);
       targets.add(exit.to);
       checkProse(`${at}.next[${index}].when`, exit.when, MAX_BRANCH_CHARS, step.kind === "decision");
     });
-    if (step.kind === "decision" && exits.length < 2) throw new Error(`${at} is a decision, so it needs at least two next steps, each with when.`);
-    if (step.kind === "end" && exits.length > 0) throw new Error(`${at} is an end, so it has no next steps.`);
+    if (step.kind === "decision" && exits.length < 2) throw problem(`${at} is a decision, so it needs at least two next steps, each with when.`);
+    if (step.kind === "end" && exits.length > 0) throw problem(`${at} is an end, so it has no next steps.`);
   });
 }
 
@@ -262,37 +263,44 @@ function checkProcess(process: BusinessProcess, at: number, functions: ReadonlyS
  * Check a whole explanation against the review it explains. It must explain
  * every function the review lists, each once; draw one to
  * {@link MAX_PROCESSES} processes whose steps and exits all resolve; and list at
- * most {@link MAX_RULES} rules, a changed one saying what it was before. The
- * first problem refuses the whole explanation.
+ * most {@link MAX_RULES} rules, a changed one saying what it was before. Any
+ * problem refuses the whole explanation, and the refusal names every one.
  */
 export function checkExplanation(report: ReviewReport, input: ExplanationInput): void {
+  refuseProblems(explanationProblems(report, input));
+}
+
+/** Every problem of an explanation: the first of each function entry, process, and rule, and the counts. */
+export function explanationProblems(report: ReviewReport, input: ExplanationInput): string[] {
+  const problems: string[] = [];
   const listedFunctions = report.functions ?? [];
   const listed = new Map(listedFunctions.map((fn) => [fn.id, fn]));
   const items = new Set(report.items.map((item) => item.id));
   const explained = new Set<string>();
-  input.functions.forEach((entry, index) => {
-    if (!listed.has(entry.id)) throw new Error(`explanation.functions[${index}] names ${JSON.stringify(entry.id)}, which is not in this review's functions list.`);
-    if (explained.has(entry.id)) throw new Error(`explanation.functions[${index}] explains ${entry.id} a second time.`);
+  input.functions.forEach((entry, index) => collectProblem(problems, () => {
+    if (!listed.has(entry.id)) throw problem(`explanation.functions[${index}] names ${JSON.stringify(entry.id)}, which is not in this review's functions list.`);
+    if (explained.has(entry.id)) throw problem(`explanation.functions[${index}] explains ${entry.id} a second time.`);
     explained.add(entry.id);
     checkProse(`explanation.functions[${index}].purpose`, entry.purpose, MAX_PURPOSE_CHARS, true);
-  });
+  }));
   const missing = listedFunctions.filter((fn) => !explained.has(fn.id));
   if (missing.length > 0) {
-    throw new Error(`explanation.functions leaves out ${missing.length} of ${listedFunctions.length} functions, starting with ${missing[0].id}; explain every function the review lists, in one plain sentence each.`);
+    problems.push(`explanation.functions leaves out ${missing.length} of ${listedFunctions.length} functions, starting with ${missing[0].id}; explain every function the review lists, in one plain sentence each.`);
   }
   if (input.processes.length < 1 || input.processes.length > MAX_PROCESSES) {
-    throw new Error(`explanation.processes has ${input.processes.length} processes; draw 1 to ${MAX_PROCESSES}: the business flows this change touches.`);
+    problems.push(`explanation.processes has ${input.processes.length} processes; draw 1 to ${MAX_PROCESSES}: the business flows this change touches.`);
   }
   const functions = new Set(listed.keys());
-  input.processes.forEach((process, index) => checkProcess(process, index, functions, items));
-  if (input.rules.length > MAX_RULES) throw new Error(`explanation.rules has ${input.rules.length} rules; list at most ${MAX_RULES}.`);
-  input.rules.forEach((rule, index) => {
+  input.processes.forEach((process, index) => collectProblem(problems, () => checkProcess(process, index, functions, items)));
+  if (input.rules.length > MAX_RULES) problems.push(`explanation.rules has ${input.rules.length} rules; list at most ${MAX_RULES}.`);
+  input.rules.forEach((rule, index) => collectProblem(problems, () => {
     const where = `explanation.rules[${index}]`;
     checkProse(`${where}.text`, rule.text, MAX_RULE_CHARS, true);
     checkChange(where, rule.change, rule.before);
     if (rule.change === "changed") checkProse(`${where}.before`, rule.before, MAX_RULE_CHARS, true);
     checkHunks(where, rule.hunks, items);
-  });
+  }));
+  return problems;
 }
 
 /** Trim every text field and drop empty optional lists, so the pages render exactly what was checked. */

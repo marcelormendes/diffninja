@@ -204,7 +204,8 @@ shapes what the agent must fill in and refuses what the contract forbids.
 
 At most 5 comments are accepted. A review rarely has more real blockers, so a
 sixth is refused with that reason. Any bad comment refuses the whole call and
-keeps the previous set. A `severity` key from an older agent is refused with a
+keeps the previous set. One refusal names every problem it found, numbered (the
+first 10, and how many more), so one more call can fix them all. A `severity` key from an older agent is refused with a
 message that says every comment now blocks the merge.
 
 On the connected page each suggestion is marked "Blocks merge" under its line.
