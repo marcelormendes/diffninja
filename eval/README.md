@@ -19,6 +19,12 @@ lists only `dist/`, one script and the shrinkwrap).
   suspicions (texts in `rules`; Sonnet with both, Opus with B), and the
   comparison with v1. The variants were not merged: they found no more known
   problems and Opus raised two false alarms on clean pull requests.
+- `results-v3.json`: the run-to-run spread and one context experiment, Sonnet
+  only. The same code found 4 to 7 of the 15 known problems over four runs, so
+  a difference of two is noise. Adding, next to each hunk, the test files that
+  name each function it changes found 5 to 6 over three runs, with the same
+  false alarm on a clean pull request, so it was not kept (the prototype is
+  described in `prototype`).
 
 ## Run it
 
