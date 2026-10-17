@@ -118,7 +118,8 @@ const FACT_LABEL = {
   pinChanged: "version pin changed",
 } satisfies Record<ChangeFactQuestion, string>;
 
-const STATUS_REASON = {
+/** What each status means; the agent's view says it once instead of on every item (see agent-view.ts). */
+export const STATUS_REASON = {
   attention:
     "attention: code or configuration outside a test file changed, documentation changed an instruction, link, or limit, or a test changed a limit, discarded a failure, or weakened a gate",
   uncertain: `uncertain: diffninja does not read this hunk (a file type it cannot read, or a changed line over ${MAX_READ_LINE_CHARS.toLocaleString("en-US")} characters), so no facts were established and a person reads it`,

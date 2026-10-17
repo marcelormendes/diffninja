@@ -1,7 +1,8 @@
 # MCP setup
 
 `diffninja-mcp` is a stdio MCP server exposing `review_diff`, `finish_review`,
-`record_answers`, `record_order`, `suggest_comments`, and `record_explanation`.
+`record_answers`, `record_order`, `suggest_comments`, `record_explanation`, and
+`read_items`.
 The process takes no arguments and reads/writes only JSON-RPC
 on stdin/stdout, so the client must launch it directly — anything else
 writing to its stdout corrupts the stream. It never writes report files; the
@@ -102,14 +103,37 @@ Rules enforced by the schema and the tool:
   the trust setting above); unsupported/incomplete checks are explicit. See
   [check boundaries](reference.md#automatic-check-boundaries).
 
-For static inputs, `structuredContent` **is** the `ReviewReport` plus
-`reviewId` and `nextSteps`, with `content` carrying the same object as JSON
-text. No page link is returned until `finish_review` accepts the agent's
-whole reading. The report's `questions` have closed choices, including
-`cannot-tell`.
+For static inputs, `structuredContent` **is** the agent's view of the
+`ReviewReport` (below) plus `reviewId` and `nextSteps`, with `content`
+carrying the same object as JSON text. No page link is returned until
+`finish_review` accepts the agent's whole reading. The report's `questions`
+have closed choices, including `cannot-tell`.
+
+### Sized to be read in one go
+
+Claude Code passes a tool result to its model only when it is under 25,000
+tokens (`MAX_MCP_OUTPUT_TOKENS`); a larger one is saved to a file that the
+model reads in pieces. So `review_diff` sends the agent a view of the report,
+not all of it: every hunk's diff, reasons, facts, and history, the questions,
+the functions list, and the project context, with nothing said twice. It
+leaves out the call flows and the definitions around each hunk, the
+line-by-line copy of a pull request's diff, and each fact's cited line, which
+the hunk's `reasons` already quotes. Text that would repeat on every hunk or
+question is said once in `guide`. A typical pull request comes to 13,000 to
+45,000 characters, where it used to be 23,000 to 390,000. Over 45,000
+characters, the lowest-ranked hunks are listed by id only and marked
+`leftOut`, and `paging` says how many. The pages always show the whole report.
+
+`read_items` takes `{ reviewId, ids, context? }` (at most 50 ids) and returns
+those hunks in full, in the order named: the header, diff, reasons, facts
+with the line each cites, and history, plus with `context: true` the call flow
+on the hunk's changed lines and the definitions around it. It returns as many
+as fit in about 45,000 characters, at least the first, and lists the rest in
+`notReturned` to ask for again. It changes nothing and returns no link.
 
 Connected success returns `{ mode: "connected", pr, snapshot }` plus
-`reviewId`, `analysisScope` and `report` for exactly that snapshot, also
+`reviewId`, `analysisScope` and `report` (the agent's view, as above, and
+`snapshot` without its line-by-line copy) for exactly that snapshot, also
 without a link until finishing. A later call for an already finished PR
 returns its links again. With `analysisUnavailable`, there is nothing to
 finish, and the result carries the connected page URL directly. Open the page

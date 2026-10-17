@@ -137,7 +137,7 @@ try {
     // spawns .cmd files through cmd.exe, the same path real MCP clients use.
     const command = join(binDir, windows ? "diffninja-mcp.cmd" : "diffninja-mcp");
     await client.connect(new StdioClientTransport({ command, stderr: "inherit", cwd: sandbox }));
-    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["review_diff", "finish_review", "record_answers", "record_order", "suggest_comments", "record_explanation"]);
+    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["review_diff", "finish_review", "record_answers", "record_order", "suggest_comments", "record_explanation", "read_items"]);
     const result = await client.callTool({ name: "review_diff", arguments: { diff: patch } });
     assert(!result.isError);
     assert.equal(result.structuredContent.items.length, 1);
@@ -146,6 +146,11 @@ try {
     assert.equal(result.structuredContent.reportUrl, undefined);
     const questions = result.structuredContent.questions;
     assert(questions.length > 0);
+    // The hunk in full, each fact with the changed line it cites, comes from read_items.
+    const read = await client.callTool({ name: "read_items", arguments: { reviewId: result.structuredContent.reviewId, ids: [result.structuredContent.items[0].id], context: true } });
+    assert(!read.isError);
+    assert.equal(read.structuredContent.items[0].diff, result.structuredContent.items[0].diff);
+    assert(Object.keys(read.structuredContent.items[0].facts.evidence).length > 0);
     const finished = await client.callTool({ name: "finish_review", arguments: {
       reviewId: result.structuredContent.reviewId,
       answers: questions.map(question => ({ questionId: question.id, choice: "cannot-tell" })),

@@ -2,7 +2,8 @@
 
 `diffninja` runs inside agent CLIs (Claude Code, Codex, OMP, pi, …) through
 `diffninja-mcp`, a stdio MCP server exposing `review_diff`, `finish_review`,
-`record_answers`, `record_order`, `suggest_comments`, and `record_explanation`. The
+`record_answers`, `record_order`, `suggest_comments`, `record_explanation`, and
+`read_items`. The
 `diffninja` bin registers that server (`diffninja setup`) and installs grammars
 (`diffninja grammars`); there is no terminal review mode. PR links select a
 connected, human-authored GitHub review via `gh`. Page links come from
@@ -52,7 +53,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `module-resolution.ts` (conservative immutable import bindings),
     `reference-check.ts` (opt-in before/after TypeScript diagnostics),
     `html.ts` / `evidence-html.ts` (report), `types.ts` / `evidence-types.ts`,
-    `update-check.ts` (the opt-in npm version lookup and its notice), `explanation.ts` (the functions list and the agent's business explanation:
+    `update-check.ts` (the opt-in npm version lookup and its notice),
+    `agent-view.ts` (the report as the agent is sent it, and `read_items`), `explanation.ts` (the functions list and the agent's business explanation:
     checks and storage), `process-html.ts` (the business view: flowcharts,
     step list, rules, glossary).
   - `setup.ts` — `runSetup()` for `diffninja setup`: CLI detection, config
@@ -86,8 +88,8 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     Static skips detection, treats links as source, and rejects pr/input.
     Static analysis requires exactly one of `diff` or `from`+`to`; `repo` must
     be absolute for a range. In auto, `pr`/`input` require a PR link.
-  - Static success returns `structuredContent` equal to the `ReviewReport` plus
-    `reviewId` and `nextSteps`, and no page link; the report carries `questions` (`questions.ts`,
+  - Static success returns `structuredContent` equal to the agent's view of the
+    `ReviewReport` (below) plus `reviewId` and `nextSteps`, and no page link; the report carries `questions` (`questions.ts`,
     deterministic templates, closed options incl. `cannot-tell`, at most 36; import-only hunks are not asked about)
     and `functions` (`explanation.ts`: each project definition around the hunks
     and in the call flows once, id `<file>#<name>` with any hidden character shown
@@ -98,6 +100,36 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     guideline paths, and new-file sibling conventions, all from local git only,
     code-point sorted, and never affecting status, priority, or order; a shallow
     clone reports `history: "shallow"` and counts cut lines as unknown.
+  - The agent's view (`agent-view.ts`, the `report` of every `review_diff`
+    result): the report sized for an agent to read in one tool result. Claude
+    Code sends a result to its model only under 25,000 tokens (no count up to
+    50,000 characters), and the whole report of a six-hunk pull request was
+    258,000 characters. It leaves out `callFlow`, `callFlows`, each item's
+    `callFlow` and `contextNodes`, `snapshot.lines`, and in a connected result
+    `report.pr` (the snapshot carries its title and body); an item's `header`
+    when its diff opens with it; each fact's `evidence` (the item's `reasons`
+    quotes every cited line) and every `no` answer; and the agenda's excerpts
+    and its per-file `agenda:hunks:` entries. A function whose id is
+    `<file>#<name>` is sent as `{ id, line }` (`inTests` only when true). Text
+    that would repeat is said once in `guide`: `statuses` (each status's
+    reason, which `reasons` then leaves out), `facts`, `questions` (the tail
+    that every question of one kind shares, at a sentence boundary, cut from
+    each `text`; ids and options stay), and `claims` (each claim status's
+    explanation). Over 45,000 characters (`AGENT_RESULT_CHARS`, with 3,500 kept
+    for the fields around the report), claims past 20 and agenda entries past 20
+    go, then whole hunks from the lowest-ranked up become `{ id, file, status,
+    priority, added, removed, leftOut: true }`, and any of them that fits once a
+    larger one above it is out is put back; `paging` and a warning say so. The
+    server keeps the whole report for the pages, the checks of what the agent
+    sends back, and `read_items`.
+  - `read_items`: strict `{ reviewId, ids (1–50 item ids), context? }`, read
+    only. It returns `{ reviewId, items, notReturned?, warnings?, next }`: the
+    named items as the report holds them (header, diff, reasons, facts with
+    evidence, history, and with `context: true` `callFlow` and
+    `contextNodes`), hidden characters marked, in the order named, as many as
+    fit in the same budget and at least the first. One alone over it loses its
+    last context nodes, then its last call-flow blocks, then the end of its diff,
+    and a warning says what. An unknown or repeated id refuses the whole call.
   - `finish_review`: strict `{ reviewId, answers, order, comments, summary?, explanation? }`, the source
     of page links (`analysisUnavailable` below is the one exception). Connected reviews require `summary` and `explanation`.
     `explanation` is `{ functions, processes, rules }`: a one-sentence purpose
@@ -189,7 +221,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     CSP-pinned by hash, no-store, at most 20 per connection, and close with it.
     Connected success returns `{ mode: "connected", pr, snapshot }` plus, for
     exactly that snapshot, the local analysis: `reviewId`, `analysisScope`,
-    `report`, and `nextSteps`, with no link until `finish_review` (a finished
+    `report` (the agent's view), and `nextSteps`, with no link until `finish_review` (a finished
     review adds `url` and `reportUrl`). With `analysisUnavailable` there is
     nothing to finish, and the result carries the page `url` directly. The page reads it
     from `GET /api/analysis` (same Host/Origin checks) and polls for answers.
@@ -434,15 +466,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   unified diff is source and is never followed. Untrusted input is bounded:
   descriptions over 12,000 characters are not lexed (plain text), link detection
   reads 300 characters per side of 500 markers per string, intent claims stop at
-  100, and each of the two copies of a result (text and structured) stays under 4 MiB,
+  100, and each of the two copies of a result (text and structured) is the
+  agent's view above, which lists every hunk, and stays under 4 MiB,
   measured on the marked text as the text copy carries it, JSON-escaped
   (`result-budget.ts`; a message can reach about 8 MiB, under the 10 MiB SDK
-  limit), by trimming, in order, `snapshot.lines`,
-  extra claims, the review agenda past 20 entries, call flows and per-hunk
-  context, then the diff text of the lowest-ranked hunks of any size, then their
-  facts, reasons, and history, with a warning that names each stage that ran. A
-  result that still does not fit is refused with an error to review the change in
-  parts; the server and the pages keep the whole report.
+  limit). A result over that with every hunk listed by id only is refused with
+  an error to review the change in parts; the server and the pages keep the
+  whole report.
 - Tests live in `test/` and run with `vitest`. `review-pipeline.test.ts` covers
   the deterministic checks, status, ranking, and order; `review-change-facts.test.ts`
   the lexical facts; `review-report-pages.test.ts` the report pages;
@@ -450,7 +480,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
   `review-cli.test.ts` covers the setup-only command. `grammars-cache.test.ts`,
   `grammars-command.test.ts`, `child-env.test.ts` and `review-grammar-warning.test.ts`
   cover the pinned grammar install and its refusals; `review-hidden-characters.test.ts`,
-  `review-result-budget.test.ts`, `executables.test.ts`, `index-limits.test.ts`
+  `review-result-budget.test.ts` (with the agent's view and `read_items`), `executables.test.ts`, `index-limits.test.ts`
   and `package-shrinkwrap.test.ts` the matching hardening. Tests share one grammar cache
   that `test/global-setup.ts` installs once with the same installer users run.
   A cache missing only Kotlin and Perl (no compiler) is kept, not reinstalled
