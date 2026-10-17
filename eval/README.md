@@ -14,6 +14,11 @@ lists only `dist/`, one script and the shrinkwrap).
 - `fake-gh.mjs`: the `gh` the reviews see (below).
 - `results-v1.json`: the scored first run (each blocker judged real, false
   alarm or unclear, with the reason; each known problem found or missed).
+- `results-v2.json`: the second round, scored the same way: Sonnet on main
+  with no rule change, two variants of guidance that asks the agent to test its
+  suspicions (texts in `rules`; Sonnet with both, Opus with B), and the
+  comparison with v1. The variants were not merged: they found no more known
+  problems and Opus raised two false alarms on clean pull requests.
 
 ## Run it
 
