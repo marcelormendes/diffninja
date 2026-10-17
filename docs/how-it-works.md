@@ -73,7 +73,11 @@ The tool writes no report files. Arguments and examples:
    every question, the reading order of every hunk (most important first),
    and the comments that block the merge (usually none). Connected PR reviews also
    require `summary`: one plain-English paragraph, at most 80 words and 600
-   characters, with no Markdown or control characters. The agent explains the
+   characters, with no Markdown, control characters or hidden characters. Every
+   text the agent sends is checked after trimming its ends, and one with a hidden
+   character (such as a zero-width space) is refused, since it would reach the
+   draft and GitHub unseen. A static report shows the comments read-only, with
+   nothing to post them to. The agent explains the
    stated goal, why it matters when known, and important limits, without jargon,
    templates, or a file-by-file changelog. If the title and description do not
    establish a goal, it must say so instead of inventing one. diffninja enforces

@@ -154,7 +154,7 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     (RIGHT) or removes (LEFT), at most one per line. A context line is refused
     because unchanged code cannot block this merge, and a line outside the diff
     keeps its own message. `body` reads like the reviewer's own comment. It is
-    one line of at most 280 characters with no control characters and no report
+    one line of at most 280 characters (trimmed) with no control characters and no report
     scaffolding (headings, bold, list markers, labels such as "Finding 1:"), and
     it is the only field that joins the human's draft. `scenario` is a concrete
     input or state and the wrong result, or the written rule it breaks and where
@@ -164,7 +164,13 @@ LICENSE and the attribution section in README.md). See `README.md` for usage.
     `unlessTrue` is what would have to be true for this not to be a problem (10
     to 300 characters trimmed). `scenario` and `unlessTrue` are one line each
     with no control characters, are for the human's triage, are never posted,
-    and are not held to the report-label rule. Any bad comment refuses the whole
+    and are not held to the report-label rule. Every text the agent sends
+    (these three, `summary`, every `explanation` text) is checked as trimmed,
+    which is how it is kept, and is refused when it holds a hidden character
+    the pages would mark (`hiddenCharacterProblem`), since the body reaches the
+    draft and GitHub as is. A static report (a diff or a git range) shows its
+    comments read-only on the report page and in the Markdown summary, with
+    nothing to post them to. Any bad comment refuses the whole
     call and keeps the previous set. A later call replaces it, and an empty list
     clears it. The comments reach the connected page (`/api/analysis`
     `suggestions`, attributed to the MCP client) as "Blocks merge" suggestions

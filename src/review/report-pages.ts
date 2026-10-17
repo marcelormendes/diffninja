@@ -16,7 +16,7 @@ import { createServer, type Server } from "node:http";
 import type { ReviewItem, ReviewReport, SuggestedComment } from "./types.js";
 import type { UpdateNotice } from "./update-check.js";
 import { checkExplanation, explanationCounts, normalizeExplanation, type ExplanationCounts, type ExplanationInput } from "./explanation.js";
-import { visibleControls } from "./hidden-characters.js";
+import { hiddenCharacterProblem, visibleControls } from "./hidden-characters.js";
 import { listenLoopback, trustedHosts, type LoopbackOptions } from "./loopback.js";
 
 /** Most reports one connection keeps; the oldest page closes first. */
@@ -214,7 +214,8 @@ function commentPaths(report: ReviewReport): Map<string, string | undefined> {
  * Every comment claims to block the merge. It names a line this pull request
  * adds or removes, one per line, reads like the reviewer's own words, and
  * carries its proof for the human's triage. The comments come back with each
- * file's own path, so they anchor to the lines the human reviews.
+ * file's own path and their text trimmed, so they anchor to the lines the
+ * human reviews and read exactly as checked.
  */
 function checkComments(report: ReviewReport, comments: readonly SuggestedComment[]): SuggestedComment[] {
   if (comments.length > MAX_SUGGESTED_COMMENTS) {
@@ -232,24 +233,27 @@ function checkComments(report: ReviewReport, comments: readonly SuggestedComment
     if (kind === undefined) throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), which is not a line of this review's diff.`);
     if (kind === "context") throw new Error(`comments[${index}] names ${comment.path}:${comment.line} (${comment.side}), an unchanged line. Unchanged code cannot block this merge. Anchor the comment on the nearest line this pull request adds or removes and say the rest in the body, or leave it out.`);
     if (seen.has(key)) throw new Error(`comments[${index}] is a second comment on the same line; combine them into one.`);
-    const problem = commentProblem(comment.body);
+    const body = comment.body.trim();
+    const problem = commentProblem(body);
     if (problem !== undefined) throw new Error(`comments[${index}].body ${problem}.`);
+    const scenario = comment.scenario.trim();
+    const unlessTrue = comment.unlessTrue.trim();
     for (const [field, text, min, max] of [
-      ["scenario", comment.scenario, MIN_SCENARIO_CHARS, MAX_SCENARIO_CHARS],
-      ["unlessTrue", comment.unlessTrue, MIN_UNLESS_TRUE_CHARS, MAX_UNLESS_TRUE_CHARS],
+      ["scenario", scenario, MIN_SCENARIO_CHARS, MAX_SCENARIO_CHARS],
+      ["unlessTrue", unlessTrue, MIN_UNLESS_TRUE_CHARS, MAX_UNLESS_TRUE_CHARS],
     ] as const) {
       const flaw = proofProblem(text, min, max);
       if (flaw !== undefined) throw new Error(`comments[${index}].${field} ${flaw}.`);
     }
     seen.add(key);
-    return { ...comment, path };
+    return { ...comment, path, body, scenario, unlessTrue };
   });
 }
 
 function applyComments(report: ReviewReport, comments: readonly SuggestedComment[], suggestedBy: string): void {
   report.agentComments = {
     comments: comments.map(({ path, line, side, body, scenario, evidence, unlessTrue }) => ({
-      path, line, side, body: body.trim(), scenario: scenario.trim(), evidence, unlessTrue: unlessTrue.trim(),
+      path, line, side, body, scenario, evidence, unlessTrue,
     })),
     suggestedBy,
     suggestedAt: new Date().toISOString(),
@@ -268,6 +272,8 @@ function checkSummary(summary: string | undefined): string | undefined {
   const text = summary.trim();
   if (text === "") throw new Error("summary is empty; write one short paragraph on what the pull request does and why, from its own title and description.");
   if (CONTROL_CHARACTERS.test(text)) throw new Error("summary must be one paragraph of plain text: no line breaks, tabs, or other control characters.");
+  const hidden = hiddenCharacterProblem(text);
+  if (hidden !== undefined) throw new Error(`summary ${hidden}.`);
   if (text.length > MAX_SUMMARY_CHARS) throw new Error(`summary is longer than ${MAX_SUMMARY_CHARS} characters; write one short paragraph.`);
   if (text.split(/\s+/).length > MAX_SUMMARY_WORDS) throw new Error(`summary is longer than ${MAX_SUMMARY_WORDS} words; write one short paragraph.`);
   if (SUMMARY_SCAFFOLDING.test(text)) throw new Error("summary uses Markdown or HTML formatting (a heading, list, bold, code, quote, link, table, or tag); write plain prose.");
@@ -296,23 +302,26 @@ function anchorsOf(item: ReviewItem, into: Map<string, LineKind>): void {
   }
 }
 
-/** Why a suggested comment cannot be offered as the reviewer's own words, or undefined when it can. */
+/** Why a suggested comment's trimmed body cannot be offered as the reviewer's own words, or undefined when it can. */
 function commentProblem(body: string): string | undefined {
-  if (body.trim() === "") return "is empty";
+  if (body === "") return "is empty";
   if (/[\r\n]/.test(body)) return "must be one line of text";
   if (CONTROL_CHARACTERS.test(body)) return "contains control characters";
+  const hidden = hiddenCharacterProblem(body);
+  if (hidden !== undefined) return hidden;
   if (body.length > MAX_SUGGESTED_CHARS) return `is longer than ${MAX_SUGGESTED_CHARS} characters; say it the way a reviewer would, in a sentence or two`;
   if (REPORT_LABEL.test(body)) return "reads like a report (a heading, list marker, bold, or a label such as \"Finding 1:\"); write it the way the reviewer would say it";
   return undefined;
 }
 
-/** Why a comment's scenario or unlessTrue cannot be shown to the human as written, or undefined when it can. They are never posted, so only their shape is checked. */
+/** Why a comment's trimmed scenario or unlessTrue cannot be shown to the human as written, or undefined when it can. They are never posted, so only their shape is checked. */
 function proofProblem(text: string, min: number, max: number): string | undefined {
-  const trimmed = text.trim();
-  if (/[\r\n]/.test(trimmed)) return "must be one line of text";
-  if (CONTROL_CHARACTERS.test(trimmed)) return "contains control characters";
-  if (trimmed.length < min) return `is shorter than ${min} characters; say what would actually happen`;
-  if (trimmed.length > max) return `is longer than ${max} characters; keep to the one case that fails`;
+  if (/[\r\n]/.test(text)) return "must be one line of text";
+  if (CONTROL_CHARACTERS.test(text)) return "contains control characters";
+  const hidden = hiddenCharacterProblem(text);
+  if (hidden !== undefined) return hidden;
+  if (text.length < min) return `is shorter than ${min} characters; say what would actually happen`;
+  if (text.length > max) return `is longer than ${max} characters; keep to the one case that fails`;
   return undefined;
 }
 

@@ -15,7 +15,7 @@
  */
 
 import { testLikeFile } from "./file-role.js";
-import { visibleControls } from "./hidden-characters.js";
+import { hiddenCharacterProblem, visibleControls } from "./hidden-characters.js";
 import type { CallFlowNode, ReviewReport } from "./types.js";
 
 /** Most functions one review asks the agent to explain; changed code first. */
@@ -183,11 +183,14 @@ const CODE_LIKE = [
   { pattern: /\b[\w.-]+\/[\w./-]*\.(?:py|pyi|ts|tsx|js|jsx|mjs|cjs|go|rb|java|kt|kts|rs|cs|php|swift|scala|c|cc|cpp|h|hpp|m|ex|exs|lua|pl|sol|zig|hs|ml)\b/, what: "a source file path" },
 ];
 
-/** Why one field is not plain prose, or undefined when it is. */
-function proseProblem(text: string, max: number): string | undefined {
-  if (text.trim() === "") return "is empty";
+/** Why one field, trimmed as it is kept, is not plain prose, or undefined when it is. */
+function proseProblem(field: string, max: number): string | undefined {
+  const text = field.trim();
+  if (text === "") return "is empty";
   if (CONTROL_CHARACTERS.test(text)) return "must be one line of plain text, with no line breaks, tabs, or control characters";
-  if (text.trim().length > max) return `is longer than ${max} characters`;
+  const hidden = hiddenCharacterProblem(text);
+  if (hidden !== undefined) return hidden;
+  if (text.length > max) return `is longer than ${max} characters`;
   if (SCAFFOLDING.test(text)) return "uses Markdown or HTML formatting; write plain prose";
   for (const { pattern, what } of CODE_LIKE) {
     const match = pattern.exec(text);
