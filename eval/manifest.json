@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "prompt": "Review {url} with diffninja. My clone is at {clone}. Answer its questions, then give me the page.",
   "cases": [
     {
@@ -19,7 +19,8 @@
           "description": "isLineBreakAmbiguous checks previous?.isCJ / next?.isCJ but then reads previous.kind / next.kind without ?.; a newline next to a non-text node (e.g. '**プリティア**\\nで\\n**フォーマット**') throws a TypeError.",
           "evidence": "https://github.com/prettier/prettier/pull/20257"
         }
-      ]
+      ],
+      "bugType": "crash"
     },
     {
       "id": "hono-5205",
@@ -38,7 +39,8 @@
           "description": "chunk = value.subarray(offset) keeps a view on the producer's buffer across reader.read() calls; a stream that reuses one buffer is hashed as [B, B], so the ETag is wrong.",
           "evidence": "https://github.com/honojs/hono/pull/5239"
         }
-      ]
+      ],
+      "bugType": "concurrency-state"
     },
     {
       "id": "axios-11096",
@@ -57,7 +59,8 @@
           "description": "Header flattening now deletes headers[method] for every entry of the new methodList, which includes 'link', 'unlink', 'purge'; a request with a real Link header loses it.",
           "evidence": "https://github.com/axios/axios/pull/11156"
         }
-      ]
+      ],
+      "bugType": "wrong-logic"
     },
     {
       "id": "fastify-6613",
@@ -76,7 +79,8 @@
           "description": "socketAddr = this.raw.socket?.remoteAddress then socketAddr !== null: with no socket the value is undefined, which passes the check, so x-forwarded-host (and x-forwarded-proto at line 136) is trusted anyway.",
           "evidence": "https://github.com/fastify/fastify/issues/6673"
         }
-      ]
+      ],
+      "bugType": "security"
     },
     {
       "id": "undici-5811",
@@ -95,7 +99,8 @@
           "description": "Condition changed so legacy (v1) dispatch consumers such as Node's bundled fetch get HTTP/2; the H2 path hands object-form headers to legacy callbacks that expect raw arrays, so fetch loses response headers and stops following redirects.",
           "evidence": "https://github.com/nodejs/undici/pull/5860"
         }
-      ]
+      ],
+      "bugType": "api-break"
     },
     {
       "id": "hono-4267",
@@ -114,7 +119,8 @@
           "description": "removeIndexString runs after the query string is appended and params substituted: client.index.$url({query}) keeps '/index?page=1', and a param whose value is 'index' is wrongly stripped.",
           "evidence": "https://github.com/honojs/hono/pull/4352"
         }
-      ]
+      ],
+      "bugType": "wrong-logic"
     },
     {
       "id": "tanstack-router-8643",
@@ -133,7 +139,8 @@
           "description": "Removing the ClientOnly fallback for ssr:false / 'data-only' matches makes a route with no pendingComponent server-render pending UI but hydrate the real component: React hydration mismatch.",
           "evidence": "https://github.com/TanStack/router/pull/8646"
         }
-      ]
+      ],
+      "bugType": "concurrency-state"
     },
     {
       "id": "starlette-2381",
@@ -152,7 +159,8 @@
           "description": "cls(app=app, *args, **kwargs): positional args bind to the first parameter (app), so add_middleware(M, 'foo') raises TypeError 'multiple values for argument app'; same in routing.py.",
           "evidence": "https://github.com/Kludex/starlette/pull/2752"
         }
-      ]
+      ],
+      "bugType": "api-break"
     },
     {
       "id": "chi-919",
@@ -171,7 +179,8 @@
           "description": "Close() always closes the encoder created up front instead of cw.writer(); for an uncompressed response the deferred Close appends an empty gzip stream (1f 8b 08 ...) to the body.",
           "evidence": "https://github.com/go-chi/chi/pull/924"
         }
-      ]
+      ],
+      "bugType": "wrong-logic"
     },
     {
       "id": "click-2151",
@@ -190,7 +199,8 @@
           "description": "format_help_text checks `if text:` before the text is cut at \\f; a docstring with nothing before \\f is non-empty but empty after the cut, so --help prints spurious blank lines.",
           "evidence": "https://github.com/pallets/click/pull/2369"
         }
-      ]
+      ],
+      "bugType": "wrong-logic"
     },
     {
       "id": "attrs-1401",
@@ -209,7 +219,8 @@
           "description": "field_transformer result is now iterated by the order-check loop before being used; a generator transformer is used up there, so the class ends up with no fields.",
           "evidence": "https://github.com/python-attrs/attrs/pull/1417"
         }
-      ]
+      ],
+      "bugType": "side-effect"
     },
     {
       "id": "go-redis-3842",
@@ -228,7 +239,8 @@
           "description": "PeekPushNotificationName now calls blocking bufio Peek(36) without the old 'only what is buffered' limit; a complete push frame shorter than 36 bytes never fills it, so PubSub.Receive hangs.",
           "evidence": "https://github.com/redis/go-redis/pull/3936"
         }
-      ]
+      ],
+      "bugType": "concurrency-state"
     },
     {
       "id": "go-redis-3518",
@@ -247,7 +259,8 @@
           "description": "queuedNewConn frees the turn after putIdleConn hands the connection to another waiter (also lines 540-541); the turn is freed twice, so more than PoolSize connections can be in use.",
           "evidence": "https://github.com/redis/go-redis/pull/3626"
         }
-      ]
+      ],
+      "bugType": "concurrency-state"
     },
     {
       "id": "gorm-7610",
@@ -266,7 +279,8 @@
           "description": "Moving runtime.Callers into the new CallerFrame helper adds a stack frame, so FileWithLineNum reports the wrapper's file and line instead of the caller's.",
           "evidence": "https://github.com/go-gorm/gorm/pull/7717"
         }
-      ]
+      ],
+      "bugType": "wrong-logic"
     },
     {
       "id": "pino-2105",
@@ -390,7 +404,8 @@
           "evidence": "https://github.com/marshmallow-code/marshmallow/pull/2793"
         }
       ],
-      "note": "First labelled clean; relabelled after the v1 run: #2793 (merged the same day) fixes the typing regression this PR added."
+      "note": "First labelled clean; relabelled after the v1 run: #2793 (merged the same day) fixes the typing regression this PR added.",
+      "bugType": "typing"
     },
     {
       "id": "attrs-1454",
@@ -443,6 +458,610 @@
       "head": "6ad4cd6904cb4ea79cced0ae5a6298721258a73d",
       "problems": [],
       "cleanCheck": "Later commits on the changed product files and a '#2238' search show no fix, revert or bug report tied to it."
+    },
+    {
+      "id": "svelte-15961",
+      "repo": "sveltejs/svelte",
+      "pr": 15961,
+      "language": "javascript",
+      "size": "medium",
+      "changedLines": 282,
+      "label": "problem",
+      "base": "4875cd6e67f82bd8da2fbe0679586c0e0113df96",
+      "head": "b88cdfeeb33376fd005153622c96b315fa81a233",
+      "problems": [
+        {
+          "file": "packages/svelte/src/internal/client/dom/elements/attributes.js",
+          "line": 489,
+          "description": "attribute_effect calls select_option(element, next.value) on every re-run for a <select>, even when the spread object has no value key; <select bind:value {...spread}> whose spread changes (e.g. disabled toggles) gets select_option(el, undefined) and the bound selection is cleared.",
+          "evidence": "https://github.com/sveltejs/svelte/pull/16032"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "zod-6387",
+      "repo": "colinhacks/zod",
+      "pr": 6387,
+      "language": "typescript",
+      "size": "large",
+      "changedLines": 875,
+      "label": "problem",
+      "base": "78b523f0e81c0f19939cd8ffeb945ebca76d1d2f",
+      "head": "44b363361fe5203bfc829b574e71a0fc02e9a00c",
+      "problems": [
+        {
+          "file": "packages/zod/src/v4/core/memoizer.ts",
+          "line": 67,
+          "description": "isRecursive walks every enumerable key of a schema's def and reads def[key]; for .default(fn) defaultValue is a getter that calls fn, so z.object({ a: z.string().default(fn) }).parse({}) runs the user's default factory twice (and even when the key is present).",
+          "evidence": "https://github.com/colinhacks/zod/pull/6500"
+        }
+      ],
+      "bugType": "side-effect"
+    },
+    {
+      "id": "vue-14493",
+      "repo": "vuejs/core",
+      "pr": 14493,
+      "language": "typescript",
+      "size": "small",
+      "changedLines": 24,
+      "label": "problem",
+      "base": "b147482311762888df6e4681a2c7526bff943fdf",
+      "head": "1f7669281ebc1fb69dfddf14aa197f49ab0135b4",
+      "problems": [
+        {
+          "file": "packages/reactivity/src/reactive.ts",
+          "line": 109,
+          "description": "ShallowReactive<T> now carries a required [ShallowReactiveMarker]: never property, so a plain object is no longer assignable to it: let v: typeof shallowReactive({ a: 1 }) = { a: 1 } fails with 'Property [ShallowReactiveMarker] is missing'.",
+          "evidence": "https://github.com/vuejs/core/pull/14641"
+        }
+      ],
+      "bugType": "typing"
+    },
+    {
+      "id": "jest-15215",
+      "repo": "jestjs/jest",
+      "pr": 15215,
+      "language": "typescript",
+      "size": "medium",
+      "changedLines": 238,
+      "label": "problem",
+      "base": "18537856249d2f95b63e2a80ac15f49e47e9ebb4",
+      "head": "53ea04f92ffdcb77335cb56e9d4fd0d729258681",
+      "problems": [
+        {
+          "file": "packages/jest-environment-node/src/index.ts",
+          "line": 335,
+          "description": "GlobalProxy only protects values registered before envSetupCompleted; Node built-ins (EventTarget, streams, ...) are copied onto the test global by lazy getters on first access during a test, get registered unprotected, and clear() at teardown deletes the properties of those shared host objects, so the next test file in the worker fails with ERR_INVALID_THIS.",
+          "evidence": "https://github.com/jestjs/jest/pull/15636"
+        }
+      ],
+      "bugType": "concurrency-state"
+    },
+    {
+      "id": "threejs-33380",
+      "repo": "mrdoob/three.js",
+      "pr": 33380,
+      "language": "javascript",
+      "size": "small",
+      "changedLines": 10,
+      "label": "problem",
+      "base": "32b4d93570af79835fb6a8128ddab812436a4def",
+      "head": "a6f24d064dcaf377bf022c5ac6be290699489bb2",
+      "problems": [
+        {
+          "file": "src/loaders/ImageBitmapLoader.js",
+          "line": 187,
+          "description": "The PR removes 'return imageBitmap;' from the fetch promise's last .then (after line 187), but that promise is what Cache stores and what concurrent cache hits await (cached.then(imageBitmap => onLoad(imageBitmap))); with Cache.enabled two concurrent loads of one URL give the second caller undefined.",
+          "evidence": "https://github.com/mrdoob/three.js/pull/34151"
+        }
+      ],
+      "bugType": "concurrency-state"
+    },
+    {
+      "id": "react-router-13595",
+      "repo": "remix-run/react-router",
+      "pr": 13595,
+      "language": "typescript",
+      "size": "medium",
+      "changedLines": 108,
+      "label": "problem",
+      "base": "9ed17cd186befec2954c4e45aec5fed7effe0bd8",
+      "head": "e1fd22b90ff495bedf9965fb67521486d60bed39",
+      "problems": [
+        {
+          "file": "packages/react-router-dev/typegen/generate.ts",
+          "line": 80,
+          "description": "Typegen now explodes every optional segment, including optional dynamic params, into separate pages, so '/users/:id?' is no longer a page key: existing href('/users/:id?') and href('/users/:id?', params) calls stop type-checking.",
+          "evidence": "https://github.com/remix-run/react-router/pull/13725"
+        }
+      ],
+      "bugType": "typing"
+    },
+    {
+      "id": "immer-1259",
+      "repo": "immerjs/immer",
+      "pr": 1259,
+      "language": "typescript",
+      "size": "medium",
+      "changedLines": 141,
+      "label": "problem",
+      "base": "bf2d15439259887f98f2737cf7ebde4234d5adea",
+      "head": "bd0970b8e638a991658fa7e66a6430eea46f3293",
+      "problems": [
+        {
+          "file": "src/core/proxy.ts",
+          "line": 123,
+          "description": "draft.constructor now returns a Proxy whose get trap returns a fresh frozen object for 'prototype', but a function's prototype is a non-configurable, non-writable data property, so the Proxy invariant throws: lodash _.isEqual / isEmpty on a draft raises \"TypeError: 'get' on proxy: property 'prototype' is a read-only and non-configurable data property\"; it also returns a new wrapper per access, breaking constructor identity checks.",
+          "evidence": "https://github.com/immerjs/immer/pull/1271"
+        }
+      ],
+      "bugType": "crash"
+    },
+    {
+      "id": "eslint-20056",
+      "repo": "eslint/eslint",
+      "pr": 20056,
+      "language": "javascript",
+      "size": "medium",
+      "changedLines": 124,
+      "label": "clean",
+      "base": "99cfd7e056e1703941c9eb8ca1ae7fdb1987ba9d",
+      "head": "e0cc73cc6d72e6dff640020c7f4479c4f0653da5",
+      "problems": [],
+      "cleanCheck": "No commit touches lib/rules/no-empty-static-block.js after the merge (102f4444..origin/HEAD, to 2026-10-17). 'gh search issues \"#20056\"' and 'gh search prs \"#20056\"' find only the rule-change issue #20054 and an unrelated dependency-bump changelog (#20275); no bug report, fix or revert."
+    },
+    {
+      "id": "eslint-20740",
+      "repo": "eslint/eslint",
+      "pr": 20740,
+      "language": "javascript",
+      "size": "small",
+      "changedLines": 18,
+      "label": "clean",
+      "base": "e7e1889fca9b6044e08f41b38df20a1ce45808c8",
+      "head": "15320c5f961f270348a9912ffc264468f99fea1c",
+      "problems": [],
+      "cleanCheck": "No commit touches lib/rules/no-async-promise-executor.js after the merge (84a19d2c..origin/HEAD, to 2026-10-17). 'gh search issues \"#20740\"' and 'gh search prs \"#20740\"' return only the PR itself; no issue about no-async-promise-executor since April 2026."
+    },
+    {
+      "id": "celery-10749",
+      "repo": "celery/celery",
+      "pr": 10749,
+      "language": "python",
+      "size": "medium",
+      "changedLines": 122,
+      "label": "problem",
+      "base": "3cfe8de4352e665882f2c4e39cded26fe6c65871",
+      "head": "ba88c01c2ece462251421ab5c0be90e171ae4aa2",
+      "problems": [
+        {
+          "file": "celery/canvas.py",
+          "line": 1413,
+          "description": "_chain.app now reads self.tasks[0].app but still only catches LookupError; when the first task is a group or chain whose own first task is still a plain dict, .app raises AttributeError, so chain(group([dict(add.s(1, 1))]), tsum.s()).apply_async() crashes where it used to fall back to current_app (the PR's own chord._app_of catches AttributeError for this case).",
+          "evidence": "https://github.com/celery/celery/pull/10792"
+        }
+      ],
+      "bugType": "crash"
+    },
+    {
+      "id": "celery-9869",
+      "repo": "celery/celery",
+      "pr": 9869,
+      "language": "python",
+      "size": "small",
+      "changedLines": 72,
+      "label": "problem",
+      "base": "9d6ab110d947270c4edf0b42454266d2954e653d",
+      "head": "9f9a39aa4b8008a4443aee09efe274647198b285",
+      "problems": [
+        {
+          "file": "celery/worker/control.py",
+          "line": 222,
+          "description": "The revoke handler writes REVOKED to the result backend for every id without checking whether the task already has a ready state, so a revoke that arrives after a result was stored (e.g. the chord error handler stores FAILURE for the body tasks, then broadcasts the revoke) overwrites it and callers get TaskRevokedError instead of the real result.",
+          "evidence": "https://github.com/celery/celery/pull/10679"
+        }
+      ],
+      "bugType": "concurrency-state"
+    },
+    {
+      "id": "pytest-13575",
+      "repo": "pytest-dev/pytest",
+      "pr": 13575,
+      "language": "python",
+      "size": "medium",
+      "changedLines": 97,
+      "label": "problem",
+      "base": "37acc4fcc37ccbc3a0a4dd6763521b3415424b63",
+      "head": "1315e7e2e53a61c870e6ad1411ab72e2de14af91",
+      "problems": [
+        {
+          "file": "src/_pytest/config/__init__.py",
+          "line": 154,
+          "description": "The early version check counts only \"--version\", while helpconfig's pytest_cmdline_main now handles only version > 1; a single short flag (`pytest -V`) is handled by neither, so instead of printing the version pytest goes on to run the test session.",
+          "evidence": "https://github.com/pytest-dev/pytest/pull/14382"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "aiohttp-12988",
+      "repo": "aio-libs/aiohttp",
+      "pr": 12988,
+      "language": "python",
+      "size": "small",
+      "changedLines": 36,
+      "label": "problem",
+      "base": "b48737e74f2a18d0345d2894566be02c5da47f6b",
+      "head": "7972054f2b7ccb28b158a9c98f7213bba8c43f0f",
+      "problems": [
+        {
+          "file": "aiohttp/_websocket/reader_py.py",
+          "line": 419,
+          "description": "Control frames no longer update _frame_fin but still set the compression state just above; when the first frame received is a PONG/PING, _compressed becomes COMPRESSED_FALSE while _frame_fin stays False, so the next compressed (rsv1) data frame is rejected with close code 1002 \"Received frame with non-zero reserved bits\".",
+          "evidence": "https://github.com/aio-libs/aiohttp/issues/13274"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "scrapy-6767",
+      "repo": "scrapy/scrapy",
+      "pr": 6767,
+      "language": "python",
+      "size": "medium",
+      "changedLines": 375,
+      "label": "problem",
+      "base": "8f059d40955ec9c1d63ab6e777ef24e55afe3c5b",
+      "head": "031d9c94fc8b90c95e57f0c6902788b3a7cc0b44",
+      "problems": [
+        {
+          "file": "scrapy/core/scraper.py",
+          "line": 207,
+          "description": "In the rewritten _scrape, the errback for a downloader error is awaited but its return value is dropped and never passed to handle_spider_output_async, so items or requests an errback returns or yields (and any generator errback body) are silently discarded.",
+          "evidence": "https://github.com/scrapy/scrapy/issues/6861"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "pip-13128",
+      "repo": "pypa/pip",
+      "pr": 13128,
+      "language": "python",
+      "size": "small",
+      "changedLines": 7,
+      "label": "problem",
+      "base": "4ad729572d4b68d7fbafc3d6183fdb59c3001b7d",
+      "head": "695fad25f8e4768b9267b9d89c34a71f772aa69d",
+      "problems": [
+        {
+          "file": "src/pip/_internal/index/package_finder.py",
+          "line": 741,
+          "description": "The new early return when DEBUG logging is off also skips recording the link in self._logged_links, which requires_python_skipped_reasons() reads; at normal verbosity pip can no longer report which versions were skipped for Requires-Python when no candidate is found.",
+          "evidence": "https://github.com/pypa/pip/pull/13333"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "urllib3-3743",
+      "repo": "urllib3/urllib3",
+      "pr": 3743,
+      "language": "python",
+      "size": "small",
+      "changedLines": 29,
+      "label": "clean",
+      "base": "83f8643ffb5b7f197457379148e2fa118ab0fcdc",
+      "head": "6eab28002f6df1c66d799555d2aacbadb6bcdac1",
+      "problems": [],
+      "cleanCheck": "Released in 2.6.3. gh search issues/prs '#3743' --repo urllib3/urllib3: only the PR itself and #3745, a report against 2.6.2 (pre-PR code) that this PR addressed; 'retry_after_max' issue search empty. Later commits on src/urllib3/util/retry.py (#5182, #5256, #5223, e6cc4bf1, #3788) are docs and an unrelated allowed_methods deprecation, none touch the Retry-After cap."
+    },
+    {
+      "id": "tqdm-1751",
+      "repo": "tqdm/tqdm",
+      "pr": 1751,
+      "language": "python",
+      "size": "medium",
+      "changedLines": 95,
+      "label": "clean",
+      "base": "59029c37ad6af57df7b49d31c0f48728280ae824",
+      "head": "cfa4a8522e8915e5f3f29dec9cedf7a75e366e1a",
+      "problems": [],
+      "cleanCheck": "Released in v4.68.1. gh search issues/prs '#1751' --repo tqdm/tqdm: only the PR and old issue #1037, where a maintainer comment says it is 'potentially fixed by #1751' (not a report against it); issue search 'monitor' created after the merge is empty. No later commit touches tqdm/_monitor.py on master."
+    },
+    {
+      "id": "traefik-11458",
+      "repo": "traefik/traefik",
+      "pr": 11458,
+      "language": "go",
+      "size": "small",
+      "changedLines": 58,
+      "label": "problem",
+      "base": "4ce4bd71216e2b287c13bbfcf198056be486bb5d",
+      "head": "abbb102a4d812643217c317c717e1290a0ac541e",
+      "problems": [
+        {
+          "file": "pkg/proxy/fast/connpool.go",
+          "line": 231,
+          "description": "The new `!hasContentLength` branch runs before the chunked branch below it, and a `Transfer-Encoding: chunked` response has no Content-Length header, so chunked responses are now copied raw until the upstream closes the connection instead of being decoded as chunks; with fastProxy, pages served chunked (e.g. Grafana, Gatus) come back blank or hang.",
+          "evidence": "https://github.com/traefik/traefik/pull/11514"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "caddy-6997",
+      "repo": "caddyserver/caddy",
+      "pr": 6997,
+      "language": "go",
+      "size": "small",
+      "changedLines": 14,
+      "label": "problem",
+      "base": "aa3d20be3ee451af9465470a28937690104e9422",
+      "head": "76cbd30d93be78e26e88ac6103d408c2a0285098",
+      "problems": [
+        {
+          "file": "admin.go",
+          "line": 429,
+          "description": "replaceLocalAdminServer now calls provisionAdminRouters, but provisionContext calls replaceLocalAdminServer before it initializes newCfg.apps, so an admin router whose Provision loads an app (the pki admin API via AppIfConfigured) runs the module loader against a nil apps map; even a Caddyfile with only `{ skip_install_trust }` crashes at startup.",
+          "evidence": "https://github.com/caddyserver/caddy/pull/7004"
+        }
+      ],
+      "bugType": "crash"
+    },
+    {
+      "id": "caddy-8223",
+      "repo": "caddyserver/caddy",
+      "pr": 8223,
+      "language": "go",
+      "size": "medium",
+      "changedLines": 105,
+      "label": "problem",
+      "base": "af7620dcc8a3b2edeaa8adc5d2850115286f4658",
+      "head": "b1136cd18a129fe0f5bdf6b2dd710ec68952894c",
+      "problems": [
+        {
+          "file": "modules/caddyhttp/reverseproxy/healthchecks.go",
+          "line": 188,
+          "description": "On a cross-origin redirect the health checker masks the upstream dial override so the request goes to the redirect target, but it keeps the upstream's transport (TLS client certificate) and the custom health-check headers; a backend that answers its health check with a redirect to any host receives those secrets and credentials.",
+          "evidence": "https://github.com/caddyserver/caddy/pull/8242"
+        }
+      ],
+      "bugType": "security"
+    },
+    {
+      "id": "urfave-cli-2237",
+      "repo": "urfave/cli",
+      "pr": 2237,
+      "language": "go",
+      "size": "medium",
+      "changedLines": 80,
+      "label": "problem",
+      "base": "f0b939963f443f91bbbed3d9ff14513a0ceeb86d",
+      "head": "91ed11d72b02788b1125198e9b2296e0a39bc8df",
+      "problems": [
+        {
+          "file": "errors.go",
+          "line": 153,
+          "description": "The PR drops the `if err.Error() != \"\"` guard in HandleExitCoder, so `cli.Exit(\"\", code)` (the usual way to exit with a status and no message) now prints an empty line to stderr before exiting.",
+          "evidence": "https://github.com/urfave/cli/pull/2310"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "axum-3241",
+      "repo": "tokio-rs/axum",
+      "pr": 3241,
+      "language": "rust",
+      "size": "small",
+      "changedLines": 15,
+      "label": "problem",
+      "base": "0cab17542ee96493c1a002addf549fdb5dd5379c",
+      "head": "82a870877bda704dd3c3e457c752d15357422abc",
+      "problems": [
+        {
+          "file": "axum-extra/src/protobuf.rs",
+          "line": 108,
+          "description": "Body collection errors are now mapped to ProtobufDecodeError instead of going through Bytes::from_request and BytesRejection, so a request over DefaultBodyLimit gets 422 Unprocessable Entity instead of 413 Payload Too Large and the documented BytesRejection variant is never produced.",
+          "evidence": "https://github.com/tokio-rs/axum/pull/3881"
+        }
+      ],
+      "bugType": "api-break"
+    },
+    {
+      "id": "tokio-7773",
+      "repo": "tokio-rs/tokio",
+      "pr": 7773,
+      "language": "rust",
+      "size": "medium",
+      "changedLines": 214,
+      "label": "problem",
+      "base": "8f4ebfd2f7f120e6f50448509496614d7008aef3",
+      "head": "2977a5f314edb4c68008eddaea9d35d416c9bd97",
+      "problems": [
+        {
+          "file": "tokio/src/runtime/io/driver.rs",
+          "line": 300,
+          "description": "deregister_source no longer returns early when the OS deregister fails and frees the ScheduledIo anyway; if the fd was dup'ed and the original closed, epoll_ctl(DEL) fails with EBADF while epoll keeps the registration and its raw ScheduledIo pointer, so the next readiness event is a heap use-after-free.",
+          "evidence": "https://github.com/tokio-rs/tokio/pull/8540"
+        }
+      ],
+      "bugType": "resource"
+    },
+    {
+      "id": "hyper-3988",
+      "repo": "hyperium/hyper",
+      "pr": 3988,
+      "language": "rust",
+      "size": "large",
+      "changedLines": 550,
+      "label": "problem",
+      "base": "1c70fab64e90f90025eab364beda927044e356fc",
+      "head": "a416aa8be05e36767830df2180f9aa78f6b412e7",
+      "problems": [
+        {
+          "file": "src/proto/h1/dispatch.rs",
+          "line": 207,
+          "description": "The new write re-check calls poll_write a second time and returns Ready when it pends, skipping the poll_flush the main path always does after poll_write; if the body reached end-of-stream between the two polls, the buffered terminating `0\\r\\n\\r\\n` is never flushed and the chunked response stalls until the peer gives up (IncompleteMessage).",
+          "evidence": "https://github.com/hyperium/hyper/pull/4143"
+        }
+      ],
+      "bugType": "concurrency-state"
+    },
+    {
+      "id": "gin-4414",
+      "repo": "gin-gonic/gin",
+      "pr": 4414,
+      "language": "go",
+      "size": "medium",
+      "changedLines": 123,
+      "label": "clean",
+      "base": "ecb3f7b5e2f3915bf1db240ed5eee572f8dbea36",
+      "head": "d5ee6e1cddd97dfdb40123fcd8eb0fdc8041a23c",
+      "problems": [],
+      "cleanCheck": "Merged 2025-11-26; replaces the two X-Forwarded-Prefix regexes in redirectTrailingSlash with sanitizePathChars (gin.go) and removeRepeatedChar (path.go). Read the diff: same character class and the same '/{2,}' -> '/' collapse, invalid UTF-8 dropped either way. Later commits on gin.go/path.go to master: #4420 (escaped-path feature), #4723 (comment fix), #4800 (ReadHeaderTimeout in Run), none touch these helpers. gh search issues '4414' and 'X-Forwarded-Prefix' found nothing after the merge (newest is #2916 from 2021); gh search prs '4414' finds only the PR itself. Open redirectTrailingSlash issues #4844 and #4890 are about tree.go route matching, not prefix sanitizing."
+    },
+    {
+      "id": "clap-6104",
+      "repo": "clap-rs/clap",
+      "pr": 6104,
+      "language": "rust",
+      "size": "small",
+      "changedLines": 65,
+      "label": "clean",
+      "base": "f89b9b8d1b818a2eb3863745be48725ace2d8f12",
+      "head": "9d7f2128f77023941b53b7cfc311120a2ead75a2",
+      "problems": [],
+      "cleanCheck": "Merged 2025-08-11; marks dot-file path candidates hidden in clap_complete's dynamic path completer (clap_complete/src/engine/custom.rs, 14 product lines). Later commits on custom.rs (c3b44057 follow symlinks, ac0d148f index-aware ValueCompleter, 81b86a9f/2550f328 value candidate refactor and feature) do not touch is_hidden or the .hide() calls. gh search issues '6104' found nothing; gh search prs '6104' finds only the PR itself; gh search issues 'hidden' after 2025-08 found only unrelated issues (#6294, #6248, #6481 mangen, #6339 bash double-underscore)."
+    },
+    {
+      "id": "jackson-databind-5076",
+      "repo": "FasterXML/jackson-databind",
+      "pr": 5076,
+      "language": "java",
+      "size": "small",
+      "changedLines": 52,
+      "label": "problem",
+      "base": "e89d0960e9e81399cb9a562f530170b0002852e0",
+      "head": "0c88c7481d6c622ecdc0c0ddac0aaf5d8f09c4f7",
+      "problems": [
+        {
+          "file": "src/main/java/com/fasterxml/jackson/databind/module/SimpleModule.java",
+          "line": 170,
+          "description": "The rewritten SimpleModule(Version version) constructor sets _version = Version.unknownVersion() instead of the version it was given, so new SimpleModule(new Version(2,3,4,null,\"g\",\"a\")).version() returns the unknown version and the caller's version is silently lost.",
+          "evidence": "https://github.com/FasterXML/jackson-databind/commit/470f4e9527c6e0df5de3c6d6f59bccdf2339e5c9"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "jackson-databind-5012",
+      "repo": "FasterXML/jackson-databind",
+      "pr": 5012,
+      "language": "java",
+      "size": "small",
+      "changedLines": 43,
+      "label": "problem",
+      "base": "c2aee19643a5128e6554928c45ec35a70f2e3a02",
+      "head": "bcd64ac0f81354bb5a989bd788d1ea543dc095eb",
+      "problems": [
+        {
+          "file": "src/main/java/com/fasterxml/jackson/databind/node/ObjectNode.java",
+          "line": 90,
+          "description": "ObjectNode.with(name) now returns _put(name, result), but _put returns this (the parent node), not the newly created child; root.with(\"a\").put(\"x\", 1) for a missing \"a\" writes x into root instead of into the new \"a\" object.",
+          "evidence": "https://github.com/FasterXML/jackson-databind/pull/5099"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "laravel-54811",
+      "repo": "laravel/framework",
+      "pr": 54811,
+      "language": "php",
+      "size": "large",
+      "changedLines": 987,
+      "label": "problem",
+      "base": "c45c3613fa9e19963bdbf40635d6872fc44d8b01",
+      "head": "420d3644427d25764128356d988ca437539d0e4d",
+      "problems": [
+        {
+          "file": "src/Illuminate/Routing/RouteUrlGenerator.php",
+          "line": 232,
+          "description": "When fewer positional parameters are passed than the route has (an optional parameter left out), the new formatParameters fills from right to left (array_reverse + array_pop), so route('location.show', 'Belgium') for '{country}/{city?}' assigns 'Belgium' to city and throws 'Missing required parameter ... country'.",
+          "evidence": "https://github.com/laravel/framework/pull/55213"
+        }
+      ],
+      "bugType": "wrong-logic"
+    },
+    {
+      "id": "rubocop-15779",
+      "repo": "rubocop/rubocop",
+      "pr": 15779,
+      "language": "ruby",
+      "size": "medium",
+      "changedLines": 82,
+      "label": "problem",
+      "base": "238bbaf3c16c74286067e68074d9c008d7fd3d42",
+      "head": "1e4b8de4c9defe82062d65550cff30bf6d852f98",
+      "problems": [
+        {
+          "file": "lib/rubocop/runner.rb",
+          "line": 337,
+          "description": "The extra inspection loop after removing a redundant rubocop:disable now calls do_inspection_loop(file, team.updated_source) with two arguments, but RuboCop::LSP::StdinRunner overrides do_inspection_loop(file) with one, so formatting a buffer with a redundant directive through the LSP/MCP runner raises ArgumentError.",
+          "evidence": "https://github.com/rubocop/rubocop/pull/15936"
+        }
+      ],
+      "bugType": "crash"
+    },
+    {
+      "id": "aspnetcore-64098",
+      "repo": "dotnet/aspnetcore",
+      "pr": 64098,
+      "language": "csharp",
+      "size": "medium",
+      "changedLines": 265,
+      "label": "problem",
+      "base": "d4349298d046f24282a6030d8935e81aa2440141",
+      "head": "c8bce6a81b89423b044d1b0fce3c99cc23125514",
+      "problems": [
+        {
+          "file": "src/SignalR/server/Core/src/Internal/DefaultHubDispatcher.cs",
+          "line": 629,
+          "description": "StreamAsync now disposes streamCts only when ctsRegistered is true, but the 'Invocation ID is already in use' early return happens before ctsRegistered is set, so a stream invocation that reuses an active ID leaves its CancellationTokenSource undisposed (leaked) on every collision.",
+          "evidence": "https://github.com/dotnet/aspnetcore/pull/69158"
+        }
+      ],
+      "bugType": "resource"
+    },
+    {
+      "id": "rack-2399",
+      "repo": "rack/rack",
+      "pr": 2399,
+      "language": "ruby",
+      "size": "small",
+      "changedLines": 66,
+      "label": "clean",
+      "base": "d8d50702429265c28b84968e43caafc4bffd82ef",
+      "head": "1965f18d2ce243502e20c2972db0b22cd3687bc0",
+      "problems": [],
+      "cleanCheck": "Merged 2025-10-31; changes lib/rack/deflater.rb (custom :deflaters option). GitHub search for '2399' and 'deflaters' in rack/rack finds only this PR, the superseded unmerged #2393 and the original feature request #2168; no bug report or fix. git log 1965f18..origin/HEAD -- lib/rack/deflater.rb shows only ad27aed5 (#2499, drop Ruby<2.7 GZIP_MTIME branch), unrelated to this change."
+    },
+    {
+      "id": "composer-12595",
+      "repo": "composer/composer",
+      "pr": 12595,
+      "language": "php",
+      "size": "medium",
+      "changedLines": 102,
+      "label": "clean",
+      "base": "5a308f1c6e2d8047740834a34f50b4ee53d55fc2",
+      "head": "53dc8c94a84e7677c45bf3d2bb3de433b4afb14b",
+      "problems": [],
+      "cleanCheck": "Merged 2025-11-06; adds --locked to the licenses command (src/Composer/Command/LicensesCommand.php). GitHub search for '12595' and 'licenses locked' after the merge finds nothing tied to it. git log 53dc8c9..origin/HEAD -- src/Composer/Command/LicensesCommand.php shows no later commit besides this PR's own merge (880cc9231)."
     }
   ]
 }
