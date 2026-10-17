@@ -433,11 +433,14 @@ written by other people, and diffninja treats them as data.
 - A pull request link inside a real diff is source and is never followed.
 - Everything is bounded. A description over 12,000 characters is shown as plain
   text. A hunk is read in linear time, and one with a changed line over 4,000
-  characters is left unread and marked uncertain. Each of the two copies of a
-  result (text and structured content) stays under 4 MiB, the text copy measured
-  after JSON escaping, so one message can reach about 8 MiB, under the 10 MiB
-  that clients built on the MCP SDK accept. The page keeps the whole report. A
-  result that cannot be trimmed to fit is refused with a clear error.
+  characters is left unread and marked uncertain. A `review_diff` result is
+  sized for an agent to read whole (about 45,000 characters; past that the
+  lowest-ranked hunks are listed by id only, and `read_items` returns them).
+  Each of the two copies of a result (text and structured content) stays under
+  4 MiB, the text copy measured after JSON escaping, so one message can reach
+  about 8 MiB, under the 10 MiB that clients built on the MCP SDK accept. The
+  page keeps the whole report. A result over that with every hunk listed by id
+  only is refused with a clear error.
 
 A language model can still be talked into things by text it reads. diffninja
 narrows what such text can reach, and the previous section lists what remains.
